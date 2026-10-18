@@ -79,7 +79,7 @@ npm run dev          # http://127.0.0.1:5173
 
 ### 部署（仅本地手动）
 
-线上地址 [dod.goodpoint.top](https://dod.goodpoint.top) **只接受维护者本机发起的部署**，没有 CI 自动发布——外部 PR 合并进仓库的代码不会触碰服务器，须先在本地跑过、验证过，再手动部署：
+线上地址 [dod.goodpoint.top](https://dod.goodpoint.top) **只接受维护者本机发起的部署**
 
 ```bash
 scripts/deploy.sh              # 构建 → 推送 GitHub → 同步服务器 → 健康检查（失败自动回滚）
