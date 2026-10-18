@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 410" font-family="'PingFang SC','Microsoft YaHei',sans-serif">
+  <rect width="680" height="410" fill="#f6f3ec"></rect>
+  <text x="34" y="34" font-size="17" font-weight="700" fill="#14233f">图7-1　企业信息安全五道防线（防御纵深）</text>
+
+  <g>
+    <circle cx="300" cy="215" r="196" fill="#2e4a78" fill-opacity="0.10" stroke="#2e4a78" stroke-width="1.5"></circle>
+    <circle cx="300" cy="215" r="158" fill="#2e4a78" fill-opacity="0.14" stroke="#2e4a78" stroke-width="1.5"></circle>
+    <circle cx="300" cy="215" r="118" fill="#9a6a2f" fill-opacity="0.16" stroke="#9a6a2f" stroke-width="1.5"></circle>
+    <circle cx="300" cy="215" r="78" fill="#9a6a2f" fill-opacity="0.22" stroke="#9a6a2f" stroke-width="1.5"></circle>
+    <circle cx="300" cy="215" r="38" fill="#14233f" fill-opacity="0.85"></circle>
+    <text x="300" y="220" font-size="13" fill="#fff" text-anchor="middle" font-weight="700">数据</text>
+  </g>
+
+  <!-- 右侧标签 -->
+  <g font-size="12.5" fill="#14233f">
+    <circle cx="540" cy="70" r="5" fill="#2e4a78"></circle>
+    <text x="554" y="74">⑤ 日志审计与可追溯（外层守卫）</text>
+    <circle cx="540" cy="130" r="5" fill="#9a6a2f"></circle>
+    <text x="554" y="134">④ Agent 动作边界与执行安全</text>
+    <circle cx="540" cy="190" r="5" fill="#9a6a2f"></circle>
+    <text x="554" y="194">③ 模型与供应链安全</text>
+    <circle cx="540" cy="250" r="5" fill="#2e4a78"></circle>
+    <text x="554" y="254">② 权限治理与最小权限</text>
+    <circle cx="540" cy="310" r="5" fill="#2e4a78"></circle>
+    <text x="554" y="314">① 数据分级分类（地基）</text>
+  </g>
+
+  <text x="34" y="392" font-size="11" fill="#6b6457">任一防线失守，后续防线都会被削弱；① 是所有防线的度量单位。</text>
+</svg>

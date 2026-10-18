@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 300" font-family="'PingFang SC','Microsoft YaHei',sans-serif">
+  <rect width="680" height="300" fill="#f6f3ec"></rect>
+  <text x="34" y="34" font-size="17" font-weight="700" fill="#14233f">图5-2　FDE 落地里程碑：2026 → 2028</text>
+
+  <line x1="70" y1="175" x2="640" y2="175" stroke="#14233f" stroke-width="3"></line>
+
+  <g font-size="13" font-weight="700" text-anchor="middle" fill="#fff">
+    <circle cx="120" cy="175" r="14" fill="#2e4a78"></circle><text x="120" y="180">1</text>
+    <circle cx="285" cy="175" r="14" fill="#3a6e8a"></circle><text x="285" y="180">2</text>
+    <circle cx="450" cy="175" r="14" fill="#9a6a2f"></circle><text x="450" y="180">3</text>
+    <circle cx="615" cy="175" r="14" fill="#14233f"></circle><text x="615" y="180">4</text>
+  </g>
+
+  <g font-size="12.5" fill="#14233f" text-anchor="middle" font-weight="600">
+    <text x="120" y="150">2026 H2</text>
+    <text x="285" y="150">2027 H1</text>
+    <text x="450" y="150">2027 H2</text>
+    <text x="615" y="150">2028</text>
+  </g>
+
+  <g font-size="10.5" fill="#6b6457" text-anchor="middle">
+    <text x="120" y="205">标杆项目财务验证，</text>
+    <text x="120" y="219">薪酬中枢上移信号</text>
+    <text x="285" y="205">政策点名 +</text>
+    <text x="285" y="219">岗位标准化起步</text>
+    <text x="450" y="205">「稳步生产化」成</text>
+    <text x="450" y="219">为主流情景 ★</text>
+    <text x="615" y="205">认证体系成型，</text>
+    <text x="615" y="219">FDE 内化岗位族</text>
+  </g>
+</svg>

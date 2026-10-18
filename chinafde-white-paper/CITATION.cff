@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use this white paper, please cite it using the metadata below."
+title: "中国AI现场部署服务（FDE）行业白皮书"
+version: v0.1.0
+date-released: "2026-09-15"
+authors:
+  - family-names: Zhang
+    given-names: Yan
+    alias: 张研ᴷᴱᴺ
+    affiliation: "焕燃科技 & 研之有理"
+keywords:
+  - FDE
+  - Forward Deployed Engineer
+  - Enterprise AI
+  - AI Delivery
+license: LicenseRef-Custom-NonCommercial

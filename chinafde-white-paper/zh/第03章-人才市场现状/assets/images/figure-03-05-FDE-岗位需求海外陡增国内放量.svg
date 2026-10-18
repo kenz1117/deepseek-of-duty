@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 380" font-family="'PingFang SC','Microsoft YaHei',sans-serif">
+  <rect width="680" height="380" fill="#f6f3ec"></rect>
+  <text x="34" y="34" font-size="17" font-weight="700" fill="#14233f">图3-1　FDE 岗位需求：海外陡增、国内放量</text>
+
+  <!-- 左：海外 -->
+  <text x="34" y="70" font-size="13" fill="#9a6a2f" font-weight="600">海外：FDE 相关岗位两年 +700%+</text>
+  <line x1="60" y1="320" x2="320" y2="320" stroke="#14233f" stroke-width="1.5"></line>
+  <rect x="95" y="292" width="64" height="28" fill="#2e4a78"></rect>
+  <text x="127" y="284" font-size="12" fill="#14233f" text-anchor="middle">643</text>
+  <text x="127" y="338" font-size="11" fill="#14233f" text-anchor="middle">2023</text>
+  <rect x="200" y="92" width="64" height="228" fill="#9a6a2f"></rect>
+  <text x="232" y="84" font-size="12" fill="#14233f" text-anchor="middle">5,330</text>
+  <text x="232" y="338" font-size="11" fill="#14233f" text-anchor="middle">2025</text>
+  <text x="278" y="68" font-size="14" font-weight="700" fill="#9a6a2f">+700% ↑</text>
+
+  <!-- 右：国内 -->
+  <text x="360" y="70" font-size="13" fill="#9a6a2f" font-weight="600">国内：2024 H2 起跑 → 2025 集中爆发</text>
+  <defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto">
+      <path d="M0 0 L8 3 L0 6 z" fill="#14233f"></path>
+    </marker>
+  </defs>
+  <path d="M380 210 C 440 210, 470 150, 540 150 S 620 150, 632 118" fill="none" stroke="#14233f" stroke-width="2.5" marker-end="url(#ah)"></path>
+  <circle cx="392" cy="208" r="6" fill="#2e4a78"></circle>
+  <text x="392" y="235" font-size="11" fill="#14233f" text-anchor="middle">2024 H2</text>
+  <text x="392" y="250" font-size="11" fill="#14233f" text-anchor="middle">放量起点</text>
+  <circle cx="632" cy="118" r="6" fill="#9a6a2f"></circle>
+  <text x="632" y="102" font-size="11" fill="#14233f" text-anchor="middle">2025</text>
+  <text x="632" y="142" font-size="11" fill="#14233f" text-anchor="middle">集中爆发</text>
+
+  <text x="34" y="364" font-size="11" fill="#6b6457">注：海外为 Indeed 公开统计；国内为招聘平台趋势综合判断，绝对量级与海外同阶、部分赛道更陡。</text>
+</svg>
