@@ -15,15 +15,23 @@
 
 ---
 
-*实机演示（波次推进 · 街区攻坚）：*
+<div align="center">
+
+## 🎬 实机演示
+
+*波次推进 · 街区攻坚*
 
 ![实机演示](docs/dod-gameplay-preview.gif)
 
-**[▶ 点击观看 55 秒完整演示视频](https://github.com/kenz1117/deepseek-of-duty/blob/main/docs/dod-gameplay-720p.mp4)**（720p · 13MB，打开即是播放器）
+**[▶ 观看 55 秒完整演示视频](https://github.com/kenz1117/deepseek-of-duty/blob/main/docs/dod-gameplay-720p.mp4)**（720p · 13MB，打开即是播放器）
 
-| 黄昏街区的推进路线 | 关卡全景（AL-MAZRAH CROSSING） |
-| --- | --- |
-| ![第一人称视角](docs/screenshot-street.jpg) | ![关卡俯瞰](docs/screenshot-overview.jpg) |
+<br>
+
+<img src="docs/screenshot-street.jpg" width="49%" alt="黄昏街区的推进路线"><img src="docs/screenshot-overview.jpg" width="49%" alt="关卡全景">
+
+*黄昏街区的推进路线 · 关卡全景（AL-MAZRAH CROSSING）*
+
+</div>
 
 > **诚实的边界**：这不是、也不可能是《使命召唤》的替代品。真正的 3A FPS 由数百人团队、自研引擎、数亿美元预算、实拍扫描资产、动作捕捉、烘焙全局光照与主机级 GPU 管线支撑。本项目是在浏览器 WebGL2 + 单文件程序化资产的约束下，把能做的部分做到尽量好。它不会在盲测中"打败"CoD；它是一份可运行、可交互、可继续迭代的工程与美术样本。
 
