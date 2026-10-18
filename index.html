@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>DEEPSEEK OF DUTY</title>
+<link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+<div id="app">
+  <canvas id="gl"></canvas>
+
+  <!-- ============ HUD ============ -->
+  <div id="hud" class="hidden">
+    <div class="hud-vignette"></div>
+    <div id="damage-flash"></div>
+    <div id="lowhp"></div>
+    <div class="hud-frame"><i class="ct tl"></i><i class="ct tr"></i><i class="ct bl"></i><i class="ct br"></i></div>
+
+    <!-- top left: mission / wave -->
+    <div class="hud-topleft">
+      <div class="mission-tag"><span class="dot"></span><span id="mission-label">OPERATION BLACKOUT</span><span class="tag-status">// ACTIVE</span></div>
+      <div class="objective" id="objective">坚守阵地</div>
+      <div class="wave-line">
+        <span class="wave-label">WAVE</span>
+        <span class="wave-num" id="wave-num">1</span>
+        <span class="wave-sep">/</span><span class="wave-total" id="wave-total">∞</span>
+        <span class="wave-bar"><i id="wave-bar-fill"></i></span>
+      </div>
+    </div>
+
+    <!-- top center: compass -->
+    <div class="compass-wrap">
+      <canvas id="compass" width="640" height="56"></canvas>
+    </div>
+
+    <!-- top right: killfeed / score -->
+    <div class="hud-topright">
+      <div id="killfeed"></div>
+      <div class="score-block">
+        <div class="score-cell"><span class="score-label">SCORE</span><span class="score-val" id="score">0</span></div>
+        <span class="score-div"></span>
+        <div class="score-cell"><span class="score-label">KILLS</span><span class="score-val" id="kills">0</span></div>
+      </div>
+    </div>
+
+    <!-- center: crosshair + hitmarker + prompts -->
+    <div id="crosshair-wrap">
+      <canvas id="crosshair" width="220" height="220"></canvas>
+      <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
+      <div id="headshot-tag"><i></i><span>HEADSHOT</span></div>
+      <div id="kill-tag">+100</div>
+      <div id="damage-dirs"><div class="dmg-arc"></div></div>
+    </div>
+
+    <!-- bottom left: health / armor -->
+    <div class="hud-bottomleft">
+      <div class="vitals">
+        <div class="armor" id="armor-pips"><i></i><i></i><i></i></div>
+        <div class="hp-row">
+          <div class="hp-num" id="hp-num">100</div>
+          <div class="hp-bar"><i id="hp-fill"></i></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- bottom right: ammo -->
+    <div class="hud-bottomright">
+      <div id="reload-prompt"><i class="rp-ico"></i><span>RELOAD</span><span class="rp-key">R</span></div>
+      <div class="weapon-block">
+        <span class="weapon-tag">PRIMARY <i></i> AR</span>
+        <span class="weapon-name" id="weapon-name">M4A1</span>
+      </div>
+      <div class="ammo-row">
+        <span class="ammo-mag" id="ammo-mag">30</span>
+        <span class="ammo-tail"><span class="ammo-slash">/</span><span class="ammo-reserve" id="ammo-reserve">180</span></span>
+      </div>
+      <div class="ammo-meta">
+        <span class="chip" id="fire-mode">AUTO</span>
+        <span class="sep"></span>
+        <span class="lethal"><i class="gl"></i><span id="grenade-count">2</span><span class="small">LETHAL</span></span>
+      </div>
+      <div class="mag-pips" id="mag-pips"></div>
+    </div>
+
+    <!-- bottom center hint -->
+    <div class="hud-hint" id="hint"></div>
+  </div>
+
+  <!-- ============ START MENU ============ -->
+  <div id="menu" class="overlay">
+    <div class="menu-bg"></div>
+    <div class="menu-scan"></div>
+    <div class="menu-rail"><span>OPERATION BLACKOUT // 03:41 LOCAL // AO URBAN</span></div>
+    <div class="menu-inner">
+      <header class="menu-top">
+        <div class="menu-brandmark"><i class="bm-square"></i><span>TASK FORCE <b>DF</b></span></div>
+        <div class="menu-top-meta"><span>SEASON 01</span><i class="msep"></i><span class="dim">CLASSIFIED</span></div>
+      </header>
+
+      <main class="menu-main">
+        <div class="menu-hero">
+          <div class="menu-eyebrow">
+            <i class="eb-line"></i>
+            <span>OPERATION BLACKOUT</span>
+            <span class="eb-tag">PRIORITY</span>
+          </div>
+          <h1 class="title">
+            <span class="t1">DEEPSEEK</span>
+            <span class="t2">OF DUTY</span>
+          </h1>
+          <p class="menu-lede">城市街区已失守。你是唯一还在推进的资产。<br />在连续波次中存活，清空每一波敌军。</p>
+
+          <button id="deploy" class="deploy-btn">
+            <span class="btn-glow"></span>
+            <span class="btn-main"><span class="btn-label">DEPLOY</span><i class="btn-arrow"></i></span>
+            <span class="btn-sub">点击进入战区 · 锁定鼠标</span>
+            <i class="cb tl"></i><i class="cb br"></i>
+          </button>
+        </div>
+
+        <div class="menu-panel">
+          <section class="brief-col">
+            <h3><span class="num">01</span>CONTROLS<i class="hrule"></i></h3>
+            <ul class="ctl">
+              <li><span class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="cl">移动</span></li>
+              <li><span class="keys"><kbd>SHIFT</kbd></span><span class="cl">冲刺</span><i class="cl-sep">/</i><span class="keys"><kbd>CTRL</kbd></span><span class="cl">蹲伏</span></li>
+              <li><span class="keys"><kbd>LMB</kbd></span><span class="cl">射击</span><i class="cl-sep">/</i><span class="keys"><kbd>RMB</kbd></span><span class="cl">瞄准</span></li>
+              <li><span class="keys"><kbd>R</kbd></span><span class="cl">换弹</span><i class="cl-sep">/</i><span class="keys"><kbd>1</kbd><kbd>2</kbd></span><span class="cl">换枪</span><i class="cl-sep">/</i><span class="keys"><kbd>G</kbd></span><span class="cl">手雷</span></li>
+              <li><span class="keys"><kbd>SPACE</kbd></span><span class="cl">跳跃</span><i class="cl-sep">/</i><span class="keys"><kbd>ESC</kbd></span><span class="cl">暂停</span></li>
+            </ul>
+          </section>
+
+          <section class="brief-col">
+            <h3><span class="num">02</span>BRIEFING<i class="hrule"></i></h3>
+            <dl class="brief-stats">
+              <div><dt>THREAT</dt><dd class="hot">HIGH</dd></div>
+              <div><dt>AO</dt><dd>URBAN</dd></div>
+              <div><dt>CONTACT</dt><dd>∞</dd></div>
+            </dl>
+            <p class="brief-note">敌军以波次持续增援，没有撤离窗口。<br />保持移动，利用掩体，清空街区。</p>
+            <div class="quality-row">
+              <span class="q-label">GRAPHICS <em>画质</em></span>
+              <div class="quality-pills">
+                <button data-q="low">LOW</button>
+                <button data-q="medium">MED</button>
+                <button data-q="high" class="active">HIGH</button>
+                <button data-q="ultra">ULTRA</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      <footer class="menu-foot">
+        <span class="foot-left"><i class="fmark"></i>程序化生成资产 · 无外部贴图下载</span>
+        <span class="foot-right">若帧率不足请在暂停菜单降低画质<i class="fdiv"></i><b>V1.0</b></span>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ============ PAUSE ============ -->
+  <div id="pause" class="overlay hidden">
+    <div class="pause-inner">
+      <div class="overlay-tag"><i></i>MISSION PAUSED</div>
+      <h2 class="ov-title">PAUSED<span>战术暂停</span></h2>
+      <div class="pause-actions">
+        <button id="resume" class="pause-btn primary">
+          <span class="ba-label">RESUME</span><span class="ba-sub">继续行动</span><span class="ba-key">ESC</span>
+        </button>
+        <button id="quit" class="pause-btn">
+          <span class="ba-label">RETURN TO MENU</span><span class="ba-sub">返回主菜单</span>
+        </button>
+      </div>
+      <div class="quality-row">
+        <span class="q-label">GRAPHICS <em>画质</em></span>
+        <div class="quality-pills">
+          <button data-pq="low">LOW</button>
+          <button data-pq="medium">MED</button>
+          <button data-pq="high" class="active">HIGH</button>
+          <button data-pq="ultra">ULTRA</button>
+        </div>
+      </div>
+      <div class="pause-note">战术链路保持 · 指针解锁后点击画面可继续</div>
+    </div>
+    <div class="pause-side">
+      <span class="ps-label">OPERATION</span>
+      <span class="ps-val">BLACKOUT</span>
+      <span class="ps-sub">AO URBAN · HOSTILES ACTIVE</span>
+    </div>
+  </div>
+
+  <!-- ============ DEATH ============ -->
+  <div id="death" class="overlay hidden">
+    <div class="death-fx"></div>
+    <div class="death-inner">
+      <div class="overlay-tag red"><i></i>OPERATOR KIA · 任务失败</div>
+      <div class="kia-wrap">
+        <span class="kia-ghost" aria-hidden="true">KIA</span>
+        <h2 class="kia">K.I.A.</h2>
+      </div>
+      <p class="death-sub">你被击倒了 · 战区回收程序已启动</p>
+      <div class="stat-row">
+        <div class="stat"><span id="final-kills">0</span><em>KILLS<i>击杀</i></em></div>
+        <div class="stat"><span id="final-wave">1</span><em>WAVE<i>波次</i></em></div>
+        <div class="stat"><span id="final-score">0</span><em>SCORE<i>得分</i></em></div>
+      </div>
+      <button id="redeploy"><span class="rb-label">REDEPLOY</span><span class="rb-sub">重新部署</span></button>
+      <div class="death-foot"><span>DEEPSEEK OF DUTY</span><i></i><span>OPERATION BLACKOUT</span></div>
+    </div>
+  </div>
+
+  <!-- ============ LOADING ============ -->
+  <div id="loading" class="overlay">
+    <div class="load-inner">
+      <div class="load-tag"><i></i>SYSTEM BOOT · TASK FORCE DF</div>
+      <div class="load-title">DEEPSEEK OF DUTY</div>
+      <div class="load-bar"><i id="load-fill"></i></div>
+      <div class="load-text" id="load-text">正在生成战区资产…</div>
+    </div>
+  </div>
+</div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

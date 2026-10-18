@@ -1,0 +1,141 @@
+0 verbose cli /opt/homebrew/Cellar/node@24/24.20.0/bin/node /opt/homebrew/opt/node@24/bin/npm
+1 info using npm@11.19.0
+2 info using node@v24.20.0
+3 silly config load:file:/opt/homebrew/Cellar/node@24/24.20.0/lib/node_modules/npm/npmrc
+4 silly config load:file:/Users/ken/Desktop/未命名文件夹/deepseek-of-duty/.npmrc
+5 silly config load:file:/Users/ken/.npmrc
+6 silly config load:file:/Users/ken/.npm-global/etc/npmrc
+7 verbose title npm i ws@8.18.0
+8 verbose argv "i" "--save-dev" "ws@8.18.0" "--cache" "./.npm-cache" "--logs-dir" "./.npm-logs"
+9 verbose logfile logs-max:10 dir:/Users/ken/Desktop/未命名文件夹/deepseek-of-duty/.npm-logs/2026-10-18T00_39_11_178Z-
+10 verbose logfile /Users/ken/Desktop/未命名文件夹/deepseek-of-duty/.npm-logs/2026-10-18T00_39_11_178Z-debug-0.log
+11 silly logfile done cleaning log files
+12 silly packumentCache heap:4496293888 maxSize:1124073472 maxEntrySize:562036736
+13 verbose shrinkwrap failed to load node_modules/.package-lock.json out of date, updated: node_modules
+14 silly idealTree buildDeps
+15 silly fetch manifest ws@8.18.0
+16 silly packumentCache full:https://registry.npmmirror.com/ws cache-miss
+17 http fetch GET 200 https://registry.npmmirror.com/ws 262ms (cache miss)
+18 silly packumentCache full:https://registry.npmmirror.com/ws set size:99362 disposed:false
+19 silly fetch manifest bufferutil@^4.0.1
+20 silly packumentCache full:https://registry.npmmirror.com/bufferutil cache-miss
+21 http fetch GET 200 https://registry.npmmirror.com/bufferutil 57ms (cache miss)
+22 silly packumentCache full:https://registry.npmmirror.com/bufferutil set size:11555 disposed:false
+23 silly fetch manifest utf-8-validate@>=5.0.2
+24 silly packumentCache full:https://registry.npmmirror.com/utf-8-validate cache-miss
+25 http fetch GET 200 https://registry.npmmirror.com/utf-8-validate 58ms (cache miss)
+26 silly packumentCache full:https://registry.npmmirror.com/utf-8-validate set size:17221 disposed:false
+27 silly placeDep ROOT ws@8.18.0 OK for: deepseek-of-duty@0.1.0 want: 8.18.0
+28 silly fetch manifest @rollup/rollup-openbsd-x64@4.64.9
+29 silly packumentCache full:https://registry.npmmirror.com/@rollup%2frollup-openbsd-x64 cache-miss
+30 http fetch GET 200 https://registry.npmmirror.com/@rollup%2frollup-openbsd-x64 75ms (cache revalidated)
+31 silly packumentCache full:https://registry.npmmirror.com/@rollup%2frollup-openbsd-x64 set size:85309 disposed:false
+32 silly placeDep node_modules/rollup @rollup/rollup-openbsd-x64@ OK for: rollup@4.64.9 want: 4.64.9
+33 silly reify moves {}
+34 silly audit bulk request {
+34 silly audit   '@esbuild/aix-ppc64': [ '0.21.5' ],
+34 silly audit   '@esbuild/android-arm': [ '0.21.5' ],
+34 silly audit   '@esbuild/android-arm64': [ '0.21.5' ],
+34 silly audit   '@esbuild/android-x64': [ '0.21.5' ],
+34 silly audit   '@esbuild/darwin-arm64': [ '0.21.5' ],
+34 silly audit   '@esbuild/darwin-x64': [ '0.21.5' ],
+34 silly audit   '@esbuild/freebsd-arm64': [ '0.21.5' ],
+34 silly audit   '@esbuild/freebsd-x64': [ '0.21.5' ],
+34 silly audit   '@esbuild/linux-arm': [ '0.21.5' ],
+34 silly audit   '@esbuild/linux-arm64': [ '0.21.5' ],
+34 silly audit   '@esbuild/linux-ia32': [ '0.21.5' ],
+34 silly audit   '@esbuild/linux-loong64': [ '0.21.5' ],
+34 silly audit   '@esbuild/linux-mips64el': [ '0.21.5' ],
+34 silly audit   '@esbuild/linux-ppc64': [ '0.21.5' ],
+34 silly audit   '@esbuild/linux-riscv64': [ '0.21.5' ],
+34 silly audit   '@esbuild/linux-s390x': [ '0.21.5' ],
+34 silly audit   '@esbuild/linux-x64': [ '0.21.5' ],
+34 silly audit   '@esbuild/netbsd-x64': [ '0.21.5' ],
+34 silly audit   '@esbuild/openbsd-x64': [ '0.21.5' ],
+34 silly audit   '@esbuild/sunos-x64': [ '0.21.5' ],
+34 silly audit   '@esbuild/win32-arm64': [ '0.21.5' ],
+34 silly audit   '@esbuild/win32-ia32': [ '0.21.5' ],
+34 silly audit   '@esbuild/win32-x64': [ '0.21.5' ],
+34 silly audit   '@napi-rs/lzma-linux-x64-gnu': [ '1.5.1' ],
+34 silly audit   '@rollup/rollup-android-arm-eabi': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-android-arm64': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-darwin-arm64': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-darwin-x64': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-freebsd-arm64': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-freebsd-x64': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-arm-gnueabihf': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-arm-musleabihf': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-arm64-gnu': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-arm64-musl': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-loong64-gnu': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-loong64-musl': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-ppc64-gnu': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-ppc64-musl': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-riscv64-gnu': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-riscv64-musl': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-s390x-gnu': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-x64-gnu': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-linux-x64-musl': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-openharmony-arm64': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-win32-arm64-msvc': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-win32-ia32-msvc': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-win32-x64-gnu': [ '4.64.9' ],
+34 silly audit   '@rollup/rollup-win32-x64-msvc': [ '4.64.9' ],
+34 silly audit   '@types/estree': [ '1.0.9' ],
+34 silly audit   esbuild: [ '0.21.5' ],
+34 silly audit   fsevents: [ '2.3.3' ],
+34 silly audit   nanoid: [ '3.3.20' ],
+34 silly audit   picocolors: [ '1.1.1' ],
+34 silly audit   postcss: [ '8.5.30' ],
+34 silly audit   rollup: [ '4.64.9' ],
+34 silly audit   'source-map-js': [ '1.2.2' ],
+34 silly audit   three: [ '0.169.0' ],
+34 silly audit   vite: [ '5.4.10' ],
+34 silly audit   ws: [ '8.18.0' ]
+34 silly audit }
+35 http cache ws@https://registry.npmmirror.com/ws/-/ws-8.18.0.tgz 0ms (cache hit)
+36 http cache fsevents@https://registry.npmmirror.com/fsevents/-/fsevents-2.3.3.tgz 0ms (cache hit)
+37 silly tarball no local data for ws@https://registry.npmmirror.com/ws/-/ws-8.18.0.tgz. Extracting by manifest.
+38 http fetch POST 404 https://registry.npmmirror.com/-/npm/v1/security/advisories/bulk 57ms
+39 verbose audit error HttpErrorGeneral: 404 Not Found - POST https://registry.npmmirror.com/-/npm/v1/security/advisories/bulk - [NOT_IMPLEMENTED] /-/npm/v1/security/* not implemented yet
+39 verbose audit error     at /opt/homebrew/Cellar/node@24/24.20.0/lib/node_modules/npm/node_modules/npm-registry-fetch/lib/check-response.js:103:15
+39 verbose audit error     at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+39 verbose audit error     at async #getReport (/opt/homebrew/Cellar/node@24/24.20.0/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/audit-report.js:334:19)
+39 verbose audit error     at async AuditReport.run (/opt/homebrew/Cellar/node@24/24.20.0/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/audit-report.js:101:19) {
+39 verbose audit error   headers: [Object: null prototype] {
+39 verbose audit error     server: [ 'Tengine' ],
+39 verbose audit error     date: [ 'Sun, 18 Oct 2026 00:39:12 GMT' ],
+39 verbose audit error     'content-type': [ 'application/json' ],
+39 verbose audit error     'transfer-encoding': [ 'chunked' ],
+39 verbose audit error     connection: [ 'keep-alive' ],
+39 verbose audit error     'strict-transport-security': [ 'max-age=5184000' ],
+39 verbose audit error     via: [ 'kunlun4.cn8094[,404666]' ],
+39 verbose audit error     'timing-allow-origin': [ '*' ],
+39 verbose audit error     eagleid: [ '78dc519817922839522007426e' ],
+39 verbose audit error     'x-fetch-attempts': [ '1' ]
+39 verbose audit error   },
+39 verbose audit error   statusCode: 404,
+39 verbose audit error   code: 'E404',
+39 verbose audit error   method: 'POST',
+39 verbose audit error   uri: 'https://registry.npmmirror.com/-/npm/v1/security/advisories/bulk',
+39 verbose audit error   body: {
+39 verbose audit error     error: '[NOT_IMPLEMENTED] /-/npm/v1/security/* not implemented yet'
+39 verbose audit error   },
+39 verbose audit error   pkgid: undefined
+39 verbose audit error }
+40 silly audit error [object Object]
+41 silly audit report null
+42 http fetch GET 200 https://cdn.npmmirror.com/packages/ws/8.18.0/ws-8.18.0.tgz 321ms (cache miss)
+43 silly ADD node_modules/ws
+44 silly ADD node_modules/fsevents
+45 warn install-scripts 2 packages have install scripts not yet covered by allowScripts:
+45 warn install-scripts   esbuild@0.21.5 (postinstall: node install.js)
+45 warn install-scripts   fsevents@2.3.3 (install: (install scripts present))
+45 warn install-scripts
+45 warn install-scripts Run `npm install-scripts ls` to review, or `npm install-scripts approve <pkg>` to allow.
+46 verbose cwd /Users/ken/Desktop/未命名文件夹/deepseek-of-duty
+47 verbose os Darwin 25.5.0
+48 verbose node v24.20.0
+49 verbose npm  v11.19.0
+50 verbose exit 0
+51 info ok
