@@ -694,6 +694,8 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:19px
 .menu-settings:hover{border-color:rgba(227,178,106,.55);background:rgba(227,178,106,.08);color:var(--amber);}
 .ms-label{font-size:9px;letter-spacing:.26em;}
 .ms-sub{font-size:9px;letter-spacing:.14em;color:var(--ui-faint);}
+a.menu-settings{text-decoration:none;}
+.gh-icon{flex:0 0 15px;opacity:.85;}
 .sliders{position:relative;flex:0 0 14px;width:14px;height:12px;display:inline-block;color:currentColor;opacity:.85;}
 .sliders::before{content:"";position:absolute;inset:0;
   background:
