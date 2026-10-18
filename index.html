@@ -54,6 +54,9 @@
 
     <!-- top right: killfeed / score -->
     <div class="hud-topright">
+      <div class="hud-uav hidden" id="hud-uav" aria-live="polite">
+        <i class="uav-dot"></i><span class="uav-label">UAV</span><b id="uav-time">12s</b>
+      </div>
       <div id="killfeed"></div>
       <div class="score-block">
         <div class="score-cell"><span class="score-label">SCORE</span><span class="score-val" id="score">0</span></div>
@@ -84,6 +87,12 @@
 
     <!-- bottom right: ammo -->
     <div class="hud-bottomright">
+      <div class="hud-streak hidden" id="hud-streak">
+        <i class="streak-mark"></i>
+        <span class="streak-label">STREAK</span><b id="streak-n">4</b>
+        <span class="streak-dot">·</span>
+        <span class="streak-next-wrap" id="streak-next-wrap"><span>NEXT</span><b id="streak-next">7</b></span>
+      </div>
       <div id="reload-prompt"><i class="rp-ico"></i><span>RELOAD</span><span class="rp-key">R</span></div>
       <div class="weapon-block">
         <span class="weapon-tag">PRIMARY <i></i> AR</span>
@@ -107,6 +116,13 @@
       <span class="tut-key" id="tutorial-key">SHIFT</span>
       <span class="tut-text" id="tutorial-text"></span>
       <i class="tut-mark"></i>
+    </div>
+
+    <div class="hud-reward" id="hud-reward" aria-live="polite">
+      <i class="reward-line"></i><span id="hud-reward-label">UAV ONLINE</span><i class="reward-line"></i>
+    </div>
+    <div class="hud-toast" id="hud-toast" aria-live="polite">
+      <i class="toast-mark"></i><span id="hud-toast-text"></span>
     </div>
   </div>
 
@@ -146,10 +162,29 @@
             </div>
           </div>
 
+          <section class="mode-brief" id="mode-desc" aria-live="polite">
+            <div class="mode-brief-head">
+              <span class="mode-brief-tag">MODE BRIEF</span>
+              <span class="mode-brief-mode" id="mode-desc-label">ROTATION</span>
+              <i class="mode-brief-rule"></i>
+            </div>
+            <h2 class="mode-brief-title" id="mode-desc-title">标准轮换</h2>
+            <p class="mode-brief-text" id="mode-desc-text">每 3 波进入防守，每 5 波进入撤离；其余为生存波次。</p>
+            <dl class="mode-brief-stats">
+              <div><dt>THREAT</dt><dd class="hot" id="mode-desc-threat">HIGH</dd></div>
+              <div><dt>AO</dt><dd id="mode-desc-ao">URBAN</dd></div>
+              <div><dt>CONTACT</dt><dd id="mode-desc-contact">∞</dd></div>
+            </dl>
+          </section>
+        </div>
+      </main>
+
+        <div class="menu-bottom">
+          <div class="menu-actions">
           <button id="deploy" class="deploy-btn">
             <span class="btn-glow"></span>
             <span class="btn-main"><span class="btn-label">START</span><i class="btn-arrow"></i></span>
-            <span class="btn-sub">开始行动 · 战前教学</span>
+            <span class="btn-sub">开始行动 · 战前简报 <b class="btn-state">READY</b></span>
             <i class="cb tl"></i><i class="cb br"></i>
           </button>
 
@@ -160,32 +195,60 @@
               <span class="ms-sub">设置</span>
             </button>
             <button class="menu-settings" id="tutorial-open" type="button" title="再次查看战前教学">
-              <span class="ms-label">BRIEFING</span>
+              <i class="brief-ico" aria-hidden="true"></i>
+              <span class="ms-label">TUTORIAL</span>
               <span class="ms-sub">教学</span>
             </button>
-            <a class="menu-settings" href="https://github.com/kenz1117/deepseek-of-duty" target="_blank" rel="noopener noreferrer" title="GitHub 仓库 · 欢迎 Star / PR">
+            <a class="menu-settings" href="https://github.com/kenz1117/deepseek-of-duty" target="_blank" rel="noopener noreferrer" title="GitHub 仓库 · 欢迎 Star / PR" aria-label="GitHub">
               <svg class="gh-icon" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
-              <span class="ms-label">GITHUB</span>
             </a>
           </div>
-        </div>
-
-        <section class="brief-panel" aria-label="任务简报">
-          <div class="brief-head">
-            <span class="num">01</span>
-            <span class="brief-label">BRIEFING <em>简报</em></span>
-            <span class="brief-title" id="brief-title">标准轮换</span>
-            <span class="brief-mode" id="brief-mode">ROTATION</span>
-            <i class="hrule"></i>
           </div>
-          <dl class="brief-stats">
-            <div><dt>THREAT</dt><dd class="hot" id="brief-threat">HIGH</dd></div>
-            <div><dt>AO</dt><dd id="brief-ao">URBAN</dd></div>
-            <div><dt>CONTACT</dt><dd id="brief-contact">∞</dd></div>
-          </dl>
-          <p class="brief-note" id="brief-note">敌军以波次持续增援，没有撤离窗口。保持移动，利用掩体，清空街区。</p>
+        <section class="deck" aria-label="作战终端">
+          <div class="deck-head">
+            <div class="deck-tabs" role="tablist" aria-label="终端">
+              <button class="deck-tab" data-deck="brief" role="tab" aria-selected="false">BRIEFING<em>简报</em></button>
+              <button class="deck-tab is-on" data-deck="board" role="tab" aria-selected="true">RANKING<em>排行榜</em></button>
+              <button class="deck-tab" data-deck="daily" role="tab" aria-selected="false">DAILY<em>挑战</em></button>
+            </div>
+            <div class="deck-id">
+              <span class="di-label">CALLSIGN</span>
+              <button id="menu-callsign" class="di-name" type="button" title="点击修改呼号">OPERATOR-0000</button>
+              <input id="menu-callsign-input" class="di-input hidden" maxlength="12" autocomplete="off" spellcheck="false" aria-label="呼号" />
+              <span class="di-hint" id="menu-callsign-hint">本地保存</span>
+            </div>
+          </div>
+          <div class="deck-body">
+            <div class="deck-panel" id="deck-brief" role="tabpanel" hidden>
+              <div class="brief-head">
+                <span class="num">01</span>
+                <span class="brief-label">BRIEFING <em>简报</em></span>
+                <span class="brief-title" id="brief-title">标准轮换</span>
+                <span class="brief-mode" id="brief-mode">ROTATION</span>
+                <i class="hrule"></i>
+              </div>
+              <dl class="brief-stats">
+                <div><dt>THREAT</dt><dd class="hot" id="brief-threat">HIGH</dd></div>
+                <div><dt>AO</dt><dd id="brief-ao">URBAN</dd></div>
+                <div><dt>CONTACT</dt><dd id="brief-contact">∞</dd></div>
+              </dl>
+              <p class="brief-note" id="brief-note">敌军以波次持续增援，没有撤离窗口。保持移动，利用掩体，清空街区。</p>
+            </div>
+            <div class="deck-panel is-on" id="deck-board" role="tabpanel">
+              <div class="mb-head">
+                <span class="mb-col mb-rank">#</span><span class="mb-col mb-name">OPERATOR</span>
+                <span class="mb-col mb-score">SCORE</span><span class="mb-col mb-wave">WAVE</span><span class="mb-col mb-kills">KILLS</span>
+              </div>
+              <ul id="menu-board-list" tabindex="0" aria-label="排行榜，最多 100 名，滚动到底加载下一页"></ul>
+              <div class="mb-foot"><span id="menu-board-source" class="mb-source">LOCAL</span><span id="menu-board-me">你的最佳：—</span></div>
+            </div>
+            <div class="deck-panel" id="deck-daily" role="tabpanel" hidden>
+              <div class="md-head"><span>DAILY <em>今日挑战</em></span><b id="menu-daily-count">0/3</b></div>
+              <ul id="menu-daily-list"></ul>
+            </div>
+          </div>
         </section>
-      </main>
+        </div>
 
       <div class="menu-figure" aria-hidden="true">
         <img src="/assets/people.png" alt="" draggable="false" />
@@ -292,7 +355,47 @@
         <div class="stat"><span id="final-wave">1</span><em>WAVE<i>波次</i></em></div>
         <div class="stat"><span id="final-score">0</span><em>SCORE<i>得分</i></em></div>
       </div>
+
+      <div class="res-only res-body">
+        <div class="res-personal">
+          <div class="res-personal-item"><span id="res-headshots">0</span><em>HEADSHOTS<i>爆头</i></em></div>
+          <div class="res-personal-item"><span id="res-accuracy">0%</span><em>ACCURACY<i>命中率</i></em></div>
+          <div class="res-personal-item"><span id="res-time">00:00</span><em>SURVIVED<i>存活</i></em></div>
+        </div>
+
+        <div class="res-callsign">
+          <div class="res-cs-line">
+            <label for="res-callsign">CALLSIGN <em>呼号</em></label>
+            <input id="res-callsign" type="text" maxlength="12" autocomplete="off" spellcheck="false" placeholder="OPERATOR" aria-label="呼号" />
+            <span id="res-submit-state" class="res-submit-state res-submit--pending">提交中…</span>
+          </div>
+          <p class="res-cs-note">名字会公开展示在排行榜</p>
+        </div>
+
+        <div class="res-panels">
+          <section class="res-panel" id="res-board" aria-label="排行榜">
+            <header class="res-panel-head">
+              <span class="res-panel-title">LEADERBOARD <em>排行榜</em></span>
+              <span id="res-board-source" class="res-source local">LOCAL</span>
+            </header>
+            <div class="res-board-cols"><span>#</span><span>OPERATOR</span><span>SCORE</span><span>WAVE</span><span>KILLS</span></div>
+            <ul id="res-board-list" class="res-board-list"></ul>
+          </section>
+
+          <section class="res-panel" id="res-daily" aria-label="今日挑战">
+            <header class="res-panel-head">
+              <span class="res-panel-title">DAILY <em>今日挑战</em></span>
+              <span id="res-daily-progress" class="res-daily-progress">0/3</span>
+            </header>
+            <ul id="res-daily-list" class="res-daily-list"></ul>
+          </section>
+        </div>
+      </div>
+
       <button id="redeploy"><span class="rb-label">REDEPLOY</span><span class="rb-sub">重新部署</span></button>
+      <div id="res-newbest" class="res-newbest hidden" role="status">
+        <i class="res-nb-mark"></i><span id="res-newbest-text">NEW RECORD · 新纪录</span>
+      </div>
       <div class="death-foot"><span>DEEPSEEK OF DUTY</span><i></i><span>OPERATION BLACKOUT</span></div>
     </div>
   </div>

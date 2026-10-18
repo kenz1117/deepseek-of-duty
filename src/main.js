@@ -9,6 +9,12 @@ import { createInput } from './core/input.js';
 import { createController } from './player/controller.js';
 import { Enemy } from './entities/enemy.js';
 import { loadSettings, saveSettings, sanitizeSettings, tutorialDone, markTutorialDone, prestartSkipped, setPrestartSkipped, DEFAULT_SETTINGS } from './core/settings.js';
+import { createRunStats, runPayload, recordRun, applyDailyProgress, loadDaily, dailySummary, dailyPerks, loadCallsign, saveCallsign, bestFor } from './core/profile.js';
+import { createPickups } from './world/pickups.js';
+import { createStreaks } from './systems/streaks.js';
+import { createArtillery } from './systems/artillery.js';
+import { createLeaderboard } from './net/leaderboard.js';
+import { createResults, renderDailyList, renderMenuBoard } from './ui/results.js';
 
 /* =========================================================================
    DEEPSEEK OF DUTY — browser vertical slice.
@@ -51,9 +57,23 @@ const G = {
   tutorial: { active: false, step: 0, t: 0, stepT: 0, done: false, lastX: 0, lastZ: 0 },
   shotsFired: 0, regenRate: 26, atmosphere: 'dusk',
   mode: 'survival', objective: null,
+  // Sprint D: run counters, streak rewards, UAV window, score multiplier
+  stats: null, scoreMult: 1, uavUntil: 0, uavTick: 0,
 };
 
 let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass;
+let pickups = null, leaderboard = null, results = null, streakSys = null, artillery = null;
+let lastRunPayload = null;
+const menuDailyList = document.getElementById('menu-daily-list');
+const menuDailyCount = document.getElementById('menu-daily-count');
+const deckTabs = Array.from(document.querySelectorAll('.deck-tab'));
+const deckPanels = Array.from(document.querySelectorAll('.deck-panel'));
+const menuBoardList = document.getElementById('menu-board-list');
+const menuCallsign = document.getElementById('menu-callsign');
+const menuCallsignInput = document.getElementById('menu-callsign-input');
+const menuCallsignHint = document.getElementById('menu-callsign-hint');
+const menuDeck = { tab: 'board', cache: new Map(), pages: new Map(), req: 0 };
+const BOARD_SYNC_KEY = 'dod.board.sync.v1';
 const enemies = [];
 const grenades = [];
 let raycaster, clock;
@@ -385,6 +405,7 @@ function onModeSelect(mode) {
   saveSettings(G.settings);
   if (hud && hud.setModeSelect) hud.setModeSelect(G.settings.runMode);
   updateBriefing(G.settings.runMode);
+  refreshMenuBoard(true);
   if (audio && audio.ctx) audio.ui();
 }
 
@@ -471,6 +492,7 @@ function onObjectiveDone() {
   const obj = G.objective;
   if (!obj || obj.done) return;
   obj.done = true;
+  if (G.stats) G.stats.objectiveCleared = true;
   if (hud && hud.setHint) hud.setHint(obj.type === 'defend' ? 'ZONE SECURED' : 'EXTRACTED');
   if (audio && audio.ctx) audio.uiConfirm();
   if (beacon) {
@@ -621,6 +643,28 @@ async function boot() {
     hud = createHUD();
     input = createInput(engine.renderer.domElement);
     controller = createController(engine.camera, level.colliders, level.bounds, audio, (x, z, y) => (level.groundHeight ? level.groundHeight(x, z, y) : 0));
+
+    /* ---- Sprint D: pickups, killstreaks, artillery, online board, results */
+    pickups = createPickups({
+      scene: engine.scene, level, audio,
+      onCollect: onPickupCollected,
+      onNotify: (kind) => { if (hud && hud.toast) hud.toast(PICKUP_LABEL[kind] || ''); },
+    });
+    streakSys = createStreaks({ onReward: onStreakReward });
+    artillery = createArtillery({
+      scene: engine.scene, level, fx, audio,
+      damageAt: artilleryDamageAt,
+      onShake: (v) => controller.addShake(v),
+    });
+    leaderboard = createLeaderboard({ baseUrl: import.meta.env.VITE_LEADERBOARD_URL || '/api' });
+    results = createResults({
+      onRedeploy: redeploy,
+      onCallsignChange: resubmitWithCallsign,
+    });
+    refreshDailyUI();
+    bindDeck();
+    refreshMenuBoard();
+    leaderboard.flushOutbox().catch(() => {});
     if (hud.bindSettings) hud.bindSettings(G.settings, onSettingChange);
     if (hud.bindModeSelect) hud.bindModeSelect(G.settings.runMode, onModeSelect);
     updateBriefing(G.settings.runMode);
@@ -650,19 +694,18 @@ async function boot() {
     document.getElementById('quit').addEventListener('click', () => {
       pauseEl.classList.add('hidden');
       deathEl.classList.add('hidden');
+      if (results) results.hide();
       hudEl.classList.add('hidden');
       menuEl.classList.remove('hidden');
       closePrestart();
       G.state = 'menu';
       input.unlock();
       resetGame();
+      refreshDailyUI();
+      refreshMenuBoard(true);
       viewmodel.root.visible = false;
     });
-    document.getElementById('redeploy').addEventListener('click', () => {
-      deathEl.classList.add('hidden');
-      resetGame();
-      startGame(true);
-    });
+    // #redeploy is owned by src/ui/results.js (createResults.onRedeploy)
 
     for (const b of document.querySelectorAll('.quality-pills button')) {
       b.addEventListener('click', () => {
@@ -759,6 +802,7 @@ function initAudioAmbience() {
 /* ------------------------------------------------------------------ game state */
 function startGame(lock = true, silent = false) {
   closePrestart();
+  if (results) results.hide();
   resetGame();
   menuEl.classList.add('hidden');
   hudEl.classList.remove('hidden');
@@ -778,8 +822,11 @@ function startGame(lock = true, silent = false) {
 }
 
 function resetGame() {
+  const perks = dailyPerks();
   G.maxHp = 100;
-  G.maxArmor = 60;
+  G.maxArmor = 60 + perks.armor;
+  G.scoreMult = perks.scoreMult;
+  G.stats = createRunStats(G.settings.runMode);
   G.upgrades = { damage: 1, fireRate: 1, mag: 1, speed: 0, regen: 1, grenades: 0, health: 0 };
   G.regenRate = 26;
   G.shotsFired = 0;
@@ -800,11 +847,19 @@ function resetGame() {
   G.spawnQueue.length = 0;
   G.spawnTimer = 0;
   G.waveClearTimer = 0;
-  G.grenades = 2;
+  G.grenades = 2 + perks.grenades;
   G.reloadTimer = -1;
   G.reloadTransferred = false;
   G.sinceDamage = 99;
   G.time = 0;
+  G.uavUntil = 0;
+  G.uavTick = 0;
+  lastRunPayload = null;
+  if (pickups) pickups.reset();
+  if (streakSys) streakSys.reset();
+  if (artillery) artillery.reset();
+  if (hud.setStreak) hud.setStreak(0, 4);
+  if (hud.setUav) hud.setUav(false, 0);
   G.weaponIndex = 0;
   G.weaponAmmo = [{ mag: magCap(WEAPONS[0]), reserve: WEAPONS[0].reserve }, { mag: magCap(WEAPONS[1]), reserve: WEAPONS[1].reserve }];
   G.mag = magCap(WEAPONS[0]);
@@ -828,6 +883,7 @@ function pipsFor(armor) { return Math.ceil(armor / 20); }
 function startWave(n) {
   G.wave = n;
   G.upgradeShown = false;
+  if (G.stats) G.stats.damagedThisWave = false;
   applyAtmosphereForWave(n);
   setupObjective(n);
   const total = Math.min(11, 3 + n);
@@ -930,8 +986,12 @@ function updateWaves(dt) {
     if (G.waveClearTimer === 0) {
       G.waveClearTimer = 0.001;
       hud.setHint('WAVE CLEARED');
-      G.score += 250;
+      G.score += Math.round(250 * G.scoreMult);
       hud.setScore(G.score, G.kills);
+      if (G.stats) {
+        G.stats.wavesCleared++;
+        if (!G.stats.damagedThisWave) G.stats.flawlessWaves++;
+      }
       // resupply between waves
       const w = currentWeapon();
       G.mag = magCap(w);
@@ -995,6 +1055,7 @@ function fireShot() {
   if (G.mag <= 0) return;
   G.mag--;
   G.shotsFired++;
+  if (G.stats) G.stats.shots++;
   hud.setAmmo(G.mag, G.reserve, w.name, w.mode);
   viewmodel.fire(1);
   const mz = muzzleWorld(_muzzle);
@@ -1023,7 +1084,11 @@ function fireShot() {
     if (_normal.lengthSq() < 0.1) _normal.copy(_dir).negate();
     const destId = hit.object.userData && hit.object.userData.destructible;
     if (destId && level.hitDestructible) {
-      level.hitDestructible(destId, w.dmg * G.upgrades.damage, hit.point, _normal);
+      const dres = level.hitDestructible(destId, w.dmg * G.upgrades.damage, hit.point, _normal);
+      if (dres && dres.destroyed && G.stats && !G.stats.destroyedIds.has(destId)) {
+        G.stats.destroyedIds.add(destId);
+        G.stats.destructibles++;
+      }
       fx.impact(hit.point, _normal, 'wood');
       audio.impact('wood');
     } else {
@@ -1033,11 +1098,12 @@ function fireShot() {
       const mult = hit.object.userData.dmg || 1;
       const headshot = part === 'head';
       const killed = enemy.takeDamage(w.dmg * G.upgrades.damage * mult, hit.point, _normal, part);
+      if (G.stats) G.stats.hits++;
       fx.blood(hit.point, _normal, _dir);
       audio.impact('flesh');
       audio.hitmarker(headshot);
       hud.hit(headshot, killed);
-      if (killed) onEnemyKilled(enemy, headshot);
+      if (killed) onEnemyKilled(enemy, headshot, 'bullet');
     } else {
       const mat = hit.object.material;
       let kind = 'concrete';
@@ -1069,14 +1135,38 @@ function tryFire(dt) {
   fireShot();
 }
 
-function onEnemyKilled(enemy, headshot) {
+function onEnemyKilled(enemy, headshot, cause = 'bullet') {
   G.kills++;
   G.waveRemaining = Math.max(0, G.waveRemaining - 1);
-  G.score += headshot ? 150 : 100;
+  G.score += Math.round((headshot ? 150 : 100) * G.scoreMult);
   hud.setScore(G.score, G.kills);
   hud.addKillFeed(headshot ? 'HOSTILE' : 'INSURGENT', headshot, currentWeapon().name);
   G.hitStop = 0.055;
   audio.killConfirm();
+  if (G.stats) {
+    G.stats.kills++;
+    if (headshot) G.stats.headshots++;
+    if (cause === 'grenade') G.stats.grenadeKills++;
+  }
+  // killstreak kills must not feed the next streak (CoD rule) or artillery chains forever
+  if (streakSys && cause !== 'artillery') streakSys.notifyKill({ headshot, cause });
+
+  // loot: the dropped rifle is the signature CoD beat; consumables are rarer
+  if (pickups && enemy && enemy.root) {
+    const pos = enemy.root.position;
+    if (enemy.rig && enemy.rig.weapon && Math.random() < 0.55) {
+      const impulse = new THREE.Vector3((Math.random() - 0.5) * 1.8, 1.1 + Math.random() * 1.4, (Math.random() - 0.5) * 1.8);
+      pickups.dropWeapon(enemy.rig.weapon, pos.clone().setY(pos.y + 1.05), impulse);
+      enemy.rig.weapon.visible = false;
+    }
+    const roll = Math.random();
+    const ox = (Math.random() - 0.5) * 0.9;
+    const oz = (Math.random() - 0.5) * 0.9;
+    if (roll < 0.12) pickups.spawn('ammo', pos.x + ox, pos.y, pos.z + oz);
+    else if (roll < 0.18) pickups.spawn('armor', pos.x + ox, pos.y, pos.z + oz);
+    else if (roll < 0.22) pickups.spawn('grenade', pos.x + ox, pos.y, pos.z + oz);
+  }
+
   // limit corpse count
   const dead = enemies.filter((e) => !e.alive);
   if (dead.length > 6) {
@@ -1158,7 +1248,7 @@ function updateGrenades(dt) {
         const d = e.root.position.distanceTo(g.mesh.position);
         if (d < 7.5) {
           const died = e.takeDamage(180 * (1 - d / 7.5), g.mesh.position, new THREE.Vector3(0, 1, 0), 'torso');
-          if (died) onEnemyKilled(e, false);
+          if (died) onEnemyKilled(e, false, 'grenade');
         }
       }
       engine.scene.remove(g.mesh);
@@ -1173,6 +1263,7 @@ function geoDispose(m) { if (m.geometry) m.geometry.dispose(); if (m.material) m
 function applyPlayerDamage(amount, fromPos) {
   if (G.state !== 'playing' || G.hp <= 0) return;
   if (SHOT_MODE) return;
+  if (G.stats) G.stats.damagedThisWave = true;
   G.sinceDamage = 0;
   G.hurtTimer = 0.3;
   let dmg = amount;
@@ -1197,7 +1288,344 @@ function applyPlayerDamage(amount, fromPos) {
   else if (G.hp < 40) audio.setLowHealth(true);
 }
 
+/* ---------------------------------------------- loot, streaks, artillery, runs */
+const PICKUP_LABEL = { ammo: '+90 弹药', armor: '+25 护甲', grenade: '+1 手雷', supply: '战地补给' };
+
+function onPickupCollected(kind, amount) {
+  const num = (v, d) => (typeof v === 'number' && v > 0 ? v : d);
+  const ammo = num(kind === 'supply' && amount && amount.ammo, num(amount, 90));
+  const armor = num(kind === 'supply' && amount && amount.armor, num(amount, 25));
+  if (kind === 'ammo' || kind === 'supply') {
+    G.reserve = Math.min(999, G.reserve + ammo);
+    const w = currentWeapon();
+    hud.setAmmo(G.mag, G.reserve, w.name, w.mode);
+  }
+  if (kind === 'armor' || kind === 'supply') {
+    G.armor = Math.min(G.maxArmor, G.armor + armor);
+    hud.setHealth(G.hp, pipsFor(G.armor));
+  }
+  if (kind === 'grenade' || kind === 'supply') {
+    G.grenades = Math.min(6, G.grenades + 1);
+    hud.setGrenades(G.grenades);
+  }
+  // the pickups module already plays its own pickup cue
+  if (hud.toast) hud.toast(PICKUP_LABEL[kind] || '');
+}
+
+/** ground point the operator is looking at — artillery walks its shells there */
+function aimPoint(maxDist = 42) {
+  engine.camera.getWorldDirection(_dir);
+  const p = engine.camera.position.clone().addScaledVector(_dir, maxDist);
+  p.x = THREE.MathUtils.clamp(p.x, level.bounds.x0 + 1, level.bounds.x1 - 1);
+  p.z = THREE.MathUtils.clamp(p.z, level.bounds.z0 + 1, level.bounds.z1 - 1);
+  p.y = level.groundHeight ? level.groundHeight(p.x, p.z, p.y) : 0;
+  return p;
+}
+
+function onStreakReward(id) {
+  if (id === 'supply') {
+    const p = controller.pos;
+    pickups.spawn('supply', p.x + 1.4, p.y, p.z + 1.4);
+    if (hud.setStreakReward) hud.setStreakReward('SUPPLY DROP');
+  } else if (id === 'uav') {
+    G.uavUntil = G.time + 12;
+    G.uavTick = 0;
+    if (hud.setUav) hud.setUav(true, 12);
+    if (hud.setStreakReward) hud.setStreakReward('UAV ONLINE');
+    audio.uiConfirm();
+  } else if (id === 'artillery') {
+    artillery.strike(aimPoint(40), { shells: 7, radius: 10, spread: 7 });
+    if (hud.setStreakReward) hud.setStreakReward('ARTILLERY');
+  }
+}
+
+/** called by the artillery module per shell impact */
+function artilleryDamageAt(point, radius, dmg) {
+  for (const e of enemies) {
+    if (!e.alive) continue;
+    const d = e.root.position.distanceTo(point);
+    if (d < radius) {
+      const died = e.takeDamage(dmg * (1 - (d / radius) * 0.35), point, _up, 'torso');
+      if (died) onEnemyKilled(e, false, 'artillery');
+    }
+  }
+  const pd = point.distanceTo(engine.camera.position);
+  if (pd < radius * 0.8) applyPlayerDamage(Math.max(6, 55 * (1 - pd / (radius * 0.8))), point);
+  // shake is owned by the artillery module (one per shell) — no second kick here
+}
+
+function refreshDailyUI() {
+  const daily = loadDaily();
+  if (menuDailyList) renderDailyList(menuDailyList, daily, { compact: true });
+  if (menuDailyCount) menuDailyCount.textContent = `${dailySummary(daily).done}/${daily.defs.length}`;
+}
+
+/* ------------------------------------------------------- menu command deck */
+
+function setDeckTab(tab) {
+  const next = tab === 'brief' || tab === 'daily' ? tab : 'board';
+  menuDeck.tab = next;
+  for (const btn of deckTabs) {
+    const on = btn.dataset.deck === next;
+    btn.classList.toggle('is-on', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  }
+  for (const panel of deckPanels) {
+    const on = panel.id === `deck-${next}`;
+    panel.classList.toggle('is-on', on);
+    panel.hidden = !on;
+  }
+  if (next === 'board') refreshMenuBoard(false);
+}
+
+function bindDeck() {
+  for (const btn of deckTabs) {
+    btn.addEventListener('click', () => { audio.init(); audio.ui(); setDeckTab(btn.dataset.deck); });
+  }
+  if (menuCallsign) menuCallsign.addEventListener('click', beginCallsignEdit);
+  if (menuCallsignInput) {
+    menuCallsignInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commitCallsign(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancelCallsignEdit(); }
+    });
+    menuCallsignInput.addEventListener('blur', () => { if (!menuCallsignInput.classList.contains('hidden')) commitCallsign(); });
+  }
+  if (menuCallsign) menuCallsign.textContent = loadCallsign();
+  const badge = document.getElementById('menu-board-source');
+  if (badge) {
+    badge.title = '点击刷新榜单';
+    badge.addEventListener('click', () => refreshMenuBoard(true));
+  }
+  if (menuBoardList) {
+    menuBoardList.addEventListener('scroll', () => {
+      if (menuBoardList.scrollTop + menuBoardList.clientHeight >= menuBoardList.scrollHeight - 28) {
+        loadMoreMenuBoard();
+      }
+    }, { passive: true });
+  }
+}
+
+function beginCallsignEdit() {
+  if (!menuCallsignInput || !menuCallsign) return;
+  if (menuCallsignHint) menuCallsignHint.textContent = '回车保存 · Esc 取消';
+  menuCallsign.classList.add('hidden');
+  menuCallsignInput.value = loadCallsign();
+  menuCallsignInput.classList.remove('hidden');
+  menuCallsignInput.focus();
+  menuCallsignInput.select();
+}
+
+function endCallsignEdit(text, valid) {
+  if (!menuCallsignInput || !menuCallsign) return;
+  menuCallsignInput.classList.add('hidden');
+  menuCallsign.classList.remove('hidden');
+  if (valid) menuCallsign.textContent = text;
+  if (menuCallsignHint) menuCallsignHint.textContent = valid ? '本地保存' : '1–12 位，字母/数字/空格/._-';
+}
+
+function commitCallsign() {
+  if (!menuCallsignInput) return false;
+  const saved = saveCallsign(menuCallsignInput.value);
+  if (!saved) { endCallsignEdit('', false); audio.hurt(); return false; }
+  endCallsignEdit(saved, true);
+  if (hud && hud.toast) hud.toast(`呼号已保存 · ${saved}`);
+  return true;
+}
+
+function cancelCallsignEdit() {
+  endCallsignEdit(loadCallsign(), true);
+}
+
+/** Paint the menu board from cache immediately, then refresh from /api. */
+function loadBoardSync() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(BOARD_SYNC_KEY) || '{}');
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function boardSyncedAt(mode) {
+  const value = Number(loadBoardSync()[mode]);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function markBoardSynced(mode) {
+  try {
+    const map = loadBoardSync();
+    map[mode] = Date.now();
+    localStorage.setItem(BOARD_SYNC_KEY, JSON.stringify(map));
+  } catch (e) { /* storage may be unavailable */ }
+}
+
+/** Per-mode paging state for the TOP 100 menu board. */
+function boardPage(mode) {
+  let state = menuDeck.pages.get(mode);
+  if (!state) {
+    state = { entries: [], rank: 0, total: 0, nextOffset: null, source: 'local', loading: false, done: false };
+    menuDeck.pages.set(mode, state);
+  }
+  return state;
+}
+
+function paintMenuBoard(mode) {
+  if (!menuBoardList) return;
+  const state = boardPage(mode);
+  const board = {
+    source: state.source,
+    entries: state.entries,
+    rank: state.rank,
+    total: state.total,
+    loading: state.loading,
+    done: state.done,
+  };
+  renderMenuBoard(menuBoardList, board, {
+    best: bestFor(mode),
+    syncedAt: boardSyncedAt(mode),
+    pending: leaderboard ? leaderboard.pending : 0,
+    loading: state.loading,
+    done: state.done,
+  });
+}
+
+/** The board is an async snapshot: paint the mirror first, then refresh if stale. */
+function refreshMenuBoard(force = false) {
+  const mode = G.settings.runMode;
+  const state = boardPage(mode);
+
+  if (!state.entries.length) {
+    const local = leaderboard ? leaderboard.getLocalBoard(mode).slice(0, 100) : [];
+    state.entries = local;
+    state.total = local.length;
+    state.source = 'local';
+    state.done = !leaderboard || local.length < 20;
+    if (!state.nextOffset) state.rank = 0;
+  }
+  paintMenuBoard(mode);
+  if (!leaderboard) return;
+  // tab switching inside 45 s reuses the cache; submission / quit / badge click force it
+  if (!force && state.entries.length && Date.now() - boardSyncedAt(mode) < 45000) return;
+
+  const seq = ++menuDeck.req;
+  state.loading = state.entries.length > 0;
+  state.done = false;
+  leaderboard.fetchBoard(mode, 20, leaderboard.clientId, 0).then((res) => {
+    if (seq !== menuDeck.req) return;
+    state.loading = false;
+    if (!res) { state.done = true; paintMenuBoard(mode); return; }
+    if (res.ok) markBoardSynced(mode);
+    // offline: show every page the mirror already knows, not just the first one
+    const offline = !res.ok && res.source === 'cache';
+    const entries = offline ? (leaderboard.getLocalBoard(mode) || res.entries || []) : (res.entries || []);
+    state.entries = entries.slice(0, 100);
+    if (Number.isFinite(Number(res.rank))) state.rank = Number(res.rank);
+    state.total = Math.max(state.entries.length, Number(res.total) || 0);
+    state.nextOffset = res.ok && res.nextOffset !== undefined ? res.nextOffset : null;
+    state.source = res.source || 'local';
+    state.done = !res.ok || state.nextOffset === null || state.entries.length >= 100;
+    paintMenuBoard(mode);
+  }).catch(() => { state.loading = false; state.done = true; paintMenuBoard(mode); });
+}
+
+/** Scroll-to-bottom paging: one page per gesture, capped at the server's TOP 100. */
+function loadMoreMenuBoard() {
+  const mode = G.settings.runMode;
+  const state = boardPage(mode);
+  if (!leaderboard || state.loading || state.done || state.nextOffset === null) return;
+  const offset = state.nextOffset;
+  const seq = menuDeck.req;
+  state.loading = true;
+  paintMenuBoard(mode);
+  leaderboard.fetchBoard(mode, 20, leaderboard.clientId, offset).then((res) => {
+    if (seq !== menuDeck.req) return;
+    state.loading = false;
+    if (!res || !res.ok) { state.done = true; paintMenuBoard(mode); return; }
+    const seen = new Set(state.entries.map((e) => e.runId));
+    for (const entry of res.entries || []) {
+      if (entry && !seen.has(entry.runId)) { state.entries.push(entry); seen.add(entry.runId); }
+    }
+    state.total = Math.max(state.total, Number(res.total) || 0);
+    state.nextOffset = res.nextOffset === undefined ? null : res.nextOffset;
+    if (!state.rank && Number.isFinite(Number(res.rank))) state.rank = Number(res.rank);
+    state.source = 'online';
+    if (state.nextOffset === null || state.entries.length >= 100) state.done = true;
+    paintMenuBoard(mode);
+  }).catch(() => { state.loading = false; state.done = true; paintMenuBoard(mode); });
+}
+
+function resubmitWithCallsign(name) {
+  const saved = saveCallsign(name);
+  if (!saved || !lastRunPayload || !leaderboard) return;
+  leaderboard.submitRun(lastRunPayload, saved).then((res) => {
+    if (!res || !res.ok || !results) return;
+    results.setBoard({ source: res.source, entries: (res.top || []).slice(0, 8), rank: res.rank, updatedAt: Date.now() });
+  }).catch(() => {});
+}
+
+/** Called once when the operator dies: totals, dailies, board, results page. */
+function finishRun() {
+  const s = G.stats;
+  if (!s) return;
+  if (!s.score) s.score = G.score;
+  s.objectiveWins = s.objectiveCleared ? 1 : 0;
+  const daily = loadDaily();
+  const { state: dstate } = applyDailyProgress(daily, s);
+  const summary = dailySummary(dstate);
+  const payload = runPayload(s, { score: G.score, wave: G.wave, challengesDone: summary.done });
+  lastRunPayload = payload;
+
+  const rec = recordRun({
+    ...payload,
+    grenadeKills: s.grenadeKills,
+    destructibles: s.destructibles,
+    objectiveCleared: s.objectiveCleared,
+  });
+  refreshDailyUI();
+
+  const local = leaderboard ? leaderboard.getLocalBoard(payload.mode) : [];
+  const accuracy = s.shots ? Math.min(1, s.hits / s.shots) : 0;
+  const callsign = loadCallsign();
+  if (results) {
+    results.show({
+      mode: payload.mode, score: G.score, kills: s.kills, wave: G.wave,
+      durationMs: payload.durationMs, headshots: s.headshots, accuracy,
+      isBest: rec.isBest, prevBest: rec.prevBest, callsign, runId: payload.runId,
+      board: { source: 'local', entries: local.slice(0, 8), rank: 0 },
+      daily: dstate,
+    });
+    if (results.setNewBest) results.setNewBest(rec.isBest, rec.prevBest);
+    if (results.setSubmitState) results.setSubmitState('sending', '提交中…');
+  }
+
+  if (!leaderboard) return;
+  leaderboard.submitRun(payload, callsign).then((res) => {
+    if (!results) return;
+    if (res && res.ok) {
+      results.setSubmitState('done', res.source === 'local' ? '本地记录' : '已上榜');
+      results.setBoard({ source: res.source, entries: (res.top || []).slice(0, 8), rank: res.rank, updatedAt: Date.now() });
+      menuDeck.cache.delete(payload.mode);
+      menuDeck.pages.delete(payload.mode);
+      markBoardSynced(payload.mode);
+      refreshMenuBoard(true);
+    } else {
+      // Permanent rejections are the game's fault (bad payload); everything else
+      // is queued in the outbox and retried when the API comes back.
+      const err = (res && res.error) || '';
+      const permanent = /^(bad_|inconsistent_|ticket_|name_)/.test(err);
+      if (permanent) results.setSubmitState('failed', '提交被拒');
+      else results.setSubmitState('offline', '已存本地 · 联网后补交');
+    }
+  }).catch(() => {});
+}
+
+function redeploy() {
+  deathEl.classList.add('hidden');
+  startGame(true);
+}
+
 function playerDie() {
+  if (G.state === 'dead') return;
   G.hp = 0;
   G.state = 'dead';
   controller.die();
@@ -1205,9 +1633,13 @@ function playerDie() {
   audio.death();
   audio.setLowHealth(false);
   input.unlock();
-  document.getElementById('final-kills').textContent = G.kills;
-  document.getElementById('final-wave').textContent = G.wave;
-  document.getElementById('final-score').textContent = G.score;
+  const fk = document.getElementById('final-kills');
+  const fw = document.getElementById('final-wave');
+  const fs = document.getElementById('final-score');
+  if (fk) fk.textContent = G.kills;
+  if (fw) fw.textContent = G.wave;
+  if (fs) fs.textContent = G.score;
+  finishRun();
   setTimeout(() => deathEl.classList.remove('hidden'), 900);
 }
 
@@ -1384,6 +1816,21 @@ function updateGame(dt) {
     updateWaves(dt);
     updateTutorial(dt);
     updateBeacon(dt);
+
+    // UAV reward: ping live hostiles on the compass strip
+    if (G.uavUntil > G.time) {
+      G.uavTick -= dt;
+      if (G.uavTick <= 0) {
+        G.uavTick = 0.45;
+        if (hud.uavPing) {
+          for (const e of enemies) if (e.alive) hud.uavPing(e.root.position, engine.camera, 0.7);
+        }
+      }
+      if (hud.setUav) hud.setUav(true, Math.max(0, G.uavUntil - G.time));
+    } else if (G.uavUntil) {
+      G.uavUntil = 0;
+      if (hud.setUav) hud.setUav(false, 0);
+    }
   }
 
   // enemies
@@ -1400,6 +1847,16 @@ function updateGame(dt) {
       continue;
     }
     e.update(dt, enemyCtx);
+  }
+
+  // pickups / artillery / killstreak counter keep ticking through death so the
+  // results beat does not freeze the world
+  if (pickups) pickups.update(dt, engine.camera.position);
+  if (artillery) artillery.update(dt);
+  if (streakSys) {
+    streakSys.update(dt);
+    const st = streakSys.state;
+    if (hud.setStreak) hud.setStreak(st.streak, st.nextAt);
   }
 
   // viewmodel
@@ -1441,6 +1898,10 @@ window.__game = {
   get engine() { return engine; }, get level() { return level; }, get player() { return controller; },
   get enemies() { return enemies; }, get state() { return G; }, get hud() { return hud; },
   get fx() { return fx; }, get viewmodel() { return viewmodel; }, get input() { return input; },
+  get pickups() { return pickups; }, get streaks() { return streakSys; }, get artillery() { return artillery; },
+  get leaderboard() { return leaderboard; }, get results() { return results; },
+  get daily() { return loadDaily(); },
+  finishRun, playerDie,
   startGame, resetGame, spawnEnemy, applyPlayerDamage,
   openUpgradeChoice, pickUpgrade, openSettings, applySettings, finishTutorial,
   debugUpgrade: () => openUpgradeChoice(true), debugTutorial: () => beginTutorial(true),

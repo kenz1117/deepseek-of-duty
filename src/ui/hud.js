@@ -14,7 +14,9 @@
      showUpgrades(cards,onPick), hideUpgrades(),
      showTutorial(text,keyLabel), hideTutorial(), setAtmosphere(label),
      setMode(label,sub), setModeProgress(pct,text,active), setZoneDistance(m), hideMode(),
-     bindModeSelect(current,onChange), setModeSelect(mode)
+     bindModeSelect(current,onChange), setModeSelect(mode),
+     setStreak(n,nextAt), setStreakReward(label), setUav(active,secondsLeft), uavPing(worldPos,camera,life),
+     toast(text)
    ========================================================================= */
 
 const $ = (id) => document.getElementById(id);
@@ -58,6 +60,11 @@ export function createHUD() {
     modeZone: $('zone-distance'), modeZoneText: $('zone-distance-text'),
     modeSelect: $('mode-select'), modeSelectCurrent: $('mode-select-current'),
     modeSelectBtns: Array.from(document.querySelectorAll('#mode-select-pills button')),
+    streak: $('hud-streak'), streakN: $('streak-n'), streakNext: $('streak-next'),
+    streakNextWrap: $('streak-next-wrap'),
+    uav: $('hud-uav'), uavTime: $('uav-time'),
+    reward: $('hud-reward'), rewardLabel: $('hud-reward-label'),
+    toast: $('hud-toast'), toastText: $('hud-toast-text'),
   };
 
   const ctxC = el.crosshair.getContext('2d');
@@ -101,6 +108,8 @@ export function createHUD() {
   let upgradeChosen = false;
   let upgradeTimer = 0;
   let modeClearTimer = 0;
+  let rewardTimer = 0;
+  let toastTimer = 0;
   const MODE_SELECT_VALUES = ['rotation', 'survival', 'defend', 'extract'];
   let modeSelectValue = 'rotation';
   let modeSelectOnChange = null;
@@ -306,7 +315,7 @@ export function createHUD() {
     const dx = worldPos.x - camera.position.x;
     const dz = worldPos.z - camera.position.z;
     const bearing = (Math.atan2(dx, dz) * 180 / Math.PI + 360) % 360;
-    state.pings.push({ bearing, life, max: life });
+    state.pings.push({ bearing, life, max: life, kind: 'fire' });
     if (state.pings.length > 8) state.pings.shift();
     compassDirty = true;
   }
@@ -314,6 +323,76 @@ export function createHUD() {
   function setSpread(px, ads) {
     state.spreadPx = Math.max(0, px);
     state.ads = !!ads;
+  }
+
+  /* ------------------------------------------------------------ streak / uav / toast */
+  function setStreak(n, nextAt) {
+    if (!el.streak) return;
+    const cur = Math.max(0, Math.floor(Number(n) || 0));
+    if (cur < 2) { el.streak.classList.add('hidden'); return; }
+    el.streak.classList.remove('hidden');
+    if (el.streakN && el.streakN.textContent !== String(cur)) el.streakN.textContent = String(cur);
+    const next = Number(nextAt);
+    if (el.streakNextWrap && el.streakNext) {
+      if (Number.isFinite(next) && next > 0) {
+        el.streakNextWrap.classList.remove('hidden');
+        const txt = String(next);
+        if (el.streakNext.textContent !== txt) el.streakNext.textContent = txt;
+      } else {
+        el.streakNextWrap.classList.add('hidden');
+      }
+    }
+  }
+
+  function setStreakReward(label) {
+    if (!el.reward) return;
+    const text = String(label == null ? '' : label).trim();
+    if (!text) {
+      clearTimeout(rewardTimer);
+      el.reward.classList.remove('show');
+      return;
+    }
+    if (el.rewardLabel) el.rewardLabel.textContent = text;
+    el.reward.classList.add('show');
+    clearTimeout(rewardTimer);
+    rewardTimer = setTimeout(() => { if (el.reward) el.reward.classList.remove('show'); }, 2000);
+  }
+
+  function setUav(active, secondsLeft) {
+    if (!el.uav) return;
+    if (!active) { el.uav.classList.add('hidden'); return; }
+    const sec = Math.max(0, Math.ceil(Number(secondsLeft) || 0));
+    el.uav.classList.remove('hidden');
+    if (el.uavTime) {
+      const txt = sec > 0 ? `${sec}s` : 'ACTIVE';
+      if (el.uavTime.textContent !== txt) el.uavTime.textContent = txt;
+    }
+  }
+
+  function uavPing(worldPos, camera, life = 1.4) {
+    if (!worldPos || !camera || !camera.position) return;
+    const dx = Number(worldPos.x) - Number(camera.position.x);
+    const dz = Number(worldPos.z) - Number(camera.position.z);
+    if (!Number.isFinite(dx) || !Number.isFinite(dz)) return;
+    const bearing = (Math.atan2(dx, dz) * 180 / Math.PI + 360) % 360;
+    const l = Math.max(0.2, Math.min(4, Number(life) || 1.4));
+    state.pings.push({ bearing, life: l, max: l, kind: 'uav' });
+    if (state.pings.length > 10) state.pings.shift();
+    compassDirty = true;
+  }
+
+  function toast(text) {
+    if (!el.toast) return;
+    const msg = String(text == null ? '' : text).trim();
+    if (!msg) {
+      clearTimeout(toastTimer);
+      el.toast.classList.remove('show');
+      return;
+    }
+    if (el.toastText) el.toastText.textContent = msg;
+    el.toast.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { if (el.toast) el.toast.classList.remove('show'); }, 1600);
   }
 
   /* ------------------------------------------------------------ objective mode */
@@ -842,27 +921,43 @@ export function createHUD() {
       }
     }
 
-    // enemy fire markers
+    // enemy fire / UAV markers
     for (const p of state.pings) {
       const delta = norm180(p.bearing - heading);
       if (Math.abs(delta) > COMPASS_RANGE) continue;
       const x = cx + delta * pxPerDeg;
-      const alive = clamp01(p.life / 0.32);
+      const isUav = p.kind === 'uav';
+      // UAV diamonds fade out sooner than fire triangles
+      const alive = clamp01(p.life / (isUav ? 0.55 : 0.32));
       const edge = 1 - Math.abs(delta) / COMPASS_RANGE;
       const a = alive * edge;
       if (a <= 0) continue;
+      const ty = baseline - 15;
       c.save();
       c.shadowColor = `rgba(232,74,58,${0.9 * a})`;
-      c.shadowBlur = 9;
-      c.fillStyle = `rgba(244,96,76,${(0.97 * a).toFixed(3)})`;
-      const ty = baseline - 15;
-      c.beginPath();
-      c.moveTo(x, ty + 8);
-      c.lineTo(x - 5, ty);
-      c.lineTo(x + 5, ty);
-      c.closePath();
-      c.fill();
-      c.fillRect(x - 0.5, ty - 6, 1, 6);
+      c.shadowBlur = isUav ? 12 : 9;
+      c.fillStyle = `rgba(255,86,74,${(0.98 * a).toFixed(3)})`;
+      if (isUav) {
+        c.beginPath();
+        c.moveTo(x, ty - 7);
+        c.lineTo(x + 5.5, ty);
+        c.lineTo(x, ty + 7);
+        c.lineTo(x - 5.5, ty);
+        c.closePath();
+        c.fill();
+        c.shadowBlur = 0;
+        c.strokeStyle = `rgba(3,5,7,${(0.55 * a).toFixed(3)})`;
+        c.lineWidth = 1;
+        c.stroke();
+      } else {
+        c.beginPath();
+        c.moveTo(x, ty + 8);
+        c.lineTo(x - 5, ty);
+        c.lineTo(x + 5, ty);
+        c.closePath();
+        c.fill();
+        c.fillRect(x - 0.5, ty - 6, 1, 6);
+      }
       c.restore();
     }
 
@@ -959,6 +1054,12 @@ export function createHUD() {
     hideUpgrades();
     hideTutorial();
     hideMode();
+    if (el.streak) el.streak.classList.add('hidden');
+    if (el.uav) el.uav.classList.add('hidden');
+    if (el.reward) el.reward.classList.remove('show');
+    if (el.toast) { el.toast.classList.remove('show'); if (el.toastText) el.toastText.textContent = ''; }
+    clearTimeout(rewardTimer);
+    clearTimeout(toastTimer);
     compassDirty = true;
   }
 
@@ -973,6 +1074,7 @@ export function createHUD() {
     showUpgrades, hideUpgrades, showTutorial, hideTutorial, setAtmosphere,
     setMode, setModeProgress, setZoneDistance, hideMode,
     bindModeSelect, setModeSelect,
+    setStreak, setStreakReward, setUav, uavPing, toast,
     get state() { return state; },
   };
 }

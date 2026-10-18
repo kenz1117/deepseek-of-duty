@@ -23,3 +23,9 @@ article-*.html
 
 # 封面原图（README 使用压缩后的 docs/cover.jpg）
 dod.png
+
+# 排行榜运行时数据与本地环境变量（.env.example 仍然入库）
+server/data/
+.env
+.env.local
+*.log
