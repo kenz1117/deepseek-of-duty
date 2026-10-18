@@ -68,11 +68,19 @@ if [ "$healthy" != "1" ]; then
 fi
 ok "健康检查通过 (HTTP 200)"
 
-# 清理：保留最近 KEEP_RELEASES 个版本目录，清掉多余的历史镜像
+# 清理：每次安装后回收备份与缓存
+# 1) 版本目录只保留最近 KEEP_RELEASES 个
 ls -1dt "$APP_DIR/releases"/*/ 2>/dev/null | tail -n +$((KEEP_RELEASES + 1)) | xargs -r rm -rf
+# 2) 历史版本镜像只保留最近 KEEP_RELEASES 个（latest/previous 两个指针除外）
 docker images "dod-web" --format '{{.Tag}}' \
     | grep -Ev '^(latest|previous)$' | sort -r | tail -n +$((KEEP_RELEASES + 1)) \
     | while read -r t; do docker rmi "dod-web:$t" >/dev/null 2>&1 || true; done
+# 3) 悬空镜像与 7 天前的 Docker 构建缓存
 docker image prune -f >/dev/null 2>&1 || true
+docker builder prune -f --filter "until=168h" >/dev/null 2>&1 || true
+# 4) 过期的构建暂存 tar 包
+find "$APP_DIR/build" -name '*.tar.gz' -mtime +1 -delete 2>/dev/null || true
+ok "清理完成（版本目录/镜像保留 ${KEEP_RELEASES} 份，构建缓存仅留 7 天内）"
+ok "磁盘占用: $(du -sh "$APP_DIR/releases" 2>/dev/null | cut -f1) releases · $(docker images "dod-web" -q | wc -l | tr -d " ") 个 dod-web 镜像"
 
 ok "部署完成: dod-web:$TS（线上 http://127.0.0.1:$HOST_PORT）"

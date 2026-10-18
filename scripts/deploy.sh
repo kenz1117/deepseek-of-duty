@@ -60,21 +60,40 @@ else
     ok "已推送 origin/$BRANCH"
 fi
 
-step "4/6 上传构建产物与部署脚本"
-ssh "$SERVER" "mkdir -p $APP_DIR/build"
+step "4/7 上传构建产物与部署脚本"
+ssh "$SERVER" "mkdir -p $APP_DIR/build /opt/dod-leaderboard/data"
 scp -q "$TARBALL" "$SERVER:$APP_DIR/build/dist.tar.gz"
 scp -q deploy/Dockerfile deploy/nginx-container.conf "$SERVER:$APP_DIR/build/"
 scp -q scripts/server-deploy.sh "$SERVER:$APP_DIR/build/"
-ok "已上传 → $SERVER:$APP_DIR/build/"
+scp -q server/leaderboard.mjs "$SERVER:/opt/dod-leaderboard/"
+ok "已上传 → $SERVER:$APP_DIR/build/ 与 /opt/dod-leaderboard/"
 
-step "5/6 服务器原子部署（失败自动回滚）"
+step "5/7 服务器原子部署（失败自动回滚）"
 ssh "$SERVER" "bash $APP_DIR/build/server-deploy.sh $APP_DIR/build/dist.tar.gz"
 
-step "6/6 线上验证"
+step "6/7 排行榜服务更新"
+ssh "$SERVER" '
+  if docker ps -a --format "{{.Names}}" | grep -qx dod-leaderboard; then
+    docker restart dod-leaderboard >/dev/null && echo "dod-leaderboard 已重启"
+  else
+    [ -f /opt/dod-leaderboard/.secret ] || (openssl rand -hex 32 > /opt/dod-leaderboard/.secret && chmod 600 /opt/dod-leaderboard/.secret)
+    docker run -d --name dod-leaderboard --restart unless-stopped \
+      -v /opt/dod-leaderboard:/app -w /app -p 127.0.0.1:8320:8787 \
+      -e PORT=8787 -e LB_DATA_DIR=/app/data -e LB_SECRET="$(cat /opt/dod-leaderboard/.secret)" \
+      node:20-alpine node leaderboard.mjs >/dev/null && echo "dod-leaderboard 已创建"
+  fi
+  sleep 1
+  curl -fsS http://127.0.0.1:8320/api/health >/dev/null && echo "排行榜健康检查通过"
+'
+
+step "7/7 线上验证"
 sleep 1
-code=$(curl -s -o /dev/null -w '%{http_code}' "$SITE_URL/")
+code=$(curl -s -o /dev/null -w "%{http_code}" "$SITE_URL/")
 [ "$code" = "200" ] || fail "$SITE_URL 返回 $code"
 ok "$SITE_URL → HTTP 200"
+api=$(curl -s -o /dev/null -w "%{http_code}" "$SITE_URL/api/health")
+[ "$api" = "200" ] || fail "$SITE_URL/api/health 返回 $api"
+ok "$SITE_URL/api/health → HTTP 200"
 
 S=$(( $(date +%s) - T0 ))
 printf '\n\033[1;32m🚀 部署完成，耗时 %ds → %s\033[0m\n' "$S" "$SITE_URL"
