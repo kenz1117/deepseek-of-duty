@@ -8,7 +8,7 @@
 [![WebGL2](https://img.shields.io/badge/WebGL-2-990099?style=flat-square&labelColor=1a1a2e)](https://www.khronos.org/webgl/)
 [![零外部资产](https://img.shields.io/badge/资产-100%25程序化生成-orange?style=flat-square&labelColor=1a1a2e)](##-技术栈与特性)
 
-**→ [![在线试玩](https://img.shields.io/badge/🎮_在线试玩-dod.goodpoint.top-success?style=for-the-badge&labelColor=1a1a2e)](https://dod.goodpoint.top/)无需下载、无需注册，桌面浏览器打开即玩 ←**
+**[![在线试玩](https://img.shields.io/badge/🎮_在线试玩-dod.goodpoint.top-success?style=for-the-badge&labelColor=1a1a2e)](https://dod.goodpoint.top/)**
 
 </div>
 
