@@ -1,2 +1,11 @@
 node_modules/
 dist/
+
+# accidentally merged working files (belong to other repos)
+chinafde-white-paper/
+article-deepseek-of-duty.md
+.DS_Store
+.npm-cache/
+.npm-logs/
+.v2c/
+.video_agent/
