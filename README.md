@@ -15,9 +15,11 @@
 
 ---
 
-*55 秒实机演示（波次推进 · 街区攻坚）：*
+*实机演示（波次推进 · 街区攻坚）：*
 
-![实机演示视频](docs/dod-gameplay-720p.mp4)
+![实机演示](docs/dod-gameplay-preview.gif)
+
+**[▶ 点击观看 55 秒完整演示视频](https://github.com/kenz1117/deepseek-of-duty/blob/main/docs/dod-gameplay-720p.mp4)**（720p · 13MB，打开即是播放器）
 
 | 黄昏街区的推进路线 | 关卡全景（AL-MAZRAH CROSSING） |
 | --- | --- |
