@@ -151,6 +151,11 @@ export class Enemy {
     this.deathFall = 1;
     this.deathPose = { l: 0.5, r: 0.5 };
 
+    // vertical placement (roof / platform support)
+    this.baseY = 0;
+    this.bounds = null;
+    this.pinned = false;
+
     this.variant = _variantCounter++ % 3;
     this.rig = null;
     this.laser = null;
@@ -213,6 +218,47 @@ export class Enemy {
       this.applyDeathPose();
     }
     return this;
+  }
+
+  /* ------------------------------------------------------- placement API */
+  /**
+   * Confine the AI to a horizontal rectangle (a roof / catwalk). Pass
+   * `pinned: true` to keep it in place and only aim + fire.
+   * Safe before or after spawn(); spawn() keeps bounds unless cleared.
+   */
+  setBounds(b) {
+    if (!b) return this.clearBounds();
+    const n = (v, d) => (Number.isFinite(v) ? v : d);
+    const px = this.root.position.x;
+    const pz = this.root.position.z;
+    const ax = n(b.x0, px), bx = n(b.x1, px);
+    const az = n(b.z0, pz), bz = n(b.z1, pz);
+    this.bounds = {
+      x0: Math.min(ax, bx), x1: Math.max(ax, bx),
+      z0: Math.min(az, bz), z1: Math.max(az, bz),
+    };
+    this.pinned = !!b.pinned;
+    this.clampToBounds();
+    return this;
+  }
+
+  clearBounds() {
+    this.bounds = null;
+    this.pinned = false;
+    return this;
+  }
+
+  setPinned(v) {
+    this.pinned = !!v;
+    return this;
+  }
+
+  clampToBounds() {
+    const b = this.bounds;
+    if (!b) return;
+    const p = this.root.position;
+    p.x = clamp(p.x, b.x0, b.x1);
+    p.z = clamp(p.z, b.z0, b.z1);
   }
 
   /* --------------------------------------------------------------- visuals */
@@ -357,9 +403,11 @@ export class Enemy {
   }
 
   /* --------------------------------------------------------------- spawning */
-  spawn(x, z, yaw = 0) {
-    this.root.position.set(x, 0, z);
+  spawn(x, z, yaw = 0, y = 0) {
+    this.baseY = Number.isFinite(y) ? y : 0;
+    this.root.position.set(x, this.baseY, z);
     this.root.rotation.set(0, yaw, 0);
+    if (this.bounds) this.clampToBounds();
     this.hp = this.maxHp;
     this.alive = true;
     this.state = 'advance';
@@ -478,10 +526,16 @@ export class Enemy {
     const b = playerPos.clone();
     const dx = b.x - a.x, dz = b.z - a.z;
     const steps = Math.max(2, Math.floor(Math.hypot(dx, dz) / 1.2));
+    // an elevated shooter ignores the footprint of the building it stands on
+    // (colliders are 2D, so its own roof would otherwise block every shot)
+    const elevated = this.baseY > 0.5;
+    const px = this.root.position.x, pz = this.root.position.z;
+    const host = elevated ? this.colliders.find((c) => px > c.x0 && px < c.x1 && pz > c.z0 && pz < c.z1) : null;
     for (let i = 1; i < steps; i++) {
       const t = i / steps;
       const x = a.x + dx * t, z = a.z + dz * t;
       for (const c of this.colliders) {
+        if (c === host) continue;
         if (x > c.x0 && x < c.x1 && z > c.z0 && z < c.z1) return false;
       }
     }
@@ -636,12 +690,19 @@ export class Enemy {
       else speedTarget = 0;
     }
 
+    if (this.pinned) { moveX = 0; moveZ = 0; speedTarget = 0; }
     this.speed += (speedTarget - this.speed) * Math.min(1, dt * 6);
     const moving = this.speed > 0.35;
     if (this.speed > 0.02) {
       this.root.position.x += moveX * this.speed * dt;
       this.root.position.z += moveZ * this.speed * dt;
-      this.resolveCollision();
+      if (this.bounds) this.clampToBounds();
+      else if (this.baseY <= 0.5) this.resolveCollision();
+      else {
+        const p = this.root.position;
+        p.x = clamp(p.x, -20, 20);
+        p.z = clamp(p.z, -63, 50);
+      }
     }
 
     // ---- facing
@@ -782,7 +843,7 @@ export class Enemy {
     const buckle = Math.sin(Math.min(1, this.deathT * 2.2) * Math.PI) * 0.09;
     this.root.rotation.x = angle * e - buckle * (1 - e);
     this.root.rotation.z = this.deathTwist * 0.55 * e;
-    this.root.position.y = 0.075 * e;
+    this.root.position.y = this.baseY + 0.075 * e;
 
     applyPose(this.rig, {
       time: this.animT,
@@ -800,7 +861,7 @@ export class Enemy {
       deathSide: this.deathSide,
     });
 
-    if (this.deathT >= 1) this.root.position.y = 0.08;
+    if (this.deathT >= 1) this.root.position.y = this.baseY + 0.08;
     this.weaponFlash.material.opacity = 0;
     if (this.laser) this.laser.visible = false;
     if (this.glint) this.glint.visible = false;

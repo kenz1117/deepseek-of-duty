@@ -15,6 +15,17 @@ npm run dev          # http://127.0.0.1:5173
 
 生产构建：`npm run build` → `dist/`（任意静态服务器可托管）。
 
+### 部署（仅本地手动）
+
+线上地址 [dod.goodpoint.top](https://dod.goodpoint.top)，**只接受本机发起的部署**，没有 CI 自动发布——外部 PR 合并进仓库的代码不会触碰服务器，须先在本地跑过、验证过，再手动部署：
+
+```bash
+scripts/deploy.sh              # 构建 → 推送 GitHub → 同步服务器 → 健康检查（失败自动回滚）
+SKIP_GIT=1 scripts/deploy.sh   # 只同步服务器，不动 git
+```
+
+服务器侧架构与脚本见 `deploy/`（Dockerfile、Nginx 配置）与 `scripts/server-deploy.sh`（原子切换 + 自动回滚）。服务器拉不动 Docker Hub，Dockerfile 基于本机已有 alpine 基础镜像构建，勿改回 `FROM nginx:...`。
+
 ### 操作
 
 | 键位 | 功能 |

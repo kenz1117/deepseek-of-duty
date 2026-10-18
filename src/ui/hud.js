@@ -13,7 +13,8 @@
      bindSettings(s,onChange), openSettings(), closeSettings(), isSettingsOpen,
      showUpgrades(cards,onPick), hideUpgrades(),
      showTutorial(text,keyLabel), hideTutorial(), setAtmosphere(label),
-     setMode(label,sub), setModeProgress(pct,text,active), setZoneDistance(m), hideMode()
+     setMode(label,sub), setModeProgress(pct,text,active), setZoneDistance(m), hideMode(),
+     bindModeSelect(current,onChange), setModeSelect(mode)
    ========================================================================= */
 
 const $ = (id) => document.getElementById(id);
@@ -55,6 +56,8 @@ export function createHUD() {
     modeHud: $('mode-hud'), modeLabel: $('mode-label'), modeSub: $('mode-sub'),
     modeFill: $('mode-progress-fill'), modeProgressText: $('mode-progress-text'),
     modeZone: $('zone-distance'), modeZoneText: $('zone-distance-text'),
+    modeSelect: $('mode-select'), modeSelectCurrent: $('mode-select-current'),
+    modeSelectBtns: Array.from(document.querySelectorAll('#mode-select-pills button')),
   };
 
   const ctxC = el.crosshair.getContext('2d');
@@ -98,6 +101,10 @@ export function createHUD() {
   let upgradeChosen = false;
   let upgradeTimer = 0;
   let modeClearTimer = 0;
+  const MODE_SELECT_VALUES = ['rotation', 'survival', 'defend', 'extract'];
+  let modeSelectValue = 'rotation';
+  let modeSelectOnChange = null;
+  let modeSelectWired = false;
 
   /* ------------------------------------------------------------ canvas sizing */
   function syncCrosshairCanvas() {
@@ -386,6 +393,54 @@ export function createHUD() {
       if (el.modeZoneText) el.modeZoneText.textContent = '';
     }, 320);
   }
+
+  /* ------------------------------------------------------- deploy mode select */
+  function normalizeModeSelect(value) {
+    const k = String(value == null ? '' : value).trim().toLowerCase();
+    return MODE_SELECT_VALUES.includes(k) ? k : 'rotation';
+  }
+
+  function paintModeSelect(mode) {
+    const m = normalizeModeSelect(mode);
+    if (el.modeSelectCurrent) el.modeSelectCurrent.textContent = m.toUpperCase();
+    if (!el.modeSelectBtns) return;
+    for (const btn of el.modeSelectBtns) {
+      const on = btn.dataset.mode === m;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+  }
+
+  function setModeSelect(mode) {
+    const m = normalizeModeSelect(mode);
+    modeSelectValue = m;
+    paintModeSelect(m);
+  }
+
+  function wireModeSelect() {
+    if (modeSelectWired || !el.modeSelectBtns) return;
+    modeSelectWired = true;
+    for (const btn of el.modeSelectBtns) {
+      btn.addEventListener('click', () => {
+        const mode = normalizeModeSelect(btn.dataset.mode);
+        if (mode === modeSelectValue) return;
+        modeSelectValue = mode;
+        paintModeSelect(mode);
+        if (!modeSelectOnChange) return;
+        try { modeSelectOnChange(mode); }
+        catch (err) { console.error('[hud] mode select onChange failed', err); }
+      });
+    }
+  }
+
+  function bindModeSelect(current, onChange) {
+    modeSelectOnChange = typeof onChange === 'function' ? onChange : null;
+    wireModeSelect();
+    setModeSelect(current);
+  }
+
+  wireModeSelect();
+  paintModeSelect(modeSelectValue);
 
   /* ------------------------------------------------------------ settings */
   function clampNum(v, lo, hi, fallback) {
@@ -917,6 +972,7 @@ export function createHUD() {
     get isSettingsOpen() { return settingsOpen; },
     showUpgrades, hideUpgrades, showTutorial, hideTutorial, setAtmosphere,
     setMode, setModeProgress, setZoneDistance, hideMode,
+    bindModeSelect, setModeSelect,
     get state() { return state; },
   };
 }

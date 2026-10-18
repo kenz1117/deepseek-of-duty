@@ -6,7 +6,7 @@ import * as THREE from 'three';
    recoil springs and trauma-based camera shake.
    ========================================================================= */
 
-export function createController(camera, colliders, bounds, audio) {
+export function createController(camera, colliders, bounds, audio, groundProvider = null) {
   const pos = new THREE.Vector3(0, 0, 34);
   const vel = new THREE.Vector3();
   let yaw = 0, pitch = 0;
@@ -18,6 +18,7 @@ export function createController(camera, colliders, bounds, audio) {
   let stepAccum = 0;
   let grounded = true, vy = 0;
   let shake = 0;
+  let groundFn = typeof groundProvider === 'function' ? groundProvider : null;
   let adsSensitivity = 0.58, invertY = false, baseFovSetting = 78, reduceMotion = false, speedMult = 1;
   let dead = false;
   let deadT = 0;
@@ -106,17 +107,31 @@ export function createController(camera, colliders, bounds, audio) {
     pos.z = THREE.MathUtils.clamp(pos.z, bounds.z0, bounds.z1);
 
     // ---- jump / gravity
+    const gy = groundFn ? groundFn(pos.x, pos.z, pos.y) : 0;
     if (opts.jump && grounded && !wantCrouch) {
       vy = 4.4; grounded = false;
+    }
+    if (grounded) {
+      if (gy > pos.y + 0.6) {
+        // ledge/step too high: do not teleport up (a collider should block it)
+      } else if (gy < pos.y - 0.55) {
+        grounded = false; vy = 0;
+      } else {
+        pos.y = gy;
+      }
     }
     if (!grounded) {
       vy -= 15.5 * dt;
       pos.y += vy * dt;
-      if (pos.y <= 0) {
-        pos.y = 0; grounded = true;
+      const closeToFloor = pos.y + 0.7 >= gy;
+      if (vy <= 0 && pos.y <= gy && closeToFloor) {
+        pos.y = gy; grounded = true;
         vy = 0;
         shake = Math.min(1, shake + 0.22);
         if (audio) audio.footstep('concrete', 1.2);
+      } else if (pos.y <= 0) {
+        // fallback base ground (also protects under-roof jumps)
+        pos.y = 0; grounded = true; vy = 0;
       }
     }
 
@@ -195,6 +210,7 @@ export function createController(camera, colliders, bounds, audio) {
     get grounded() { return grounded; },
     get dead() { return dead; },
     get speedAbs() { return Math.hypot(vel.x, vel.z); },
+    setGroundProvider(fn) { groundFn = typeof fn === 'function' ? fn : null; },
     set adsSensitivity(v) { adsSensitivity = THREE.MathUtils.clamp(v, 0.2, 1); },
     get adsSensitivity() { return adsSensitivity; },
     set invertY(v) { invertY = !!v; },

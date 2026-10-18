@@ -84,6 +84,29 @@ html,body{width:100%;height:100%;overflow:hidden;background:#05070a;font-family:
 .menu-lede{margin-top:clamp(14px,2.2vh,22px);font-size:12.5px;line-height:1.95;color:var(--ui-dim);
   max-width:460px;letter-spacing:.02em;}
 
+.mode-select{width:min(356px,100%);margin-top:clamp(13px,1.9vh,18px);}
+.mode-select-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  margin-bottom:6px;font-family:var(--mono);font-size:8px;letter-spacing:.22em;
+  color:var(--ui-faint);text-transform:uppercase;}
+.ms-title{display:flex;align-items:center;gap:7px;color:var(--ui-dim);}
+.ms-title::before{content:"";width:4px;height:4px;background:var(--amber);
+  box-shadow:0 0 8px rgba(227,178,106,.5);}
+.ms-title em{font-style:normal;color:var(--ui-ghost);letter-spacing:.1em;}
+.mode-select-current{font-size:8px;letter-spacing:.16em;color:var(--amber-hi);}
+.mode-select-pills{display:flex;border:1px solid rgba(255,255,255,.14);
+  background:rgba(255,255,255,.022);backdrop-filter:blur(6px);}
+.mode-select-pills button{flex:1 1 0;min-width:0;padding:8px 2px;border:0;
+  border-left:1px solid rgba(255,255,255,.09);background:transparent;
+  color:var(--ui-faint);font-family:var(--mono);font-size:8px;letter-spacing:.08em;
+  cursor:pointer;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:color .15s ease,background .15s ease,box-shadow .18s ease;}
+.mode-select-pills button:first-child{border-left:0;}
+.mode-select-pills button:hover{color:var(--ui);background:rgba(255,255,255,.06);}
+.mode-select-pills button.active{background:var(--amber);color:#0a0c0e;font-weight:700;
+  box-shadow:0 0 18px rgba(227,178,106,.22);}
+.mode-select-pills button.active:hover{background:var(--amber);color:#0a0c0e;}
+.mode-select-pills button:focus-visible{outline:1px solid var(--amber-hi);outline-offset:-2px;}
+
 .deploy-btn{position:relative;margin-top:clamp(18px,2.8vh,30px);width:min(356px,100%);
   display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:16px 24px 15px;
   background:linear-gradient(180deg,rgba(227,178,106,.15),rgba(227,178,106,.035));
@@ -511,6 +534,8 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:19px
   .menu-main{gap:clamp(12px,2.2vh,24px);}
   .title .t1{font-size:clamp(42px,5.2vw,66px);}
   .menu-lede{margin-top:12px;font-size:11.5px;line-height:1.85;}
+  .mode-select{margin-top:12px;}
+  .mode-select-pills button{padding:7px 2px;}
   .deploy-btn{margin-top:16px;padding:13px 20px 12px;}
   .btn-label{font-size:17px;}
   .brief-col h3{margin-bottom:11px;}

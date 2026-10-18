@@ -273,9 +273,19 @@ function finishTutorial() {
    ========================================================================= */
 
 function modeForWave(n) {
+  const pref = G.settings && G.settings.runMode;
+  if (pref && pref !== 'rotation') return pref;
   if (n % 5 === 0) return 'extract';
   if (n % 3 === 0) return 'defend';
   return 'survival';
+}
+
+function onModeSelect(mode) {
+  const valid = ['rotation', 'survival', 'defend', 'extract'];
+  G.settings.runMode = valid.includes(mode) ? mode : 'rotation';
+  saveSettings(G.settings);
+  if (hud && hud.setModeSelect) hud.setModeSelect(G.settings.runMode);
+  if (audio && audio.ctx) audio.ui();
 }
 
 function objectiveZone(kind) {
@@ -292,6 +302,8 @@ function objectiveZone(kind) {
         { x: -13.3, z: -2.5, r: 2.7 },
         { x: 13.3, z: -11.6, r: 3.0 },
       ];
+  const market = level && level.cqbZones && level.cqbZones.find((z) => /market|yard|后院|市场/.test((z.id || '') + (z.name || '')));
+  if (market) spots.push({ x: market.center.x, z: market.center.z, r: Math.min(3.6, market.radius || 3.6) });
   const idx = kind === 'defend'
     ? Math.floor((G.wave || 1) / 3) % spots.length
     : Math.floor((G.wave || 1) / 5) % spots.length;
@@ -506,8 +518,9 @@ async function boot() {
     audio = createAudio();
     hud = createHUD();
     input = createInput(engine.renderer.domElement);
-    controller = createController(engine.camera, level.colliders, level.bounds, audio);
+    controller = createController(engine.camera, level.colliders, level.bounds, audio, (x, z, y) => (level.groundHeight ? level.groundHeight(x, z, y) : 0));
     if (hud.bindSettings) hud.bindSettings(G.settings, onSettingChange);
+    if (hud.bindModeSelect) hud.bindModeSelect(G.settings.runMode, onModeSelect);
     applySettings(true);
     raycaster = new THREE.Raycaster();
     raycaster.far = 160;
@@ -736,6 +749,16 @@ function startWave(n) {
     }
     G.spawnQueue.push({ x: best.x + (Math.random() - 0.5) * 2.2, z: best.z + (Math.random() - 0.5) * 2.2, type: chooseArchetype(n, i) });
   }
+  const roofSpawns = level.roofSpawns || [];
+  if (roofSpawns.length) {
+    const count = Math.min(2, 1 + Math.floor(n / 4));
+    for (let i = 0; i < count; i++) {
+      const sp = roofSpawns[(n + i) % roofSpawns.length];
+      G.spawnQueue.push({ x: sp.x, z: sp.z, y: sp.y, type: 'sniper', roof: true });
+    }
+    G.waveRemaining += count;
+    G.waveTotal += count;
+  }
   G.spawnTimer = 0.8;
   G.waveClearTimer = 0;
   hud.setWave(n);
@@ -755,7 +778,12 @@ function spawnEnemy(pos) {
   const playerPos = controller.pos;
   const yaw = Math.atan2(-(playerPos.x - pos.x), -(playerPos.z - pos.z));
   if (e.setArchetype) e.setArchetype(pos.type || 'rifleman');
-  e.spawn(pos.x, pos.z, yaw);
+  if (e.clearBounds) e.clearBounds();
+  e.spawn(pos.x, pos.z, yaw, pos.y || 0);
+  if ((pos.y || 0) > 1 && e.setBounds && level.roofZones) {
+    const zone = level.roofZones.find((r) => pos.x >= r.x0 && pos.x <= r.x1 && pos.z >= r.z0 && pos.z <= r.z1);
+    if (zone) e.setBounds(zone);
+  }
   e.root.visible = true;
   if (SHOT_MODE) e.state = 'engage';
 }
@@ -879,6 +907,12 @@ function fireShot() {
     _end.copy(hit.point);
     _normal.copy(hit.face ? hit.face.normal : _dir).transformDirection(hit.object.matrixWorld).negate();
     if (_normal.lengthSq() < 0.1) _normal.copy(_dir).negate();
+    const destId = hit.object.userData && hit.object.userData.destructible;
+    if (destId && level.hitDestructible) {
+      level.hitDestructible(destId, w.dmg * G.upgrades.damage, hit.point, _normal);
+      fx.impact(hit.point, _normal, 'wood');
+      audio.impact('wood');
+    } else {
     const enemy = hit.object.userData.enemy;
     if (enemy && enemy.alive) {
       const part = hit.object.userData.part;
@@ -898,6 +932,7 @@ function fireShot() {
       fx.impact(hit.point, _normal, kind);
       audio.impact(kind === 'metal' ? 'metal' : 'concrete');
       if (kind === 'metal' && Math.random() > 0.65) audio.ricochet((Math.random() - 0.5) * 0.6);
+    }
     }
   }
   fx.tracer(mz, _end, { color: 0xffce8f, width: 0.028, life: 0.055 });

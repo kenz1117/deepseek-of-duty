@@ -134,6 +134,19 @@
           </h1>
           <p class="menu-lede">城市街区已失守。你是唯一还在推进的资产。<br />在连续波次中存活，清空每一波敌军。</p>
 
+          <div class="mode-select" id="mode-select" role="group" aria-label="任务模式">
+            <div class="mode-select-head">
+              <span class="ms-title">MODE <em>模式</em></span>
+              <span class="mode-select-current" id="mode-select-current">ROTATION</span>
+            </div>
+            <div class="mode-select-pills" id="mode-select-pills">
+              <button type="button" data-mode="rotation" class="active" aria-pressed="true" title="标准轮换：每 3 / 5 波切换防守与撤离">ROTATION</button>
+              <button type="button" data-mode="survival" aria-pressed="false" title="无尽生存：清空每一波敌人">SURVIVAL</button>
+              <button type="button" data-mode="defend" aria-pressed="false" title="区域防守：守住目标区 60 秒">DEFEND</button>
+              <button type="button" data-mode="extract" aria-pressed="false" title="清场撤离：清空敌人后前往撤离区">EXTRACT</button>
+            </div>
+          </div>
+
           <button id="deploy" class="deploy-btn">
             <span class="btn-glow"></span>
             <span class="btn-main"><span class="btn-label">DEPLOY</span><i class="btn-arrow"></i></span>

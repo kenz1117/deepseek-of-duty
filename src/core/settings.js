@@ -14,6 +14,7 @@ export const DEFAULT_SETTINGS = {
   master: 0.58,         // master volume 0-1
   reduceMotion: false,  // damp head bob / shake
   quality: 'high',      // low | medium | high | ultra
+  runMode: 'rotation',  // rotation | survival | defend | extract
 };
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -27,6 +28,7 @@ export function sanitizeSettings(input = {}) {
   s.invertY = !!s.invertY;
   s.reduceMotion = !!s.reduceMotion;
   if (!['low', 'medium', 'high', 'ultra'].includes(s.quality)) s.quality = 'high';
+  if (!['rotation', 'survival', 'defend', 'extract'].includes(s.runMode)) s.runMode = 'rotation';
   return s;
 }
 
