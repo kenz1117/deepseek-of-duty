@@ -42,9 +42,11 @@
 
 - 推荐 **Chrome / Edge** 桌面版，性能预算面向桌面独显 / Apple Silicon
 - 点击页面 → 进入指针锁定 → WASD 移动、鼠标射击；`Esc` 暂停释放鼠标
-- 低端设备请在菜单里切换画质（LOW / MED / HIGH / ULTRA）
+- 低端设备请在菜单 SETTINGS 或暂停菜单切换画质（LOW / MED / HIGH / ULTRA）
 
 ## 操作
+
+> 主菜单点击 **START** 会先打开「战前教学」弹窗，确认后再进入战区；操作键位也在该弹窗内。弹窗内勾选「不再自动提示」后，下次 START 直接进入；菜单 **BRIEFING / 教学** 可重新打开并取消勾选。
 
 | 键位 | 功能 | 键位 | 功能 |
 | --- | --- | --- | --- |
@@ -131,7 +133,7 @@ scripts/server-deploy.sh   服务器端原子部署（时间戳镜像 + 自动�
 - 无全局光照/SSAO/SSR/真实软阴影；光照为单方向光 + IBL + 少量点光。
 - 无网络多人、无动画状态机资源、无配音/配乐。
 - 敌人寻路为转向 + AABB 推挤，无 navmesh；复杂地形会卡角。
-- 性能预算面向桌面独显/Apple Silicon；低端设备请切画质（菜单内 LOW/MED/HIGH/ULTRA）。
+- 性能预算面向桌面独显/Apple Silicon；低端设备请切画质（SETTINGS 或暂停菜单内 LOW/MED/HIGH/ULTRA）。
 - 若继续推进：角色骨骼层级与蒙皮、武器动画曲线、程序化贴花分层、SSAO/GTAO、TSR/FSR、可破坏掩体、更多关卡与模式。
 
 ---

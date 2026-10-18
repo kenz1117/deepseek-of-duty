@@ -5,6 +5,7 @@
 
 export const SETTINGS_KEY = 'dod.settings.v1';
 export const TUTORIAL_KEY = 'dod.tutorial.v1';
+export const PRESTART_KEY = 'dod.prestart.skip';
 
 export const DEFAULT_SETTINGS = {
   sensitivity: 1.0,     // hip-fire mouse sensitivity multiplier
@@ -55,4 +56,14 @@ export function tutorialDone() {
 }
 export function markTutorialDone() {
   try { localStorage.setItem(TUTORIAL_KEY, '1'); } catch (e) { /* ignore */ }
+}
+
+export function prestartSkipped() {
+  try { return localStorage.getItem(PRESTART_KEY) === '1'; } catch (e) { return false; }
+}
+export function setPrestartSkipped(v) {
+  try {
+    if (v) localStorage.setItem(PRESTART_KEY, '1');
+    else localStorage.removeItem(PRESTART_KEY);
+  } catch (e) { /* ignore */ }
 }

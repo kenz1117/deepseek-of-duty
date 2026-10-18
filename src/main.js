@@ -8,7 +8,7 @@ import { createHUD } from './ui/hud.js';
 import { createInput } from './core/input.js';
 import { createController } from './player/controller.js';
 import { Enemy } from './entities/enemy.js';
-import { loadSettings, saveSettings, sanitizeSettings, tutorialDone, markTutorialDone, DEFAULT_SETTINGS } from './core/settings.js';
+import { loadSettings, saveSettings, sanitizeSettings, tutorialDone, markTutorialDone, prestartSkipped, setPrestartSkipped, DEFAULT_SETTINGS } from './core/settings.js';
 
 /* =========================================================================
    DEEPSEEK OF DUTY — browser vertical slice.
@@ -69,6 +69,11 @@ const menuEl = document.getElementById('menu');
 const pauseEl = document.getElementById('pause');
 const deathEl = document.getElementById('death');
 const hudEl = document.getElementById('hud');
+const prestartEl = document.getElementById('prestart');
+const prestartGo = document.getElementById('prestart-go');
+const prestartBack = document.getElementById('prestart-back');
+const prestartSkip = document.getElementById('prestart-skip');
+const tutorialOpen = document.getElementById('tutorial-open');
 
 function setLoading(p, text) {
   if (loadFill) loadFill.style.width = `${p * 100}%`;
@@ -228,6 +233,100 @@ const TUTORIAL_STEPS = [
   { text: 'R 换弹 · G 手雷', key: 'R / G' },
 ];
 
+const MODE_BRIEFS = {
+  rotation: {
+    label: 'ROTATION', title: '标准轮换', op: 'ROTATION PROTOCOL',
+    desc: '每 3 波进入防守，每 5 波进入撤离；其余为生存波次。目标区会在街区、后院与市场之间轮换。',
+    threat: 'HIGH', ao: 'URBAN', contact: '∞',
+    objectives: ['生存波：清空所有敌人', '防守波：在目标区累计守住 60 秒', '撤离波：清空区域后进入撤离区按住 8 秒'],
+    note: '敌军以波次持续增援，没有撤离窗口。保持移动，利用掩体，清空街区。',
+  },
+  survival: {
+    label: 'SURVIVAL', title: '无尽生存', op: 'LAST STAND PROTOCOL',
+    desc: '没有防守与撤离目标，只有不断加码的波次。活到弹尽之前，把街区清空。',
+    threat: 'HIGH', ao: 'URBAN', contact: '∞',
+    objectives: ['清空每一波敌人', '利用街道、室内与后院掩体', '波间选择一项升级'],
+    note: '无尽波次，没有撤离窗口。保持移动，优先处理盾兵与狙击手。',
+  },
+  defend: {
+    label: 'DEFEND', title: '区域防守', op: 'HOLD THE LINE',
+    desc: '每一波都要进入黄色目标区并累计守住 60 秒；离开区域会衰减。清空区域时敌军会补充增援。',
+    threat: 'HIGH', ao: 'URBAN', contact: 'WAVES',
+    objectives: ['进入目标区并累计守满 60 秒', '离开区域会衰减进度', '清空当前敌人后会有 2 名增援'],
+    note: '防守区会在街心、左巷、市场与后院之间轮换。不要在开阔地停留。',
+  },
+  extract: {
+    label: 'EXTRACT', title: '清场撤离', op: 'EXFILTRATION',
+    desc: '先清空当前区域，再进入撤离区按住 8 秒。撤离区可能位于左巷、工坊或市场内部。',
+    threat: 'HIGH', ao: 'URBAN', contact: 'FINITE',
+    objectives: ['清空当前区域的所有敌人', '进入撤离区并按住 8 秒', '撤离完成后进入下一波'],
+    note: '撤离区会随波次轮换。清场后留意 HUD 的距离提示。',
+  },
+};
+
+function updateBriefing(mode = G.settings.runMode) {
+  const b = MODE_BRIEFS[mode] || MODE_BRIEFS.rotation;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('brief-title', b.title);
+  set('brief-mode', b.label);
+  set('brief-threat', b.threat);
+  set('brief-ao', b.ao);
+  set('brief-contact', b.contact);
+  set('brief-note', b.note);
+  const th = document.getElementById('brief-threat');
+  if (th) th.classList.toggle('hot', b.threat !== 'LOW');
+  fillPrestart(mode);
+}
+
+function fillPrestart(mode = G.settings.runMode) {
+  const b = MODE_BRIEFS[mode] || MODE_BRIEFS.rotation;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('prestart-mode', b.label);
+  set('prestart-kicker', 'OPERATION BLACKOUT / ' + b.op);
+  set('prestart-title', b.title);
+  set('prestart-desc', b.desc);
+  set('prestart-threat', b.threat);
+  set('prestart-contact', b.contact);
+  const th = document.getElementById('prestart-threat');
+  if (th) th.classList.toggle('hot', b.threat !== 'LOW');
+  const ul = document.getElementById('prestart-objectives');
+  if (ul) ul.innerHTML = b.objectives.map((t) => `<li>${t}</li>`).join('');
+}
+
+function openPrestart() {
+  updateBriefing(G.settings.runMode);
+  if (!prestartEl) return;
+  if (prestartSkip) prestartSkip.checked = prestartSkipped();
+  prestartEl.classList.remove('hidden');
+  prestartEl.setAttribute('aria-hidden', 'false');
+  G.state = 'menu';
+  if (input) input.unlock();
+  if (audio && audio.ctx) audio.ui();
+}
+
+function launchGame() {
+  closePrestart();
+  G.tutorial.done = true;
+  markTutorialDone();
+  audio.init();
+  audio.setMasterVolume(G.settings.master);
+  initAudioAmbience();
+  startGame(true);
+}
+
+function onDeployClick() {
+  audio.init();
+  audio.setMasterVolume(G.settings.master);
+  if (prestartSkipped()) launchGame();
+  else openPrestart();
+}
+
+function closePrestart() {
+  if (!prestartEl) return;
+  prestartEl.classList.add('hidden');
+  prestartEl.setAttribute('aria-hidden', 'true');
+}
+
 function beginTutorial(force = false) {
   if (G.tutorial.done || (SHOT_MODE && !force)) return;
   G.tutorial.active = true;
@@ -285,6 +384,7 @@ function onModeSelect(mode) {
   G.settings.runMode = valid.includes(mode) ? mode : 'rotation';
   saveSettings(G.settings);
   if (hud && hud.setModeSelect) hud.setModeSelect(G.settings.runMode);
+  updateBriefing(G.settings.runMode);
   if (audio && audio.ctx) audio.ui();
 }
 
@@ -523,6 +623,7 @@ async function boot() {
     controller = createController(engine.camera, level.colliders, level.bounds, audio, (x, z, y) => (level.groundHeight ? level.groundHeight(x, z, y) : 0));
     if (hud.bindSettings) hud.bindSettings(G.settings, onSettingChange);
     if (hud.bindModeSelect) hud.bindModeSelect(G.settings.runMode, onModeSelect);
+    updateBriefing(G.settings.runMode);
     applySettings(true);
     raycaster = new THREE.Raycaster();
     raycaster.far = 160;
@@ -532,11 +633,14 @@ async function boot() {
     if (engine.enableSSAO) engine.enableSSAO();
     window.addEventListener('resize', onResize);
 
-    document.getElementById('deploy').addEventListener('click', () => {
+    document.getElementById('deploy').addEventListener('click', onDeployClick);
+    if (prestartGo) prestartGo.addEventListener('click', launchGame);
+    if (prestartBack) prestartBack.addEventListener('click', closePrestart);
+    if (prestartSkip) prestartSkip.addEventListener('change', () => setPrestartSkipped(!!prestartSkip.checked));
+    if (tutorialOpen) tutorialOpen.addEventListener('click', () => {
       audio.init();
       audio.setMasterVolume(G.settings.master);
-      initAudioAmbience();
-      startGame(true);
+      openPrestart();
     });
     document.getElementById('resume').addEventListener('click', () => {
       G.state = 'playing';
@@ -548,6 +652,7 @@ async function boot() {
       deathEl.classList.add('hidden');
       hudEl.classList.add('hidden');
       menuEl.classList.remove('hidden');
+      closePrestart();
       G.state = 'menu';
       input.unlock();
       resetGame();
@@ -593,6 +698,7 @@ async function boot() {
     });
     input.on('key', (code) => {
       if (code === 'Escape') {
+        if (prestartEl && !prestartEl.classList.contains('hidden')) { closePrestart(); return; }
         const openNow = typeof hud.isSettingsOpen === 'function' ? hud.isSettingsOpen() : !!hud.isSettingsOpen;
         if (openNow) { if (hud.closeSettings) hud.closeSettings(); return; }
         if (G.state === 'playing') { G.state = 'paused'; pauseEl.classList.remove('hidden'); input.unlock(); }
@@ -652,6 +758,7 @@ function initAudioAmbience() {
 
 /* ------------------------------------------------------------------ game state */
 function startGame(lock = true, silent = false) {
+  closePrestart();
   resetGame();
   menuEl.classList.add('hidden');
   hudEl.classList.remove('hidden');

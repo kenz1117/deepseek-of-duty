@@ -148,50 +148,39 @@
 
           <button id="deploy" class="deploy-btn">
             <span class="btn-glow"></span>
-            <span class="btn-main"><span class="btn-label">DEPLOY</span><i class="btn-arrow"></i></span>
-            <span class="btn-sub">点击进入战区 · 锁定鼠标</span>
+            <span class="btn-main"><span class="btn-label">START</span><i class="btn-arrow"></i></span>
+            <span class="btn-sub">开始行动 · 战前教学</span>
             <i class="cb tl"></i><i class="cb br"></i>
           </button>
 
-          <button class="menu-settings" data-open-settings type="button">
-            <i class="sliders"></i>
-            <span class="ms-label">SETTINGS</span>
-            <span class="ms-sub">设置</span>
-          </button>
+          <div class="menu-aux">
+            <button class="menu-settings" data-open-settings type="button">
+              <i class="sliders"></i>
+              <span class="ms-label">SETTINGS</span>
+              <span class="ms-sub">设置</span>
+            </button>
+            <button class="menu-settings" id="tutorial-open" type="button" title="再次查看战前教学">
+              <span class="ms-label">BRIEFING</span>
+              <span class="ms-sub">教学</span>
+            </button>
+          </div>
         </div>
 
-        <div class="menu-panel">
-          <section class="brief-col">
-            <h3><span class="num">01</span>CONTROLS<i class="hrule"></i></h3>
-            <ul class="ctl">
-              <li><span class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="cl">移动</span></li>
-              <li><span class="keys"><kbd>SHIFT</kbd></span><span class="cl">冲刺</span><i class="cl-sep">/</i><span class="keys"><kbd>CTRL</kbd></span><span class="cl">蹲伏</span></li>
-              <li><span class="keys"><kbd>LMB</kbd></span><span class="cl">射击</span><i class="cl-sep">/</i><span class="keys"><kbd>RMB</kbd></span><span class="cl">瞄准</span></li>
-              <li><span class="keys"><kbd>R</kbd></span><span class="cl">换弹</span><i class="cl-sep">/</i><span class="keys"><kbd>1</kbd><kbd>2</kbd></span><span class="cl">换枪</span><i class="cl-sep">/</i><span class="keys"><kbd>G</kbd></span><span class="cl">手雷</span></li>
-              <li><span class="keys"><kbd>SPACE</kbd></span><span class="cl">跳跃</span><i class="cl-sep">/</i><span class="keys"><kbd>ESC</kbd></span><span class="cl">暂停</span></li>
-            </ul>
-          </section>
-
-          <section class="brief-col">
-            <h3><span class="num">02</span>BRIEFING<i class="hrule"></i></h3>
-            <dl class="brief-stats">
-              <div><dt>THREAT</dt><dd class="hot">HIGH</dd></div>
-              <div><dt>AO</dt><dd>URBAN</dd></div>
-              <div><dt>CONTACT</dt><dd>∞</dd></div>
-            </dl>
-            <p class="brief-note">敌军以波次持续增援，没有撤离窗口。<br />保持移动，利用掩体，清空街区。</p>
-            <div class="quality-row">
-              <span class="q-label">GRAPHICS <em>画质</em></span>
-              <div class="quality-pills">
-                <button data-q="low">LOW</button>
-                <button data-q="medium">MED</button>
-                <button data-q="high" class="active">HIGH</button>
-                <button data-q="ultra">ULTRA</button>
-              </div>
-            </div>
-          </section>
-        </div>
-
+        <section class="brief-panel" aria-label="任务简报">
+          <div class="brief-head">
+            <span class="num">01</span>
+            <span class="brief-label">BRIEFING <em>简报</em></span>
+            <span class="brief-title" id="brief-title">标准轮换</span>
+            <span class="brief-mode" id="brief-mode">ROTATION</span>
+            <i class="hrule"></i>
+          </div>
+          <dl class="brief-stats">
+            <div><dt>THREAT</dt><dd class="hot" id="brief-threat">HIGH</dd></div>
+            <div><dt>AO</dt><dd id="brief-ao">URBAN</dd></div>
+            <div><dt>CONTACT</dt><dd id="brief-contact">∞</dd></div>
+          </dl>
+          <p class="brief-note" id="brief-note">敌军以波次持续增援，没有撤离窗口。保持移动，利用掩体，清空街区。</p>
+        </section>
       </main>
 
       <div class="menu-figure" aria-hidden="true">
@@ -201,6 +190,51 @@
       <footer class="menu-foot">
         <span class="foot-left"><i class="fmark"></i>程序化生成资产 · 无外部贴图下载</span>
         <span class="foot-right">若帧率不足请在暂停菜单降低画质<i class="fdiv"></i><b>V1.0</b></span>
+      </footer>
+    </div>
+  </div>
+
+
+  <!-- ============ PRE-MISSION BRIEFING / TUTORIAL ============ -->
+  <div id="prestart" class="overlay hidden" aria-hidden="true">
+    <div class="prestart-inner" role="dialog" aria-modal="true" aria-labelledby="prestart-title">
+      <header class="prestart-top">
+        <div class="overlay-tag"><i></i>PRE-MISSION BRIEFING · 战前教学</div>
+        <span class="prestart-mode" id="prestart-mode">ROTATION</span>
+      </header>
+      <div class="prestart-grid">
+        <section class="prestart-main">
+          <p class="prestart-kicker" id="prestart-kicker">OPERATION BLACKOUT / ROTATION PROTOCOL</p>
+          <h2 class="prestart-title" id="prestart-title">标准轮换</h2>
+          <p class="prestart-desc" id="prestart-desc">每 3 波进入防守，每 5 波进入撤离；其余为生存波次。</p>
+          <ul class="prestart-objectives" id="prestart-objectives"></ul>
+          <div class="prestart-stats">
+            <div><span>THREAT</span><b id="prestart-threat">HIGH</b></div>
+            <div><span>AO</span><b>URBAN</b></div>
+            <div><span>CONTACT</span><b id="prestart-contact">∞</b></div>
+          </div>
+        </section>
+        <section class="prestart-controls">
+          <h3>CONTROLS <em>操作教学</em><i class="hrule"></i></h3>
+          <div class="pc-grid">
+            <div class="pc-row"><span class="pc-keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="pc-label">移动 <em>MOVE</em></span></div>
+            <div class="pc-row"><span class="pc-keys"><kbd>SHIFT</kbd></span><span class="pc-label">冲刺 <em>SPRINT</em></span><span class="pc-keys"><kbd>CTRL</kbd></span><span class="pc-label">蹲伏 <em>CROUCH</em></span></div>
+            <div class="pc-row"><span class="pc-keys"><kbd>LMB</kbd></span><span class="pc-label">射击 <em>FIRE</em></span><span class="pc-keys"><kbd>RMB</kbd></span><span class="pc-label">瞄准 <em>AIM</em></span></div>
+            <div class="pc-row"><span class="pc-keys"><kbd>R</kbd></span><span class="pc-label">换弹 <em>RELOAD</em></span><span class="pc-keys"><kbd>1</kbd><kbd>2</kbd></span><span class="pc-label">换枪 <em>SWAP</em></span></div>
+            <div class="pc-row"><span class="pc-keys"><kbd>G</kbd></span><span class="pc-label">手雷 <em>GRENADE</em></span><span class="pc-keys"><kbd>SPACE</kbd></span><span class="pc-label">跳跃 <em>JUMP</em></span></div>
+            <div class="pc-row"><span class="pc-keys"><kbd>F</kbd></span><span class="pc-label">检视武器 <em>INSPECT</em></span><span class="pc-keys"><kbd>ESC</kbd></span><span class="pc-label">暂停 <em>PAUSE</em></span></div>
+          </div>
+          <p class="pc-tip">鼠标锁定后移动鼠标转向 · 按 <kbd>ESC</kbd> 解锁并暂停</p>
+        </section>
+      </div>
+      <footer class="prestart-foot">
+        <button id="prestart-back" class="ps-back" type="button">返回 <em>BACK</em></button>
+        <label class="ps-skip" for="prestart-skip">
+          <input type="checkbox" id="prestart-skip" />
+          <span class="ps-check" aria-hidden="true"></span>
+          <span class="ps-skip-text">不再自动提示 <em>DON'T AUTO-SHOW</em></span>
+        </label>
+        <button id="prestart-go" class="ps-go" type="button"><span>START OPERATION</span><em>进入战区</em></button>
       </footer>
     </div>
   </div>
