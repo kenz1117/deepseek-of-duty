@@ -2,7 +2,29 @@ import * as THREE from 'three';
 import { createSky } from './sky.js';
 import { createPost, presets } from './postfx.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { buildMaterials } from './materials.js';
+
+/* Half-resolution SSAO: the normal/depth/SSAO/blur targets render at half
+   size, while the final multiply still covers the full read buffer. */
+class HalfSSAOPass extends SSAOPass {
+  setSize(w, h) {
+    super.setSize(Math.max(1, Math.floor(w * 0.5)), Math.max(1, Math.floor(h * 0.5)));
+  }
+  // Decals, glass, sky and particles have no meaningful normals; feeding them
+  // to the normal pass creates halos (the puddle ring). Hide them from AO.
+  overrideVisibility() {
+    const scene = this.scene;
+    const cache = this._visibilityCache;
+    scene.traverse((object) => {
+      cache.set(object, object.visible);
+      if (object.isPoints || object.isLine) { object.visible = false; return; }
+      const m = Array.isArray(object.material) ? object.material[0] : object.material;
+      if (object.userData && object.userData.noAO) { object.visible = false; return; }
+      if (m && (m.transparent || m.depthWrite === false || m.alphaTest > 0)) object.visible = false;
+    });
+  }
+}
 
 /* =========================================================================
    Engine: renderer, scene, camera, sun + shadow rig, sky IBL, post stack.
@@ -172,6 +194,7 @@ export function createEngine(canvas, quality = 'high') {
     sun.shadow.mapSize.set(nq.shadows, nq.shadows);
     if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
     post.applyQuality(next);
+    if (ssaoPass) ssaoPass.enabled = !!nq.ssao;
   }
 
   function applyAtmosphere(name) {
@@ -189,6 +212,21 @@ export function createEngine(canvas, quality = 'high') {
     return a.label;
   }
 
+  let ssaoPass = null;
+  function enableSSAO() {
+    if (ssaoPass) return ssaoPass;
+    ssaoPass = new HalfSSAOPass(scene, camera, window.innerWidth, window.innerHeight);
+    ssaoPass.kernelRadius = 7.0;
+    ssaoPass.minDistance = 0.0015;
+    ssaoPass.maxDistance = 0.10;
+    ssaoPass.output = SSAOPass.OUTPUT.Default;
+    ssaoPass.enabled = !!presets(state.quality).ssao;
+    // insert directly after the world render, before the viewmodel overlay
+    post.composer.insertPass(ssaoPass, 1);
+    ssaoPass.setSize(window.innerWidth, window.innerHeight);
+    return ssaoPass;
+  }
+
   function addOverlay(overlayScene, overlayCamera) {
     const pass = new RenderPass(overlayScene, overlayCamera);
     pass.clear = false;
@@ -198,7 +236,7 @@ export function createEngine(canvas, quality = 'high') {
   }
 
   return {
-    renderer, scene, camera, sky, sun, fill, mats, post, state, addOverlay, applyAtmosphere,
+    renderer, scene, camera, sky, sun, fill, mats, post, state, addOverlay, applyAtmosphere, enableSSAO,
     update, render, setQuality, onResize,
     get quality() { return state.quality; },
     resize: onResize,

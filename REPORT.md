@@ -223,6 +223,44 @@ python3 tools/montage.py shots/montage.png
 
 ---
 
-## 10. 最后的话
+---
+
+## 10. Sprint C：半分辨率 SSAO / 1k 武器图集 / 敌人 ragdoll（2026-10-18）
+
+### 已交付
+
+- **半分辨率 SSAO**：`HalfSSAOPass` 把 normal/depth/SSAO/blur 目标缩到 800×450（1600×900 的 50%），最终在全分辨率 read buffer 上相乘；pass 插在 world render 之后、viewmodel overlay 之前，因此不会把武器/手压黑。
+  - 只在高/超高画质启用；低/中 `ssaoPass.enabled=false`。
+  - `overrideVisibility` 排除透明贴花、天空、玻璃、alphaTest 植被和积水（`userData.noAO`），修掉了地面 puddle 的暗环。
+  - AO 平均压暗约 1 luma，阴影/墙脚局部最大 ~90，属于克制型接触阴影，不是夸张黑边。
+- **1k 武器/手图集**：`gunmaterials.js` 生成 1024² albedo/normal/roughness，2×2 分区（氧化金属/聚合物/皮革手套/织物袖口），每材质 `map.offset/repeat` 取 tile，不重 UV；ClampToEdge + 关闭 mipmap 防 tile 渗色；生成 62–66ms。
+  - 内容：加工纹/细划痕/掉漆亮点/油污积尘 + 对应 roughness；聚合物颗粒/防滑棱；皮革粒面/裂纹/指节磨损/双道缝线；织物 ripstop/织纹/折痕/袖口罗纹。
+  - 材质键/API 全保留；viewmodel 增加克制冷色右后 rim，手套 albedo +13%，暗部微抬；hero 30.2%、ADS 0px 不变。
+- **敌人 ragdoll**：7 刚体点（head/chest/pelvis/handL/handR/footL/footR）+ 8 距离约束，Verlet + PBD，重力/子步/6 次迭代/地面摩擦；爆头/躯干/腿/臂不同冲量，爆炸 ×1.7；3.2s 摊平，6s 后 0.9s 淡出回收。
+  - `applyRagdoll()` 映射回原骨架（骨盆 basis、头瞄准、双臂/双腿 IK），不换模型、不加 mesh；步枪横躺胸口。
+  - 屋顶 `baseY=3.2` 尸体点 3.245–3.35，不落回地面；6 尸同屏 60fps。
+
+### 验收数据
+
+- SSAO：pass `HalfSSAOPass`，1600×900 下内部 **800×450**；高画质 `enabled=true`、低画质 `false`；AO 开/关均值差 1.18 luma，阴影区平均 0.79、局部最大 94。
+- Atlas：1024²×3，2×2/512² tile；hero 宽 30.2%、ADS 红点 NDC=(0,0)、像素中心 (799,448.5)；19 材质 draw / 35 mesh + 4 sprite / 24,690 tri；生成 64.4ms。
+- Ragdoll：7 点/8 约束/尸；爆头/躯干/腿姿态不同；t=3.2s 各点 y=半径、无 NaN；6 尸 + SSAO 930 calls / 1.52M tris / 60fps。
+- 生产构建：通过（见 `deploy/dist-sprintC.tar.gz`）。
+
+### 仍存短板（诚实）
+
+- SSAO 是 half-res + 全屏上采样，近距离细缝会有轻微柔化/halo；AO 强度偏克制，不是电影级 GTAO；半透明/玻璃/贴花不参与 AO。
+- 图集是 2×2 / 每材质 512² tile，不是 4×4 或 2k；手套在黄昏远景仍偏暗；mipmap 关闭只适合近景视图模型。
+- Ragdoll 只有距离约束，没有角度/滚转约束：尸体偏紧凑，手臂可穿躯干、背包偶有互穿；不会随机趴/侧躺；“仰面”是 basis 偏置；步枪不落地；淡出期每尸克隆 ~6 个材质。
+- 6 尸同屏 draw calls 930+，高于常规战斗；低端机可能掉帧。
+
+### 下一步
+
+- D：GTAO/SSAO 强度分级 + 武器/手 2k、角色 2k 图集；ragdoll 加角度约束/掉落武器；或转向玩法（Boss/连杀奖励/每日挑战）。
+- 视觉评分尚未重跑；C 主要补的是“接触阴影/近景材质/死亡物理”三项硬缺口。
+
+---
+
+## 11. 最后的话
 
 3A FPS 的"完美"来自数百人年的资产生产、动作捕捉、扫描材质、烘焙全局光照与主机级管线；WebGL 单页 + 程序化生成能做到的是**方向正确、系统完整、可玩、可持续迭代**。这份工程在 3 轮内把评委分数从 2.4 推到 4.7，并让硬指标的 5 项里 3 项达标（最终轮两项曝光指标也已达标）。它不是 CoD，也不需要假装是。

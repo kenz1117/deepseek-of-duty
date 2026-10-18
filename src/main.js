@@ -529,6 +529,7 @@ async function boot() {
     setupEnemyCtx();
 
     vmPass = engine.addOverlay(viewmodel.scene, viewmodel.camera);
+    if (engine.enableSSAO) engine.enableSSAO();
     window.addEventListener('resize', onResize);
 
     document.getElementById('deploy').addEventListener('click', () => {

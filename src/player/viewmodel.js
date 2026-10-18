@@ -117,7 +117,7 @@ export function createViewmodel(engineMats, envTexture) {
   /* --------------------------------------------------------------- lighting */
   // Own three-point rig: warm key carves the top faces, cold rim draws the
   // silhouette, warm bounce keeps black-oxide parts from crushing to black.
-  const key = new THREE.DirectionalLight(0xffe2c0, 2.0);
+  const key = new THREE.DirectionalLight(0xfff0de, 2.2);
   key.position.set(-0.9, 1.8, 1.2);
   scene.add(key);
 
@@ -129,14 +129,20 @@ export function createViewmodel(engineMats, envTexture) {
   rim2.position.set(0.2, -0.8, 0.9);
   scene.add(rim2);
 
-  const hemi = new THREE.HemisphereLight(0xa9bed6, 0x2b241b, 0.45);
+  // low, cool right-rear edge light: lifts receiver bevels / knuckle silhouettes
+  // without blowing highlights (kept well below the key and main rim)
+  const rimBack = new THREE.DirectionalLight(0xb6d4f0, 0.8);
+  rimBack.position.set(1.25, 0.55, 1.15);
+  scene.add(rimBack);
+
+  const hemi = new THREE.HemisphereLight(0xa9bed6, 0x2b241b, 0.5);
   scene.add(hemi);
 
-  const fill = new THREE.DirectionalLight(0xcfd8e2, 1.3);
+  const fill = new THREE.DirectionalLight(0xcfd8e2, 1.5);
   fill.position.set(0.9, 0.4, 1.5);
   scene.add(fill);
 
-  const fillWarm = new THREE.DirectionalLight(0xffcf9e, 0.75);
+  const fillWarm = new THREE.DirectionalLight(0xffd8b4, 0.55);
   fillWarm.position.set(-1.4, 0.2, 1.1);
   scene.add(fillWarm);
 
@@ -209,7 +215,6 @@ export function createViewmodel(engineMats, envTexture) {
     part(stockParts, rbox(0.042, 0.074, 0.132, 0.014, 4), M.stockPoly, 0, -0.016, 0.222);
     part(stockParts, rbox(0.036, 0.02, 0.098, 0.009, 3), M.stockPoly, 0, 0.028, 0.212);
     part(stockParts, rbox(0.046, 0.092, 0.014, 0.006, 3), M.rubber, 0, -0.012, 0.294);
-    part(stockParts, new THREE.BoxGeometry(0.038, 0.0014, 0.085), M.blackSteel, 0, 0.0378, 0.212);
     part(stockParts, rbox(0.0025, 0.028, 0.062, 0.002), M.blackSteel, 0.0212, -0.018, 0.215);
     part(stockParts, rbox(0.0018, 0.016, 0.03, 0.001), M.rubber, 0.0225, -0.018, 0.215);
     part(stockParts, rbox(0.026, 0.011, 0.052, 0.004), M.blackSteel, 0, -0.058, 0.19);
@@ -276,8 +281,8 @@ export function createViewmodel(engineMats, envTexture) {
 
     /* ---------------------------------------------------- holographic sight */
     // mount + throw-lever clamp
-    part(body, rbox(0.042, 0.012, 0.1, 0.004), M.receiver, 0, 0.041, -0.068);
-    part(body, rbox(0.05, 0.013, 0.028, 0.003), M.receiver, 0, 0.034, -0.068);
+    part(body, rbox(0.042, 0.012, 0.1, 0.004), M.hoodMatte, 0, 0.041, -0.068);
+    part(body, rbox(0.05, 0.013, 0.028, 0.003), M.hoodMatte, 0, 0.034, -0.068);
     part(body, rbox(0.005, 0.016, 0.03, 0.002), M.receiverMatte, 0.027, 0.049, -0.06, 0.35, 0, 0);
     // hollow window: four slim bars + top hood. Nothing closes the front or
     // back, so the red reticle reads against the world through the glass.
@@ -844,6 +849,8 @@ export function createViewmodel(engineMats, envTexture) {
       meshes,
       sprites,
       materialDraws: materials.size,
+      atlasMs: M.atlasMs != null ? +M.atlasMs.toFixed(1) : null,
+      atlasSize: M.atlasSize ?? null,
       tris: Math.round(tris),
       ads: +state.ads.toFixed(4),
       fov: +camera.fov.toFixed(2),

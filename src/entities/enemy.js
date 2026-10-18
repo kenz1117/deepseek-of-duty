@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { buildSoldier, applyPose } from './soldierParts.js';
+import { buildSoldier, applyPose, applyRagdoll } from './soldierParts.js';
 
 /* =========================================================================
    Enemy soldier — four archetypes on one rig:
@@ -103,6 +103,36 @@ function wrapPi(a) {
 }
 const clamp = THREE.MathUtils.clamp;
 
+/* --------------------------------------------------------------- ragdoll */
+// 7 bodies / 8 distance constraints per corpse: head, chest, pelvis,
+// two hands, two feet. Solved with Verlet + PBD; drives the existing rig.
+const RAG_BODY_DEF = [
+  { k: 'head',   w: 0.60, r: 0.105, lift: 1.00 },
+  { k: 'chest',  w: 0.95, r: 0.150, lift: 0.80 },
+  { k: 'pelvis', w: 1.00, r: 0.140, lift: 0.30 },
+  { k: 'handL',  w: 0.30, r: 0.045, lift: 0.90 },
+  { k: 'handR',  w: 0.30, r: 0.045, lift: 0.90 },
+  { k: 'footL',  w: 0.42, r: 0.065, lift: 0.00 },
+  { k: 'footR',  w: 0.42, r: 0.065, lift: 0.00 },
+];
+const RAG_CON_DEF = [
+  ['pelvis', 'chest'], ['chest', 'head'],
+  ['chest', 'handL'], ['chest', 'handR'],
+  ['pelvis', 'footL'], ['pelvis', 'footR'],
+  // keeps the spine from folding back onto the legs (a pure distance
+  // ragdoll otherwise collapses into a pile at the waist)
+  ['head', 'pelvis', 0.94],
+  ['footL', 'footR'],
+];
+const RAG_DT = 1 / 60;
+const _ragQInv = new THREE.Quaternion();
+const _ragS = {
+  pelvis: new THREE.Vector3(), chest: new THREE.Vector3(), head: new THREE.Vector3(),
+  handL: new THREE.Vector3(), handR: new THREE.Vector3(),
+  footL: new THREE.Vector3(), footR: new THREE.Vector3(),
+  forward: new THREE.Vector3(0, 0, -1),
+};
+
 export class Enemy {
   constructor(scene, mats, colliders, rnd) {
     this.scene = scene;
@@ -156,6 +186,16 @@ export class Enemy {
     this.baseY = 0;
     this.bounds = null;
     this.pinned = false;
+
+    // ragdoll / corpse
+    this.ragdoll = null;
+    this.corpseT = 0;
+    this.deathPart = 'torso';
+    this.deathExplosive = false;
+    this.velX = 0;
+    this.velZ = 0;
+    this.fadeMats = null;
+    this.matBackup = null;
 
     this.variant = _variantCounter++ % 3;
     this.rig = null;
@@ -215,6 +255,8 @@ export class Enemy {
       this.deathT = 0;
       this.root.rotation.set(0, this.root.rotation.y, 0);
       this.restPose();
+    } else if (this.ragdoll) {
+      this.applyRagdollPose();
     } else {
       this.applyDeathPose();
     }
@@ -264,6 +306,7 @@ export class Enemy {
 
   /* --------------------------------------------------------------- visuals */
   rebuildVisual() {
+    this.restoreMaterials();
     if (this.rig) {
       this.root.remove(this.rig.root);
       this.rig.dispose();
@@ -405,6 +448,13 @@ export class Enemy {
 
   /* --------------------------------------------------------------- spawning */
   spawn(x, z, yaw = 0, y = 0) {
+    this.restoreMaterials();
+    this.ragdoll = null;
+    this.corpseT = 0;
+    this.deathPart = 'torso';
+    this.deathExplosive = false;
+    this.velX = 0;
+    this.velZ = 0;
     this.baseY = Number.isFinite(y) ? y : 0;
     this.root.position.set(x, this.baseY, z);
     this.root.rotation.set(0, yaw, 0);
@@ -461,6 +511,8 @@ export class Enemy {
   /** returns true if this damage killed */
   takeDamage(amount, point, normal, part = 'torso') {
     if (!this.alive) return false;
+    this.deathPart = part;
+    this.deathExplosive = !!(normal && normal.y > 0.75);
 
     let dmg = amount;
     if (this.archetype === 'shield') {
@@ -518,7 +570,9 @@ export class Enemy {
     if (this.laser) this.laser.visible = false;
     if (this.glint) this.glint.visible = false;
     for (const h of this.hitboxes) h.visible = false;
-    void point; void normal;
+    this.corpseT = 0;
+    this.startRagdoll(point);
+    void normal;
   }
 
   /* --------------------------------------------------------------- vision */
@@ -599,6 +653,8 @@ export class Enemy {
       this.canSee = this.canSeePlayer(playerPos);
     }
 
+    const px0 = this.root.position.x;
+    const pz0 = this.root.position.z;
     const toPlayer = _v2.set(playerPos.x - this.root.position.x, 0, playerPos.z - this.root.position.z);
     const dist = toPlayer.length();
     const dir = toPlayer.clone().normalize();
@@ -716,6 +772,10 @@ export class Enemy {
         p.x = clamp(p.x, -20, 20);
         p.z = clamp(p.z, -63, 50);
       }
+    }
+    if (dt > 1e-4) {
+      this.velX = clamp((this.root.position.x - px0) / dt, -6, 6);
+      this.velZ = clamp((this.root.position.z - pz0) / dt, -6, 6);
     }
 
     // ---- facing
@@ -847,8 +907,209 @@ export class Enemy {
 
   /* --------------------------------------------------------- death anim */
   updateDeath(dt) {
-    this.deathT = Math.min(1, this.deathT + dt * 1.35);
-    this.applyDeathPose();
+    this.corpseT += dt;
+    if (this.ragdoll) {
+      this.stepRagdoll(dt);
+      this.applyRagdollPose();
+    } else {
+      this.deathT = Math.min(1, this.deathT + dt * 1.35);
+      this.applyDeathPose();
+    }
+    this.weaponFlash.material.opacity = 0;
+    if (this.laser) this.laser.visible = false;
+    if (this.glint) this.glint.visible = false;
+
+    // hold the corpse ~6 s, fade 0.9 s, then hide so main.js can recycle it
+    if (this.corpseT > 6.0) {
+      if (!this.fadeMats) this.startCorpseFade();
+      this.updateCorpseFade(Math.min(1, (this.corpseT - 6.0) / 0.9));
+      if (this.corpseT > 6.95 && this.root.visible) {
+        this.root.visible = false;
+        this.restoreMaterials();
+      }
+    }
+  }
+
+  /* ------------------------------------------------------------- ragdoll */
+  /** Capture the current skeleton as 7 bodies + constraints and kick them. */
+  startRagdoll(point) {
+    this.root.updateWorldMatrix(true, true);
+
+    const pelvis = this.hips.getWorldPosition(new THREE.Vector3());
+    const tq = this.torso.getWorldQuaternion(new THREE.Quaternion());
+    const chest = this.torso.getWorldPosition(new THREE.Vector3())
+      .add(new THREE.Vector3(0, 0.26, 0).applyQuaternion(tq));
+    const hq = this.headPivot.getWorldQuaternion(new THREE.Quaternion());
+    const head = this.headPivot.getWorldPosition(new THREE.Vector3())
+      .add(new THREE.Vector3(0, 0.15, 0).applyQuaternion(hq));
+    const handL = this.armL.hand.getWorldPosition(new THREE.Vector3());
+    const handR = this.armR.hand.getWorldPosition(new THREE.Vector3());
+    const footL = this.legL.ankle.getWorldPosition(new THREE.Vector3());
+    const footR = this.legR.ankle.getWorldPosition(new THREE.Vector3());
+
+    const bodies = [];
+    const add = (k, p) => {
+      const d = RAG_BODY_DEF.find((b) => b.k === k);
+      bodies.push({ k, w: d.w, r: d.r, lift: d.lift, p: p.clone(), prev: p.clone() });
+    };
+    add('head', head);
+    add('chest', chest);
+    add('pelvis', pelvis);
+    add('handL', handL);
+    add('handR', handR);
+    add('footL', footL);
+    add('footR', footR);
+    const byKey = (k) => bodies.find((b) => b.k === k);
+    const cons = RAG_CON_DEF.map(([a, b, scale]) => ({
+      a: byKey(a), b: byKey(b),
+      rest: Math.max(0.05, byKey(a).p.distanceTo(byKey(b).p) * (scale || 1)),
+    }));
+
+    // push away from the shooter / blast: from the impact point to the feet
+    const dir = new THREE.Vector3();
+    if (point) dir.set(this.root.position.x - point.x, 0, this.root.position.z - point.z);
+    if (dir.lengthSq() < 1e-4) {
+      // impact points at the body axis (e.g. a centred chest shot): push back
+      dir.set(Math.sin(this.root.rotation.y), 0, Math.cos(this.root.rotation.y));
+    }
+    dir.normalize();
+
+    const part = this.deathPart || 'torso';
+    const imp = { head: 0.5, chest: 0.9, pelvis: 0.7, handL: 0.6, handR: 0.6, footL: 0.25, footR: 0.25 };
+    if (part === 'head') {
+      imp.head = 3.2; imp.chest = 1.0; imp.pelvis = 0.4; imp.handL = 0.9; imp.handR = 0.9;
+    } else if (part === 'arms') {
+      if (point && point.distanceTo(handL) < point.distanceTo(handR)) imp.handL = 2.4;
+      else imp.handR = 2.4;
+      imp.chest = 0.8;
+    } else if (part === 'legs') {
+      if (point && point.distanceTo(footL) < point.distanceTo(footR)) imp.footL = 2.6;
+      else imp.footR = 2.6;
+      imp.pelvis = 0.5; imp.chest = 0.35; imp.head = 0.3;
+    }
+    if (this.deathExplosive) for (const k in imp) imp[k] *= 1.7;
+
+    const baseVx = this.velX * 0.5;
+    const baseVz = this.velZ * 0.5;
+    for (const b of bodies) {
+      const k = imp[b.k];
+      const vx = baseVx + dir.x * k + (this.rnd() - 0.5) * 0.5;
+      const vz = baseVz + dir.z * k + (this.rnd() - 0.5) * 0.5;
+      const vy = 0.30 + k * 0.20 * b.lift + this.rnd() * 0.18;
+      b.prev.set(b.p.x - vx * RAG_DT, b.p.y - vy * RAG_DT, b.p.z - vz * RAG_DT);
+    }
+
+    this.ragdoll = { bodies, cons, t: 0, acc: 0, done: false };
+  }
+
+  stepRagdoll(dt) {
+    const rd = this.ragdoll;
+    if (!rd || rd.done) return;
+    rd.t += dt;
+    if (rd.t > 3.2) { rd.done = true; return; }
+    rd.acc = Math.min(rd.acc + dt, 0.07);
+    let steps = 0;
+    while (rd.acc >= RAG_DT && steps < 3) {
+      this.integrateRagdoll(RAG_DT, rd);
+      rd.acc -= RAG_DT;
+      steps++;
+    }
+  }
+
+  integrateRagdoll(h, rd) {
+    const g = -9.8 * h * h;
+    for (const b of rd.bodies) {
+      const vx = (b.p.x - b.prev.x) * 0.995;
+      const vy = (b.p.y - b.prev.y) * 0.995;
+      const vz = (b.p.z - b.prev.z) * 0.995;
+      b.prev.set(b.p.x, b.p.y, b.p.z);
+      b.p.x += vx;
+      b.p.y += vy + g;
+      b.p.z += vz;
+    }
+    // distance constraints (PBD, 6 iterations)
+    for (let it = 0; it < 6; it++) {
+      for (const c of rd.cons) {
+        const a = c.a, b = c.b;
+        const dx = b.p.x - a.p.x, dy = b.p.y - a.p.y, dz = b.p.z - a.p.z;
+        const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (len < 1e-5) continue;
+        const diff = (len - c.rest) / len;
+        const wa = a.w / (a.w + b.w);
+        const wb = 1 - wa;
+        a.p.x += dx * diff * wa; a.p.y += dy * diff * wa; a.p.z += dz * diff * wa;
+        b.p.x -= dx * diff * wb; b.p.y -= dy * diff * wb; b.p.z -= dz * diff * wb;
+      }
+    }
+    // floor = baseY plane (roof-aware): clamp + friction + tiny bounce
+    for (const b of rd.bodies) {
+      const floor = this.baseY + b.r;
+      if (b.p.y < floor) {
+        b.p.y = floor;
+        const hx = b.p.x - b.prev.x;
+        const hz = b.p.z - b.prev.z;
+        b.prev.x = b.p.x - hx * 0.55;
+        b.prev.z = b.p.z - hz * 0.55;
+        const bounce = (b.p.y - b.prev.y) * 0.12;
+        if (bounce < 0) b.prev.y = b.p.y + bounce;
+      }
+    }
+  }
+
+  applyRagdollPose() {
+    const rd = this.ragdoll;
+    if (!rd) return;
+    const get = (k) => rd.bodies.find((b) => b.k === k).p;
+    _ragQInv.copy(this.root.quaternion).invert();
+    const toLocal = (v, out) => out.copy(v).sub(this.root.position).applyQuaternion(_ragQInv);
+    toLocal(get('pelvis'), _ragS.pelvis);
+    toLocal(get('chest'), _ragS.chest);
+    toLocal(get('head'), _ragS.head);
+    toLocal(get('handL'), _ragS.handL);
+    toLocal(get('handR'), _ragS.handR);
+    toLocal(get('footL'), _ragS.footL);
+    toLocal(get('footR'), _ragS.footR);
+    _ragS.forward.set(0, 0, -1);
+    applyRagdoll(this.rig, _ragS);
+  }
+
+  /* ------------------------------------------------------- corpse fade */
+  startCorpseFade() {
+    const map = new Map();
+    this.fadeMats = [];
+    this.matBackup = this.rig.meshes.map((m) => m.material);
+    for (const m of this.rig.meshes) {
+      let c = map.get(m.material);
+      if (!c) {
+        c = m.material.clone();
+        c.transparent = true;
+        c.depthWrite = false;
+        c.opacity = 1;
+        map.set(m.material, c);
+        this.fadeMats.push(c);
+      }
+      m.material = c;
+    }
+  }
+
+  updateCorpseFade(a) {
+    if (!this.fadeMats) return;
+    const o = Math.max(0, 1 - a);
+    for (const c of this.fadeMats) c.opacity = o;
+  }
+
+  restoreMaterials() {
+    if (this.matBackup && this.rig) {
+      const meshes = this.rig.meshes;
+      for (let i = 0; i < meshes.length && i < this.matBackup.length; i++) {
+        meshes[i].material = this.matBackup[i];
+      }
+    }
+    this.matBackup = null;
+    if (this.fadeMats) {
+      for (const c of this.fadeMats) c.dispose();
+      this.fadeMats = null;
+    }
   }
 
   applyDeathPose() {
@@ -981,6 +1242,7 @@ export class Enemy {
   }
 
   dispose() {
+    this.restoreMaterials();
     this.scene.remove(this.root);
     if (this.rig) this.rig.dispose();
     if (this.laser) {

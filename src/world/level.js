@@ -354,8 +354,10 @@ export function createLevel(engine) {
       const m = new THREE.Mesh(g, mats.puddle);
       m.position.set(px, 0.009, pz);
       m.receiveShadow = true;
+      m.userData.noAO = true;
       statics.add(m);
       const rim = new THREE.Mesh(new THREE.RingGeometry(rad * 0.94, rad * 1.14, 28), mats.patch);
+      rim.userData.noAO = true;
       rim.rotation.x = -Math.PI / 2;
       rim.scale.y = sq;
       rim.position.set(px, 0.006, pz);
@@ -2791,6 +2793,7 @@ export function createLevel(engine) {
       g.rotateX(-Math.PI / 2);
       const m = new THREE.Mesh(g, mats.puddle);
       m.position.set(px, 0.012, pz);
+      m.userData.noAO = true;
       statics.add(m);
     }
   }

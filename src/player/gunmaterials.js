@@ -349,14 +349,379 @@ function stencilTexture() {
   return t;
 }
 
+
+/* ============================================================ 1k PBR atlas
+   One 1024² albedo + normal + roughness atlas, 2×2 tiles:
+     (0,0) black-oxide / phosphate steel   (512,0) stippled polymer
+     (0,512) leather glove                 (512,512) ripstop fabric / webbing
+   Each material samples its tile through map.offset/repeat, so the existing
+   box/cylinder UVs (0..1 per face) keep working with no re-UV.
+   ======================================================================== */
+const ATLAS_SIZE = 1024;
+const ATLAS_TILE = 512;
+
+function atlasGrayRead(canvas, size) {
+  const d = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, size, size).data;
+  const out = new Uint8Array(size * size);
+  for (let i = 0; i < size * size; i++) out[i] = d[i * 4];
+  return out;
+}
+
+function buildWeaponAtlas(aniso = 8) {
+  const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const S = ATLAS_SIZE, T = ATLAS_TILE;
+  const albedoCan = cnv(S);
+  const actx = albedoCan.getContext('2d', { willReadFrequently: true });
+  const roughCan = cnv(S);
+  const rctx = roughCan.getContext('2d', { willReadFrequently: true });
+  const height = new Uint8Array(S * S);
+
+  const copyHeight = (src, ox, oy) => {
+    for (let y = 0; y < T; y++) {
+      height.set(src.subarray(y * T, (y + 1) * T), (oy + y) * S + ox);
+    }
+  };
+  const putTile = (ox, oy, ac, rc, hc) => {
+    actx.drawImage(ac, ox, oy);
+    rctx.drawImage(rc, ox, oy);
+    copyHeight(atlasGrayRead(hc, T), ox, oy);
+  };
+
+  /* ---------------------------------------------------------- oxide tile */
+  {
+    const ac = cnv(T), ca = ac.getContext('2d', { willReadFrequently: true });
+    const hc = cnv(T), ch = hc.getContext('2d', { willReadFrequently: true });
+    const rc = cnv(T), cr = rc.getContext('2d', { willReadFrequently: true });
+    const rnd = mulberry32(90210);
+    ch.fillStyle = '#808080'; ch.fillRect(0, 0, T, T);
+    cr.fillStyle = 'rgb(152,152,152)'; cr.fillRect(0, 0, T, T);
+    const img = ca.createImageData(T, T), d = img.data;
+    const himg = ch.getImageData(0, 0, T, T), hd = himg.data;
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        const i = (y * T + x) * 4;
+        const grain = rnd();
+        const band = Math.sin(y * 0.42 + Math.sin(x * 0.021) * 1.1);
+        const v = 0.80 + grain * 0.27;
+        d[i] = 43 * v; d[i + 1] = 46 * v; d[i + 2] = 51 * v; d[i + 3] = 255;
+        const hv = 128 + (grain - 0.5) * 42 + band * 7;
+        hd[i] = hd[i + 1] = hd[i + 2] = hv; hd[i + 3] = 255;
+      }
+    }
+    ca.putImageData(img, 0, 0); ch.putImageData(himg, 0, 0);
+    // machining bands
+    for (let k = 0; k < 40; k++) {
+      const y = (k / 40) * T + rnd() * 3;
+      ca.strokeStyle = `rgba(118,124,132,${0.035 + rnd() * 0.05})`;
+      ca.lineWidth = 0.7 + rnd(); ca.beginPath(); ca.moveTo(0, y); ca.lineTo(T, y); ca.stroke();
+      ch.strokeStyle = `rgba(196,196,196,${0.10 + rnd() * 0.12})`;
+      ch.lineWidth = 1; ch.beginPath(); ch.moveTo(0, y); ch.lineTo(T, y); ch.stroke();
+    }
+    // fine scratches: bright alu edge, dark groove, glossier roughness
+    for (let k = 0; k < 430; k++) {
+      const x = rnd() * T, y = rnd() * T;
+      const len = 3 + rnd() * 30;
+      const ang = (rnd() > 0.62 ? Math.PI / 2 : 0) + (rnd() - 0.5) * 0.55;
+      const x2 = x + Math.cos(ang) * len, y2 = y + Math.sin(ang) * len;
+      ca.strokeStyle = `rgba(${172 + rnd() * 52},${176 + rnd() * 48},${182 + rnd() * 44},${0.05 + rnd() * 0.22})`;
+      ca.lineWidth = 0.4 + rnd() * 0.9;
+      ca.beginPath(); ca.moveTo(x, y); ca.lineTo(x2, y2); ca.stroke();
+      ch.strokeStyle = `rgba(46,46,46,${0.18 + rnd() * 0.3})`;
+      ch.lineWidth = 0.5 + rnd();
+      ch.beginPath(); ch.moveTo(x, y); ch.lineTo(x2, y2); ch.stroke();
+      cr.strokeStyle = `rgba(104,104,104,${0.12 + rnd() * 0.25})`;
+      cr.lineWidth = 0.6 + rnd();
+      cr.beginPath(); cr.moveTo(x, y); cr.lineTo(x2, y2); cr.stroke();
+    }
+    // edge chips / worn bevels
+    for (let k = 0; k < 54; k++) {
+      const x = rnd() * T;
+      const y = rnd() < 0.5 ? rnd() * 44 : T - rnd() * 44;
+      const rr = 0.6 + rnd() * 3.4;
+      ca.fillStyle = `rgba(190,195,202,${0.15 + rnd() * 0.35})`;
+      ca.beginPath(); ca.arc(x, y, rr, 0, 7); ca.fill();
+      ch.fillStyle = 'rgba(210,210,210,0.55)';
+      ch.beginPath(); ch.arc(x, y, rr, 0, 7); ch.fill();
+      cr.fillStyle = 'rgba(90,90,90,0.55)';
+      cr.beginPath(); cr.arc(x, y, rr, 0, 7); cr.fill();
+    }
+    // oil / carbon grime along the lower edge (darker + glossier)
+    for (let k = 0; k < 12; k++) {
+      const x = rnd() * T, y = T * 0.62 + rnd() * T * 0.33;
+      const w = 26 + rnd() * 90, h = 8 + rnd() * 30;
+      const g = ca.createLinearGradient(x, y, x + w, y + h);
+      g.addColorStop(0, `rgba(6,7,8,${0.12 + rnd() * 0.2})`);
+      g.addColorStop(1, 'rgba(6,7,8,0)');
+      ca.fillStyle = g;
+      ca.beginPath(); ca.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, rnd() * 3, 0, 7); ca.fill();
+      cr.fillStyle = `rgba(78,78,78,${0.12 + rnd() * 0.16})`;
+      cr.beginPath(); cr.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, rnd() * 3, 0, 7); cr.fill();
+    }
+    // dust
+    for (let k = 0; k < 420; k++) {
+      ca.fillStyle = `rgba(162,152,132,${rnd() * 0.1})`;
+      ca.fillRect(rnd() * T, rnd() * T, 1, 1);
+    }
+    putTile(0, 0, ac, rc, hc);
+  }
+
+  /* -------------------------------------------------------- polymer tile */
+  {
+    const ac = cnv(T), ca = ac.getContext('2d', { willReadFrequently: true });
+    const hc = cnv(T), ch = hc.getContext('2d', { willReadFrequently: true });
+    const rc = cnv(T), cr = rc.getContext('2d', { willReadFrequently: true });
+    const rnd = mulberry32(55177);
+    ch.fillStyle = '#808080'; ch.fillRect(0, 0, T, T);
+    cr.fillStyle = 'rgb(198,198,198)'; cr.fillRect(0, 0, T, T);
+    const img = ca.createImageData(T, T), d = img.data;
+    const himg = ch.getImageData(0, 0, T, T), hd = himg.data;
+    const pitch = 8;
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        const gx = (x / pitch) | 0, gy = (y / pitch) | 0;
+        const cx = gx * pitch + 2 + hash2(gx, gy) * 4;
+        const cy = gy * pitch + 2 + hash2(gy + 17, gx + 3) * 4;
+        const bump = Math.max(0, 1 - Math.hypot(x - cx, y - cy) / 2.35);
+        const grain = rnd();
+        const i = (y * T + x) * 4;
+        const v = 0.86 + grain * 0.12 + bump * 0.05;
+        d[i] = 59 * v; d[i + 1] = 60 * v; d[i + 2] = 64 * v; d[i + 3] = 255;
+        const hv = 118 + bump * 96 + grain * 14;
+        hd[i] = hd[i + 1] = hd[i + 2] = hv; hd[i + 3] = 255;
+      }
+    }
+    ca.putImageData(img, 0, 0); ch.putImageData(himg, 0, 0);
+    // anti-slip ribs along one edge
+    for (let k = 0; k < 13; k++) {
+      const y = T * 0.70 + k * 11;
+      ca.strokeStyle = `rgba(${88 + rnd() * 16},${90 + rnd() * 16},${95 + rnd() * 16},0.45)`;
+      ca.lineWidth = 3.2; ca.beginPath(); ca.moveTo(0, y); ca.lineTo(T, y); ca.stroke();
+      ca.strokeStyle = 'rgba(14,15,17,0.55)';
+      ca.lineWidth = 1.2; ca.beginPath(); ca.moveTo(0, y + 2.4); ca.lineTo(T, y + 2.4); ca.stroke();
+      ch.strokeStyle = 'rgba(205,205,205,0.8)';
+      ch.lineWidth = 3.4; ch.beginPath(); ch.moveTo(0, y); ch.lineTo(T, y); ch.stroke();
+      cr.strokeStyle = 'rgba(232,232,232,0.8)';
+      cr.lineWidth = 3.4; cr.beginPath(); cr.moveTo(0, y); cr.lineTo(T, y); cr.stroke();
+    }
+    // scuffs
+    for (let k = 0; k < 90; k++) {
+      const x = rnd() * T, y = rnd() * T, len = 2 + rnd() * 20, ang = rnd() * 6.28;
+      ca.strokeStyle = `rgba(${110 + rnd() * 30},${112 + rnd() * 30},${118 + rnd() * 30},${0.06 + rnd() * 0.16})`;
+      ca.lineWidth = 0.5 + rnd() * 1.2;
+      ca.beginPath(); ca.moveTo(x, y); ca.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len); ca.stroke();
+      cr.strokeStyle = `rgba(150,150,150,${0.1 + rnd() * 0.2})`;
+      cr.lineWidth = 0.6 + rnd();
+      cr.beginPath(); cr.moveTo(x, y); cr.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len); cr.stroke();
+    }
+    // oil smears
+    for (let k = 0; k < 8; k++) {
+      const x = rnd() * T, y = rnd() * T;
+      const w = 40 + rnd() * 100, h = 14 + rnd() * 40;
+      const g = ca.createLinearGradient(x, y, x + w, y + h);
+      g.addColorStop(0, `rgba(8,9,10,${0.14 + rnd() * 0.16})`);
+      g.addColorStop(1, 'rgba(8,9,10,0)');
+      ca.fillStyle = g;
+      ca.beginPath(); ca.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, rnd() * 3, 0, 7); ca.fill();
+      cr.fillStyle = `rgba(96,96,96,${0.12 + rnd() * 0.18})`;
+      cr.beginPath(); cr.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, rnd() * 3, 0, 7); cr.fill();
+    }
+    putTile(T, 0, ac, rc, hc);
+  }
+
+  /* -------------------------------------------------------- leather tile */
+  {
+    const ac = cnv(T), ca = ac.getContext('2d', { willReadFrequently: true });
+    const hc = cnv(T), ch = hc.getContext('2d', { willReadFrequently: true });
+    const rc = cnv(T), cr = rc.getContext('2d', { willReadFrequently: true });
+    const rnd = mulberry32(66101);
+    ch.fillStyle = '#808080'; ch.fillRect(0, 0, T, T);
+    cr.fillStyle = 'rgb(206,206,206)'; cr.fillRect(0, 0, T, T);
+    const img = ca.createImageData(T, T), d = img.data;
+    const himg = ch.getImageData(0, 0, T, T), hd = himg.data;
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        const i = (y * T + x) * 4;
+        const grain = rnd();
+        const v = 0.80 + grain * 0.34;
+        d[i] = 72 * v; d[i + 1] = 67 * v; d[i + 2] = 54 * v; d[i + 3] = 255;
+        const hv = 118 + grain * 52;
+        hd[i] = hd[i + 1] = hd[i + 2] = hv; hd[i + 3] = 255;
+      }
+    }
+    ca.putImageData(img, 0, 0); ch.putImageData(himg, 0, 0);
+    // grain creases
+    for (let k = 0; k < 150; k++) {
+      let x = rnd() * T, y = rnd() * T, ang = rnd() * 6.28;
+      ca.strokeStyle = `rgba(24,20,14,${0.16 + rnd() * 0.3})`;
+      ca.lineWidth = 0.6 + rnd() * 1.3;
+      ca.beginPath(); ca.moveTo(x, y);
+      const seg = 3 + (rnd() * 5 | 0);
+      for (let q = 0; q < seg; q++) {
+        ang += (rnd() - 0.5) * 1.1;
+        x += Math.cos(ang) * (2 + rnd() * 6);
+        y += Math.sin(ang) * (2 + rnd() * 6);
+        ca.lineTo(x, y);
+        ch.strokeStyle = `rgba(44,44,44,${0.2 + rnd() * 0.3})`;
+        ch.lineWidth = 0.8 + rnd();
+        ch.beginPath(); ch.moveTo(x - 2, y - 2); ch.lineTo(x, y); ch.stroke();
+      }
+      ca.stroke();
+    }
+    // knuckle / contact wear (lighter, rougher)
+    for (let k = 0; k < 7; k++) {
+      const x = rnd() * T, y = rnd() * T, w = 30 + rnd() * 70, h = 18 + rnd() * 44;
+      const g = ca.createRadialGradient(x, y, 0, x, y, Math.max(w, h) * 0.6);
+      g.addColorStop(0, `rgba(120,108,86,${0.14 + rnd() * 0.16})`);
+      g.addColorStop(1, 'rgba(120,108,86,0)');
+      ca.fillStyle = g;
+      ca.beginPath(); ca.ellipse(x, y, w / 2, h / 2, rnd() * 3, 0, 7); ca.fill();
+      cr.fillStyle = `rgba(168,168,168,${0.12 + rnd() * 0.16})`;
+      cr.beginPath(); cr.ellipse(x, y, w / 2, h / 2, rnd() * 3, 0, 7); cr.fill();
+    }
+    // stitching: two parallel dashed seams
+    const stitch = (x0, y0, x1, y1) => {
+      const n = Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 11);
+      for (let q = 0; q <= n; q++) {
+        const t = q / n;
+        const x = x0 + (x1 - x0) * t, y = y0 + (y1 - y0) * t;
+        const dx = x1 - x0, dy = y1 - y0;
+        const len = Math.hypot(dx, dy) || 1;
+        const ux = dx / len, uy = dy / len;
+        ca.strokeStyle = 'rgba(196,180,146,0.9)';
+        ca.lineWidth = 2.4; ca.beginPath();
+        ca.moveTo(x - ux * 4, y - uy * 4); ca.lineTo(x + ux * 4, y + uy * 4); ca.stroke();
+        ca.strokeStyle = 'rgba(20,16,12,0.5)';
+        ca.lineWidth = 1; ca.beginPath();
+        ca.moveTo(x - ux * 4 + 1.6, y - uy * 4 + 1.6); ca.lineTo(x + ux * 4 + 1.6, y + uy * 4 + 1.6); ca.stroke();
+        ch.strokeStyle = 'rgba(220,220,220,0.85)';
+        ch.lineWidth = 2.4; ch.beginPath();
+        ch.moveTo(x - ux * 4, y - uy * 4); ch.lineTo(x + ux * 4, y + uy * 4); ch.stroke();
+        cr.strokeStyle = 'rgba(232,232,232,0.6)';
+        cr.lineWidth = 2.4; cr.beginPath();
+        cr.moveTo(x - ux * 4, y - uy * 4); cr.lineTo(x + ux * 4, y + uy * 4); cr.stroke();
+      }
+    };
+    stitch(70, 30, 70, 482);
+    stitch(88, 30, 88, 482);
+    stitch(112, 448, 456, 448);
+    stitch(120, 120, 120, 400);
+    stitch(132, 120, 132, 400);
+    // dirt
+    for (let k = 0; k < 24; k++) {
+      const x = rnd() * T, y = rnd() * T, r = 8 + rnd() * 44;
+      const g = ca.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, `rgba(26,21,14,${0.08 + rnd() * 0.12})`);
+      g.addColorStop(1, 'rgba(26,21,14,0)');
+      ca.fillStyle = g; ca.beginPath(); ca.arc(x, y, r, 0, 7); ca.fill();
+    }
+    putTile(0, T, ac, rc, hc);
+  }
+
+  /* --------------------------------------------------------- fabric tile */
+  {
+    const ac = cnv(T), ca = ac.getContext('2d', { willReadFrequently: true });
+    const hc = cnv(T), ch = hc.getContext('2d', { willReadFrequently: true });
+    const rc = cnv(T), cr = rc.getContext('2d', { willReadFrequently: true });
+    const rnd = mulberry32(77123);
+    ch.fillStyle = '#808080'; ch.fillRect(0, 0, T, T);
+    cr.fillStyle = 'rgb(232,232,232)'; cr.fillRect(0, 0, T, T);
+    const img = ca.createImageData(T, T), d = img.data;
+    const himg = ch.getImageData(0, 0, T, T), hd = himg.data;
+    for (let y = 0; y < T; y++) {
+      for (let x = 0; x < T; x++) {
+        const weave = (Math.sin(x * 2.3) * 0.5 + 0.5) * (Math.sin(y * 2.3) * 0.5 + 0.5);
+        const grain = rnd();
+        const grid = ((x % 32) < 1.6 || (y % 32) < 1.6) ? -0.18 : 0;
+        const i = (y * T + x) * 4;
+        const v = 0.80 + weave * 0.16 + grain * 0.14 + grid;
+        d[i] = 74 * v; d[i + 1] = 78 * v; d[i + 2] = 67 * v; d[i + 3] = 255;
+        const hv = 112 + weave * 58 + grain * 28 + (grid ? -50 : 0);
+        hd[i] = hd[i + 1] = hd[i + 2] = hv; hd[i + 3] = 255;
+      }
+    }
+    ca.putImageData(img, 0, 0); ch.putImageData(himg, 0, 0);
+    // fold creases
+    for (let k = 0; k < 12; k++) {
+      const x = rnd() * T, y = rnd() * T, ang = rnd() * 6.28;
+      const len = 60 + rnd() * 160;
+      const g = ca.createLinearGradient(x, y, x + Math.cos(ang) * len, y + Math.sin(ang) * len);
+      g.addColorStop(0, `rgba(20,22,17,${0.10 + rnd() * 0.12})`);
+      g.addColorStop(0.5, 'rgba(20,22,17,0.02)');
+      g.addColorStop(1, 'rgba(20,22,17,0)');
+      ca.strokeStyle = g; ca.lineWidth = 3 + rnd() * 7;
+      ca.beginPath(); ca.moveTo(x, y); ca.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len); ca.stroke();
+      ch.strokeStyle = `rgba(50,50,50,${0.25 + rnd() * 0.2})`;
+      ch.lineWidth = 2 + rnd() * 4;
+      ch.beginPath(); ch.moveTo(x, y); ch.lineTo(x + Math.cos(ang) * len, y + Math.sin(ang) * len); ch.stroke();
+    }
+    // elastic cuff ribs along the lower edge
+    for (let k = 0; k < 11; k++) {
+      const y = T * 0.72 + k * 10;
+      ca.strokeStyle = 'rgba(116,116,96,0.6)';
+      ca.lineWidth = 2.6; ca.beginPath(); ca.moveTo(0, y); ca.lineTo(T, y); ca.stroke();
+      ca.strokeStyle = 'rgba(18,19,15,0.55)';
+      ca.lineWidth = 1.2; ca.beginPath(); ca.moveTo(0, y + 2); ca.lineTo(T, y + 2); ca.stroke();
+      ch.strokeStyle = 'rgba(210,210,210,0.85)';
+      ch.lineWidth = 2.8; ch.beginPath(); ch.moveTo(0, y); ch.lineTo(T, y); ch.stroke();
+      cr.strokeStyle = 'rgba(210,210,210,0.8)';
+      cr.lineWidth = 2.8; cr.beginPath(); cr.moveTo(0, y); cr.lineTo(T, y); cr.stroke();
+    }
+    // dirt
+    for (let k = 0; k < 26; k++) {
+      const x = rnd() * T, y = rnd() * T, r = 10 + rnd() * 54;
+      const g = ca.createRadialGradient(x, y, 0, x, y, r);
+      g.addColorStop(0, `rgba(58,48,32,${0.05 + rnd() * 0.12})`);
+      g.addColorStop(1, 'rgba(58,48,32,0)');
+      ca.fillStyle = g; ca.beginPath(); ca.arc(x, y, r, 0, 7); ca.fill();
+    }
+    putTile(T, T, ac, rc, hc);
+  }
+
+  const normalCan = normalFromHeight(height, S, 1.7);
+  const albedoTex = makeTex(albedoCan, { srgb: true, repeat: 1, aniso });
+  const normalTex = makeTex(normalCan, { repeat: 1, aniso });
+  const roughTex = makeTex(roughCan, { repeat: 1, aniso });
+  for (const t of [albedoTex, normalTex, roughTex]) {
+    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+    t.generateMipmaps = false;
+    t.minFilter = THREE.LinearFilter;
+  }
+  const ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0;
+  return {
+    albedo: albedoTex, normal: normalTex, roughness: roughTex,
+    tiles: {
+      oxide: [0, 0.5], polymer: [0.5, 0.5],
+      leather: [0, 0], fabric: [0.5, 0],
+    },
+    size: S, ms,
+  };
+}
+
+function atlasSub(tex, u, v) {
+  const t = tex.clone();
+  t.offset.set(u, v);
+  t.repeat.set(0.5, 0.5);
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.needsUpdate = true;
+  return t;
+}
+
+function tileMaps(atlas, key) {
+  const [u, v] = atlas.tiles[key];
+  return {
+    map: atlasSub(atlas.albedo, u, v),
+    normalMap: atlasSub(atlas.normal, u, v),
+    roughnessMap: atlasSub(atlas.roughness, u, v),
+  };
+}
+
 /* ---------------------------------------------------------------- assembly */
 export function makeGunMaterials(envTexture, aniso = 8) {
-  const oxide = blackOxideSet();
-  const poly = polymerSet([44, 44, 47], 551, 1.0);
-  const polyTan = polymerSet([116, 98, 68], 552, 1.1);
-  const leather = leatherSet([34, 34, 30], 661);
-  const fabric = fabricSet([40, 42, 37], 771, false);
-  const webbing = webbingSet([40, 42, 35], 881);
+  const atlas = buildWeaponAtlas(aniso);
+  const oxideMaps = tileMaps(atlas, 'oxide');
+  const polyMaps = tileMaps(atlas, 'polymer');
+  const leatherMaps = tileMaps(atlas, 'leather');
+  const fabricMaps = tileMaps(atlas, 'fabric');
 
   const std = (o) => {
     const m = new THREE.MeshStandardMaterial(o);
@@ -365,90 +730,92 @@ export function makeGunMaterials(envTexture, aniso = 8) {
   };
 
   const receiver = std({
-    color: 0xffffff, map: oxide.map, normalMap: oxide.normalMap,
-    roughnessMap: oxide.roughnessMap, roughness: 1.0, metalness: 0.82,
-    normalScale: new THREE.Vector2(0.65, 0.65), envMapIntensity: 1.4,
+    color: 0xffffff, map: oxideMaps.map, normalMap: oxideMaps.normalMap,
+    roughnessMap: oxideMaps.roughnessMap, roughness: 1.0, metalness: 0.82,
+    normalScale: new THREE.Vector2(0.95, 0.95), envMapIntensity: 1.35,
+    emissive: 0x0b1118, emissiveIntensity: 0.5,
   });
   const receiverMatte = std({
-    color: 0x27292c, map: oxide.map, normalMap: oxide.normalMap,
-    roughnessMap: oxide.roughnessMap, roughness: 1.0, metalness: 0.04,
-    normalScale: new THREE.Vector2(0.5, 0.5), envMapIntensity: 0.22,
+    color: 0x2a2c2f, normalMap: oxideMaps.normalMap, roughnessMap: oxideMaps.roughnessMap,
+    roughness: 1.0, metalness: 0.04, normalScale: new THREE.Vector2(0.55, 0.55),
+    envMapIntensity: 0.22,
   });
-  // bare metal at the high-wear edges — slightly lighter, less rough
   const wornSteel = std({
-    color: 0x8f959b, metalness: 0.95, roughness: 0.56, envMapIntensity: 1.2,
-    normalMap: oxide.normalMap, normalScale: new THREE.Vector2(0.35, 0.35),
+    color: 0x9aa0a6, metalness: 0.95, roughness: 1.0, envMapIntensity: 1.3,
+    normalMap: oxideMaps.normalMap, roughnessMap: oxideMaps.roughnessMap,
+    normalScale: new THREE.Vector2(0.45, 0.45),
   });
   const railWear = std({
-    color: 0x7d838a, metalness: 0.92, roughness: 0.55, envMapIntensity: 1.25,
-    normalMap: oxide.normalMap, normalScale: new THREE.Vector2(0.35, 0.35),
+    color: 0x646b72, metalness: 0.92, roughness: 1.0, envMapIntensity: 1.1,
+    normalMap: oxideMaps.normalMap, roughnessMap: oxideMaps.roughnessMap,
+    normalScale: new THREE.Vector2(0.45, 0.45),
   });
   const barrelSteel = std({
-    color: 0x2c3034, metalness: 0.86, roughness: 0.62, envMapIntensity: 0.9,
-    normalMap: oxide.normalMap, roughnessMap: oxide.roughnessMap,
-    normalScale: new THREE.Vector2(0.85, 0.85),
+    color: 0x2c3034, metalness: 0.86, roughness: 1.0, envMapIntensity: 0.95,
+    normalMap: oxideMaps.normalMap, roughnessMap: oxideMaps.roughnessMap,
+    normalScale: new THREE.Vector2(0.8, 0.8),
   });
   const blackSteel = std({
-    color: 0x25272a, metalness: 0.92, roughness: 0.42, envMapIntensity: 1.4,
+    color: 0x25272a, metalness: 0.92, roughness: 0.48, envMapIntensity: 1.3,
+    normalMap: oxideMaps.normalMap, normalScale: new THREE.Vector2(0.35, 0.35),
   });
 
   const polymer = std({
-    color: 0xffffff, map: poly.map, normalMap: poly.normalMap,
-    roughness: 0.76, metalness: 0.08, normalScale: new THREE.Vector2(0.8, 0.8),
-    envMapIntensity: 0.75,
+    color: 0x8e98a2, map: polyMaps.map, normalMap: polyMaps.normalMap,
+    roughnessMap: polyMaps.roughnessMap, roughness: 1.0, metalness: 0.08,
+    normalScale: new THREE.Vector2(1.0, 1.0), envMapIntensity: 0.6,
+    emissive: 0x0a1016, emissiveIntensity: 0.42,
   });
   const polymerTan = std({
-    color: 0xffffff, map: polyTan.map, normalMap: polyTan.normalMap,
-    roughness: 0.8, metalness: 0.05, normalScale: new THREE.Vector2(0.7, 0.7),
-    envMapIntensity: 0.55,
+    color: 0xffe2b4, map: polyMaps.map, normalMap: polyMaps.normalMap,
+    roughnessMap: polyMaps.roughnessMap, roughness: 1.0, metalness: 0.05,
+    normalScale: new THREE.Vector2(0.9, 0.9), envMapIntensity: 0.55,
   });
   const rubber = std({
-    color: 0x141517, roughness: 0.94, metalness: 0.02, envMapIntensity: 0.4,
-    normalMap: poly.normalMap, normalScale: new THREE.Vector2(0.35, 0.35),
+    color: 0x141517, roughness: 1.0, metalness: 0.02, envMapIntensity: 0.35,
+    normalMap: polyMaps.normalMap, roughnessMap: polyMaps.roughnessMap,
+    normalScale: new THREE.Vector2(0.5, 0.5),
   });
-  // unified stock / grip polymer: dark, stippled, with normal + roughness break-up
   const stockPoly = std({
-    color: 0xcfcfcf, map: poly.map, normalMap: poly.normalMap, roughnessMap: poly.roughnessMap,
-    roughness: 1.0, metalness: 0.04, normalScale: new THREE.Vector2(1.1, 1.1),
-    envMapIntensity: 0.45,
+    color: 0x8a949e, map: polyMaps.map, normalMap: polyMaps.normalMap,
+    roughnessMap: polyMaps.roughnessMap, roughness: 1.0, metalness: 0.04,
+    normalScale: new THREE.Vector2(1.15, 1.15), envMapIntensity: 0.45,
+    emissive: 0x0a1016, emissiveIntensity: 0.42,
   });
-  // optic housing: matte, light-swallowing anodising (kills the white top face)
   const hoodMatte = std({
     color: 0x1b1d20, metalness: 0.28, roughness: 0.92,
-    normalMap: oxide.normalMap, normalScale: new THREE.Vector2(0.35, 0.35),
+    normalMap: oxideMaps.normalMap, normalScale: new THREE.Vector2(0.4, 0.4),
     envMapIntensity: 0.35,
   });
 
   const glove = std({
-    color: 0x2a2924, normalMap: leather.normalMap,
-    roughness: 0.95, metalness: 0.0, normalScale: new THREE.Vector2(1.3, 1.3),
-    envMapIntensity: 0.12,
+    color: 0x70766e, map: leatherMaps.map, normalMap: leatherMaps.normalMap,
+    roughnessMap: leatherMaps.roughnessMap, roughness: 1.0, metalness: 0.0,
+    normalScale: new THREE.Vector2(1.5, 1.5), envMapIntensity: 0.25,
+  });
+  const gloveDark = std({
+    color: 0x585e56, map: leatherMaps.map, normalMap: leatherMaps.normalMap,
+    roughnessMap: leatherMaps.roughnessMap, roughness: 1.0, metalness: 0.0,
+    normalScale: new THREE.Vector2(1.25, 1.25), envMapIntensity: 0.18,
   });
   const glovePad = std({
-    color: 0x1f2124, roughness: 0.72, metalness: 0.05, envMapIntensity: 0.5,
-    normalMap: poly.normalMap, normalScale: new THREE.Vector2(0.5, 0.5),
+    color: 0x1a1c1f, roughness: 0.78, metalness: 0.05, envMapIntensity: 0.4,
+    normalMap: leatherMaps.normalMap, normalScale: new THREE.Vector2(0.9, 0.9),
   });
-  // darker finger segments + thumb tips read as separate digits
-  const gloveDark = std({
-    color: 0x1e1d19, normalMap: leather.normalMap,
-    roughness: 0.96, metalness: 0.0, normalScale: new THREE.Vector2(1.3, 1.3),
-    envMapIntensity: 0.1,
-  });
-  // elastic cuff: warmer + lighter than the glove so the wrist reads clearly
   const cuff = std({
-    color: 0x1c1b17, roughness: 0.96, metalness: 0.0,
-    normalMap: fabric.normalMap, normalScale: new THREE.Vector2(1.4, 1.4),
-    envMapIntensity: 0.15,
+    color: 0x7a7662, map: fabricMaps.map, normalMap: fabricMaps.normalMap,
+    roughnessMap: fabricMaps.roughnessMap, roughness: 1.0, metalness: 0.0,
+    normalScale: new THREE.Vector2(1.35, 1.35), envMapIntensity: 0.22,
   });
   const sleeve = std({
-    color: 0xffffff, map: fabric.map, normalMap: fabric.normalMap,
-    roughness: 0.93, metalness: 0.0, normalScale: new THREE.Vector2(1.1, 1.1),
-    envMapIntensity: 0.4,
+    color: 0x929a90, map: fabricMaps.map, normalMap: fabricMaps.normalMap,
+    roughnessMap: fabricMaps.roughnessMap, roughness: 1.0, metalness: 0.0,
+    normalScale: new THREE.Vector2(1.25, 1.25), envMapIntensity: 0.3,
   });
   const sling = std({
-    color: 0xffffff, map: webbing.map, normalMap: webbing.normalMap,
-    roughness: 0.9, metalness: 0.02, normalScale: new THREE.Vector2(0.8, 0.8),
-    envMapIntensity: 0.45,
+    color: 0x8d9388, map: fabricMaps.map, normalMap: fabricMaps.normalMap,
+    roughnessMap: fabricMaps.roughnessMap, roughness: 1.0, metalness: 0.02,
+    normalScale: new THREE.Vector2(0.9, 0.9), envMapIntensity: 0.3,
   });
 
   // optic glass: thin smoked pane with a bright clearcoat sheen. Transmission
@@ -490,6 +857,9 @@ export function makeGunMaterials(envTexture, aniso = 8) {
     receiver, receiverMatte, wornSteel, railWear, barrelSteel, blackSteel,
     polymer, polymerTan, rubber, stockPoly, hoodMatte, glove, glovePad, gloveDark, cuff, sleeve, sling,
     glass, reticleMat, stencil,
+    atlasMs: atlas.ms,
+    atlasSize: atlas.size,
+    atlasTiles: atlas.tiles,
     // convenience for setWeapon()
     furnitureFor(variant) {
       return variant === 'tan' ? polymerTan : polymer;

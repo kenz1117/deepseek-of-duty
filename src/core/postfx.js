@@ -251,13 +251,13 @@ export function createPost(renderer, scene, camera, quality = 'high') {
 export function presets(quality) {
   switch (quality) {
     case 'low':
-      return { msaa: 0, bloom: true, bloomStrength: 0.28, godrays: 0, grain: 0.02, ca: 0, shadows: 1024, pixelRatio: 1 };
+      return { msaa: 0, bloom: true, bloomStrength: 0.28, godrays: 0, grain: 0.02, ca: 0, shadows: 1024, pixelRatio: 1, ssao: false };
     case 'medium':
-      return { msaa: 2, bloom: true, bloomStrength: 0.38, godrays: 0.5, grain: 0.024, ca: 0.0010, shadows: 2048, pixelRatio: 1 };
+      return { msaa: 2, bloom: true, bloomStrength: 0.38, godrays: 0.5, grain: 0.024, ca: 0.0010, shadows: 2048, pixelRatio: 1, ssao: false };
     case 'ultra':
-      return { msaa: 4, bloom: true, bloomStrength: 0.46, godrays: 1.25, grain: 0.034, ca: 0.0020, shadows: 4096, pixelRatio: 2 };
+      return { msaa: 4, bloom: true, bloomStrength: 0.46, godrays: 1.25, grain: 0.034, ca: 0.0020, shadows: 4096, pixelRatio: 2, ssao: true };
     case 'high':
     default:
-      return { msaa: 4, bloom: true, bloomStrength: 0.40, godrays: 1.0, grain: 0.028, ca: 0.0016, shadows: 2048, pixelRatio: 1.5 };
+      return { msaa: 4, bloom: true, bloomStrength: 0.40, godrays: 1.0, grain: 0.028, ca: 0.0016, shadows: 2048, pixelRatio: 1.5, ssao: true };
   }
 }

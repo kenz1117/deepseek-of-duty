@@ -50,6 +50,12 @@ else
         ok "已提交: $COMMIT_MSG"
     fi
     BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    # 远端可能有人在网页上直接改过（如 README），先 rebase 再推；有真冲突才停下来
+    git fetch origin "$BRANCH" --quiet
+    if ! git merge-base --is-ancestor origin/"$BRANCH" HEAD; then
+        git rebase origin/"$BRANCH"
+        ok "已 rebase 到 origin/$BRANCH"
+    fi
     git push origin "$BRANCH" --quiet
     ok "已推送 origin/$BRANCH"
 fi

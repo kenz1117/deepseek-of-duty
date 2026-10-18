@@ -1057,3 +1057,92 @@ export function applyPose(rig, P) {
     'YXZ'
   );
 }
+
+/* ---------------------------------------------------------------- ragdoll */
+/* A light 7-body ragdoll is solved in enemy.js; this maps the solved points
+   back onto the existing skeleton (no model swap, no new meshes). */
+
+const _ragSpine = new THREE.Vector3();
+const _ragSide = new THREE.Vector3();
+const _ragBack = new THREE.Vector3();
+const _ragDir = new THREE.Vector3();
+const _ragTgt = new THREE.Vector3();
+const _ragPole = new THREE.Vector3();
+const _ragQ = new THREE.Quaternion();
+const _ragQInv = new THREE.Quaternion();
+const _ragM4 = new THREE.Matrix4();
+const _ragUp = new THREE.Vector3(0, 1, 0);
+const _ragOrg = new THREE.Vector3();
+const _ragTmp = new THREE.Vector3();
+const _ragDown = new THREE.Vector3(0, -1, 0);
+
+/**
+ * Pose the rig from ragdoll bodies. `S` is in root space:
+ * { pelvis, chest, head, handL, handR, footL, footR, forward }
+ * where forward is the root-space facing (0,0,-1).
+ */
+export function applyRagdoll(rig, S) {
+  const { hips, torso, headPivot, armL, armR, legL, legR, weapon } = rig;
+
+  // pelvis basis: spine = up, back = -forward projected onto the spine plane
+  _ragSpine.copy(S.chest).sub(S.pelvis);
+  if (_ragSpine.lengthSq() < 1e-6) _ragSpine.set(0, 1, 0);
+  _ragSpine.normalize();
+  _ragBack.copy(S.forward).multiplyScalar(-1);
+  // as the body flattens, roll it onto its back (chest up) instead of landing
+  // face-down as an unreadable pile of backpack
+  const flat = Math.min(1, Math.max(0, (1 - Math.abs(_ragSpine.y)) * 1.25 - 0.15));
+  if (flat > 0.001) {
+    _ragBack.multiplyScalar(1 - flat).addScaledVector(_ragDown, flat).normalize();
+  }
+  _ragSide.crossVectors(_ragSpine, _ragBack);
+  if (_ragSide.lengthSq() < 0.02) _ragSide.set(1, 0, 0);
+  _ragSide.normalize();
+  _ragBack.crossVectors(_ragSide, _ragSpine);
+  if (_ragBack.lengthSq() < 1e-6) _ragBack.set(0, 0, 1);
+  _ragBack.normalize();
+  _ragM4.makeBasis(_ragSide, _ragSpine, _ragBack);
+  _ragQ.setFromRotationMatrix(_ragM4);
+  _ragQInv.copy(_ragQ).invert();
+
+  hips.position.copy(S.pelvis);
+  hips.quaternion.copy(_ragQ);
+  torso.position.set(0, 0.095, 0);
+  torso.rotation.set(0, 0, 0);
+  _ragOrg.copy(hips.position).add(_ragTmp.set(0, 0.095, 0).applyQuaternion(_ragQ));
+
+  // head aims at its body point
+  _ragDir.copy(S.head).sub(_ragOrg).applyQuaternion(_ragQInv);
+  if (_ragDir.lengthSq() < 1e-6) _ragDir.set(0, 1, 0);
+  headPivot.quaternion.setFromUnitVectors(_ragUp, _ragDir.normalize());
+
+  // arms: two-bone IK onto the hand bodies (torso space)
+  _ragTgt.copy(S.handR).sub(_ragOrg).applyQuaternion(_ragQInv);
+  if (_ragTgt.lengthSq() < 0.01) _ragTgt.set(0.08, -0.08, 0.06);
+  _ragPole.set(0.95, -0.45, 0.15);
+  solveTwoBone(armR.shoulder, armR.elbow, _ragTgt, UPPER_ARM, FORE_ARM, _ragPole);
+  armR.hand.quaternion.identity();
+
+  _ragTgt.copy(S.handL).sub(_ragOrg).applyQuaternion(_ragQInv);
+  if (_ragTgt.lengthSq() < 0.01) _ragTgt.set(-0.08, -0.08, 0.06);
+  _ragPole.set(-0.95, -0.45, 0.15);
+  solveTwoBone(armL.shoulder, armL.elbow, _ragTgt, UPPER_ARM, FORE_ARM, _ragPole);
+  armL.hand.quaternion.identity();
+
+  // legs: two-bone IK onto the foot bodies (hips space)
+  const solveLeg = (leg, side, footPt) => {
+    _ragTgt.copy(footPt).sub(hips.position).applyQuaternion(_ragQInv);
+    if (_ragTgt.lengthSq() < 0.04) _ragTgt.set(side * 0.12, -0.12, 0);
+    // knees bend to the side (a body on the ground does not fold them straight up)
+    _ragPole.set(side * 1.0, 0, -0.15);
+    solveTwoBone(leg.hip, leg.knee, _ragTgt, THIGH, SHIN, _ragPole);
+    leg.ankle.quaternion.identity();
+  };
+  solveLeg(legL, -1, S.footL);
+  solveLeg(legR, 1, S.footR);
+
+  // the rifle stops being held: lay it along the chest so it never sticks
+  // straight up out of the corpse
+  weapon.position.set(0.02, 0.235, 0.015);
+  weapon.rotation.set(Math.PI * 0.5 - 0.16, 0.22, 0.32, 'YXZ');
+}
