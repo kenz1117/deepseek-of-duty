@@ -9,7 +9,11 @@
      setObjective(t), setScore(s,k), setGrenades(n), hit(headshot,killed),
      addKillFeed(who,headshot,weapon), setDamage(angleRad), flashDamage(a),
      setReloadPrompt(b), setHint(t), ping(worldPos,camera,life),
-     setSpread(px,ads), setHeading(deg), state
+     setSpread(px,ads), setHeading(deg), state,
+     bindSettings(s,onChange), openSettings(), closeSettings(), isSettingsOpen,
+     showUpgrades(cards,onPick), hideUpgrades(),
+     showTutorial(text,keyLabel), hideTutorial(), setAtmosphere(label),
+     setMode(label,sub), setModeProgress(pct,text,active), setZoneDistance(m), hideMode()
    ========================================================================= */
 
 const $ = (id) => document.getElementById(id);
@@ -44,6 +48,13 @@ export function createHUD() {
     compass: $('compass'),
     // extras (optional, guarded)
     vitals: document.querySelector('#hud .vitals'),
+    atmo: $('atmosphere-tag'), atmoValue: $('atmosphere-value'),
+    tutorial: $('tutorial'), tutorialText: $('tutorial-text'), tutorialKey: $('tutorial-key'),
+    settings: $('settings'), settingsPanel: document.querySelector('#settings .settings-panel'),
+    upgrades: $('upgrades'), upgradeCards: $('upgrade-cards'),
+    modeHud: $('mode-hud'), modeLabel: $('mode-label'), modeSub: $('mode-sub'),
+    modeFill: $('mode-progress-fill'), modeProgressText: $('mode-progress-text'),
+    modeZone: $('zone-distance'), modeZoneText: $('zone-distance-text'),
   };
 
   const ctxC = el.crosshair.getContext('2d');
@@ -69,6 +80,24 @@ export function createHUD() {
   let lastHeadingDrawn = 999;
   let frames = 0;
   let hintHold = 0;   // brief grace so per-frame `setHint('')` cannot wipe wave notices
+
+  const MAX_ARMOR_PIPS = 6;
+  let armorPips = [];
+
+  const DEFAULT_SETTINGS = {
+    sensitivity: 1, adsSens: 0.75, fov: 90, invertY: false,
+    master: 0.8, reduceMotion: false, quality: 'high',
+  };
+  let settings = { ...DEFAULT_SETTINGS };
+  let settingsOnChange = null;
+  let settingsOpen = false;
+  let settingsWired = false;
+
+  let upgradeData = [];
+  let upgradeOnPick = null;
+  let upgradeChosen = false;
+  let upgradeTimer = 0;
+  let modeClearTimer = 0;
 
   /* ------------------------------------------------------------ canvas sizing */
   function syncCrosshairCanvas() {
@@ -128,6 +157,22 @@ export function createHUD() {
   /* ------------------------------------------------------------ show / reset */
   function show(v = true) { el.hud.classList.toggle('hidden', !v); }
 
+  function setArmorPips(count) {
+    const n = Math.max(0, Math.min(MAX_ARMOR_PIPS, count | 0));
+    // adopt the markup placeholders once, then grow/reuse the pool lazily
+    if (!armorPips.length) armorPips = Array.from(el.armor.children);
+    while (armorPips.length < n) {
+      const p = document.createElement('i');
+      el.armor.appendChild(p);
+      armorPips.push(p);
+    }
+    for (let i = 0; i < armorPips.length; i++) {
+      armorPips[i].classList.remove('off');
+      armorPips[i].style.display = i < n ? '' : 'none';
+    }
+    el.armor.classList.toggle('empty', n === 0);
+  }
+
   function setHealth(hp, armor = 2) {
     state.hp = Math.max(0, hp);
     state.armor = Math.max(0, armor | 0);
@@ -138,8 +183,7 @@ export function createHUD() {
     el.hpFill.classList.toggle('low', low);
     if (el.vitals) el.vitals.classList.toggle('critical', state.hp < 35);
 
-    const pips = el.armor.children;
-    for (let i = 0; i < pips.length; i++) pips[i].classList.toggle('off', i >= state.armor);
+    setArmorPips(state.armor);
 
     const critical = state.hp < 40;
     if (critical !== state.lowHp) {
@@ -263,6 +307,362 @@ export function createHUD() {
   function setSpread(px, ads) {
     state.spreadPx = Math.max(0, px);
     state.ads = !!ads;
+  }
+
+  /* ------------------------------------------------------------ objective mode */
+  function modeVariant(label) {
+    const k = String(label).toLowerCase();
+    if (k.includes('extract') || k.includes('exfil') || k.includes('撤离')) return 'extract';
+    if (k.includes('defend') || k.includes('hold') || k.includes('zone') ||
+        k.includes('防守') || k.includes('坚守')) return 'defend';
+    return 'survival';
+  }
+
+  function setMode(label, sub) {
+    const text = String(label == null ? '' : label).trim();
+    if (!text) { hideMode(); return; }
+    if (!el.modeHud) return;
+    clearTimeout(modeClearTimer);
+    el.modeLabel.textContent = text;
+    const subText = String(sub == null ? '' : sub).trim();
+    el.modeSub.textContent = subText;
+    el.modeSub.classList.toggle('empty', !subText);
+    el.modeHud.classList.toggle('no-sub', !subText);
+    el.modeHud.dataset.mode = modeVariant(text);
+    el.modeHud.classList.remove('inactive');
+    // main.js drives progress every frame; clear stale values until then
+    if (el.modeFill) el.modeFill.style.width = '0%';
+    if (el.modeProgressText) el.modeProgressText.textContent = '';
+    if (el.modeZone) el.modeZone.classList.add('hidden');
+    if (el.modeZoneText) el.modeZoneText.textContent = '';
+    el.modeHud.classList.add('show');
+    el.modeHud.setAttribute('aria-hidden', 'false');
+  }
+
+  function setModeProgress(pct, text, active = true) {
+    if (!el.modeHud || !el.modeHud.classList.contains('show')) return;
+    let v = Number(pct);
+    if (!Number.isFinite(v)) v = 0;
+    if (v > 1) v /= 100;          // accept both 0..1 and 0..100
+    v = clamp01(v);
+    if (el.modeFill) el.modeFill.style.width = `${(v * 100).toFixed(2)}%`;
+
+    const isActive = !(active === false || active === 0);
+    const label = String(text == null ? '' : text).trim();
+    if (el.modeProgressText) {
+      el.modeProgressText.textContent = label || (isActive ? '' : '返回区域');
+    }
+    if (el.modeHud) el.modeHud.classList.toggle('inactive', !isActive);
+  }
+
+  function setZoneDistance(m) {
+    if (!el.modeZone || !el.modeZoneText) return;
+    const n = typeof m === 'number' ? m : parseFloat(m);
+    if (!Number.isFinite(n) || n <= 0) {
+      el.modeZone.classList.add('hidden');
+      el.modeZoneText.textContent = '';
+      return;
+    }
+    el.modeZoneText.textContent = `ZONE ${n < 10 ? n.toFixed(1) : Math.round(n)}m`;
+    el.modeZone.classList.remove('hidden');
+  }
+
+  function hideMode() {
+    if (!el.modeHud) return;
+    el.modeHud.classList.remove('show');
+    el.modeHud.setAttribute('aria-hidden', 'true');
+    // let the strip fade out with its content, then clear it
+    clearTimeout(modeClearTimer);
+    modeClearTimer = setTimeout(() => {
+      if (!el.modeHud || el.modeHud.classList.contains('show')) return;
+      el.modeHud.classList.remove('inactive');
+      el.modeHud.dataset.mode = '';
+      if (el.modeLabel) el.modeLabel.textContent = '';
+      if (el.modeSub) { el.modeSub.textContent = ''; el.modeSub.classList.add('empty'); }
+      el.modeHud.classList.add('no-sub');
+      if (el.modeFill) el.modeFill.style.width = '0%';
+      if (el.modeProgressText) el.modeProgressText.textContent = '';
+      if (el.modeZone) el.modeZone.classList.add('hidden');
+      if (el.modeZoneText) el.modeZoneText.textContent = '';
+    }, 320);
+  }
+
+  /* ------------------------------------------------------------ settings */
+  function clampNum(v, lo, hi, fallback) {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+  }
+  const fmt2 = (v) => Number(v).toFixed(2);
+  const fmtPct = (v) => `${Math.round(Number(v) * 100)}%`;
+  const fmtInt = (v) => String(Math.round(Number(v)));
+
+  function setRangeValue(id, outId, value, formatter) {
+    const input = $(id), out = $(outId);
+    if (input) input.value = String(value);
+    if (out) out.textContent = formatter(value);
+  }
+  function setSwitch(id, on) {
+    const b = $(id);
+    if (!b) return;
+    b.setAttribute('aria-checked', on ? 'true' : 'false');
+    const stateEl = b.querySelector('.sw-state');
+    if (stateEl) stateEl.textContent = on ? 'ON' : 'OFF';
+  }
+  function setQualityState(q) {
+    document.querySelectorAll('.quality-pills button').forEach((b) => {
+      const v = b.dataset.q || b.dataset.pq;
+      if (v) b.classList.toggle('active', v === q);
+    });
+  }
+  function syncSettingsUI() {
+    setRangeValue('set-sensitivity', 'out-sensitivity', settings.sensitivity, fmt2);
+    setRangeValue('set-ads', 'out-ads', settings.adsSens, fmt2);
+    setRangeValue('set-fov', 'out-fov', settings.fov, fmtInt);
+    setRangeValue('set-master', 'out-master', settings.master, fmtPct);
+    setSwitch('set-invertY', !!settings.invertY);
+    setSwitch('set-reduceMotion', !!settings.reduceMotion);
+    setQualityState(settings.quality);
+    document.documentElement.classList.toggle('reduce-motion', !!settings.reduceMotion);
+  }
+  // main.js contract: onChange(key, value)
+  function emitSetting(key, value) {
+    if (!settingsOnChange) return;
+    try { settingsOnChange(key, value); }
+    catch (err) { console.error('[hud] settings onChange failed', err); }
+  }
+
+  function wireSettings() {
+    if (settingsWired) return;
+    settingsWired = true;
+
+    const bindRange = (id, key, formatter) => {
+      const input = $(id);
+      if (!input) return;
+      const out = $(`out-${id.replace('set-', '')}`);
+      input.addEventListener('input', () => {
+        const v = Number(input.value);
+        settings[key] = v;
+        if (out) out.textContent = formatter(v);
+        emitSetting(key, v);
+      });
+    };
+    bindRange('set-sensitivity', 'sensitivity', fmt2);
+    bindRange('set-ads', 'adsSens', fmt2);
+    bindRange('set-fov', 'fov', fmtInt);
+    bindRange('set-master', 'master', fmtPct);
+
+    const bindSwitch = (id, key) => {
+      const b = $(id);
+      if (!b) return;
+      b.addEventListener('click', () => {
+        const v = !settings[key];
+        settings[key] = v;
+        setSwitch(id, v);
+        if (key === 'reduceMotion') document.documentElement.classList.toggle('reduce-motion', v);
+        emitSetting(key, v);
+      });
+    };
+    bindSwitch('set-invertY', 'invertY');
+    bindSwitch('set-reduceMotion', 'reduceMotion');
+
+    // quality reuses the same pill markup as menu/pause; main.js also binds those buttons
+    if (el.settings) {
+      el.settings.addEventListener('click', (e) => {
+        const b = e.target && e.target.closest ? e.target.closest('.quality-pills button') : null;
+        if (!b) return;
+        const q = b.dataset.q || b.dataset.pq;
+        if (!q) return;
+        settings.quality = q;
+        setQualityState(q);
+        emitSetting('quality', q);
+      });
+    }
+
+    const closeAndNotify = () => {
+      if (!settingsOpen) return;
+      closeSettings();
+      window.dispatchEvent(new CustomEvent('dod-settings-close'));
+    };
+    const closeBtn = $('settings-close');
+    if (closeBtn) closeBtn.addEventListener('click', closeAndNotify);
+    const doneBtn = $('settings-done');
+    if (doneBtn) doneBtn.addEventListener('click', closeAndNotify);
+    if (el.settings) {
+      el.settings.addEventListener('click', (e) => {
+        if (e.target === el.settings) closeAndNotify();
+      });
+    }
+    window.addEventListener('keydown', (e) => {
+      if (!settingsOpen) return;
+      if (e.code === 'Escape' || e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeAndNotify();
+      }
+    }, true);
+  }
+
+  function openSettings() {
+    if (settingsOpen) return;
+    wireSettings();
+    // menu/pause quality pills are also driven by main.js; adopt whatever is active
+    const activeQ = document.querySelector('.quality-pills button.active');
+    if (activeQ) {
+      const q = activeQ.dataset.q || activeQ.dataset.pq;
+      if (q) settings.quality = q;
+    }
+    settingsOpen = true;
+    syncSettingsUI();
+    if (el.settingsPanel) el.settingsPanel.scrollTop = 0;
+    if (el.settings) {
+      el.settings.classList.remove('hidden');
+      el.settings.setAttribute('aria-hidden', 'false');
+    }
+  }
+
+  function closeSettings() {
+    if (!settingsOpen) return;
+    settingsOpen = false;
+    if (el.settings) {
+      el.settings.classList.add('hidden');
+      el.settings.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  function bindSettings(next, onChange) {
+    if (next && typeof next === 'object') {
+      settings = {
+        sensitivity: clampNum(next.sensitivity, 0.2, 3, DEFAULT_SETTINGS.sensitivity),
+        adsSens: clampNum(next.adsSens, 0.2, 1, DEFAULT_SETTINGS.adsSens),
+        fov: clampNum(next.fov, 70, 100, DEFAULT_SETTINGS.fov),
+        invertY: !!next.invertY,
+        master: clampNum(next.master, 0, 1, DEFAULT_SETTINGS.master),
+        reduceMotion: !!next.reduceMotion,
+        quality: String(next.quality || DEFAULT_SETTINGS.quality),
+      };
+    }
+    if (typeof onChange === 'function') settingsOnChange = onChange;
+    wireSettings();
+    syncSettingsUI();
+  }
+
+  // fallback open: main.js owns the pause/pointer-lock side via [data-open-settings]
+  document.addEventListener('click', (e) => {
+    const trigger = e.target && e.target.closest ? e.target.closest('[data-open-settings]') : null;
+    if (!trigger) return;
+    setTimeout(() => { if (!settingsOpen) openSettings(); }, 0);
+  });
+
+  /* ------------------------------------------------------------ upgrades */
+  function showUpgrades(cards, onPick) {
+    upgradeData = Array.isArray(cards) ? cards.slice(0, 3) : [];
+    upgradeOnPick = typeof onPick === 'function' ? onPick : null;
+    upgradeChosen = false;
+    clearTimeout(upgradeTimer);
+    buildUpgradeCards();
+    if (el.upgrades) {
+      el.upgrades.classList.remove('hidden');
+      el.upgrades.setAttribute('aria-hidden', 'false');
+    }
+  }
+
+  function buildUpgradeCards() {
+    if (!el.upgradeCards) return;
+    el.upgradeCards.innerHTML = '';
+    const fallbackIcons = ['✦', '◈', '⬢'];
+    upgradeData.forEach((c, i) => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'upgrade-card';
+      card.dataset.index = String(i);
+      if (c && c.id !== undefined) card.dataset.id = String(c.id);
+
+      const key = document.createElement('span');
+      key.className = 'up-key';
+      key.textContent = c && c.key != null ? String(c.key) : String(i + 1);
+      const icon = document.createElement('span');
+      icon.className = 'up-icon';
+      const glyph = c && c.icon ? String(c.icon) : fallbackIcons[i % fallbackIcons.length];
+      icon.textContent = glyph;
+      if (/^[A-Za-z0-9+/\- ]{2,6}$/.test(glyph)) icon.classList.add('code');
+      const title = document.createElement('span');
+      title.className = 'up-title';
+      title.textContent = c && c.title ? String(c.title) : `UPGRADE ${i + 1}`;
+      const desc = document.createElement('span');
+      desc.className = 'up-desc';
+      desc.textContent = c && c.desc ? String(c.desc) : '';
+      const pick = document.createElement('span');
+      pick.className = 'up-pick';
+      pick.textContent = 'SELECT';
+
+      card.append(key, icon, title, desc, pick);
+      card.addEventListener('click', () => pickUpgrade(i));
+      el.upgradeCards.appendChild(card);
+    });
+  }
+
+  function pickUpgrade(index) {
+    if (upgradeChosen) return;
+    const card = upgradeData[index];
+    if (!card) return;
+    upgradeChosen = true;
+    const nodes = el.upgradeCards ? el.upgradeCards.querySelectorAll('.upgrade-card') : [];
+    nodes.forEach((n, i) => {
+      n.classList.toggle('chosen', i === index);
+      n.disabled = true;
+    });
+    const id = card.id !== undefined ? card.id : index;
+    if (upgradeOnPick) {
+      try { upgradeOnPick(id); }
+      catch (err) { console.error('[hud] upgrade onPick failed', err); }
+    }
+    // main.js owns the lifecycle and calls hideUpgrades() on pick. This is only a
+    // long safety net so the player is never permanently stuck on the overlay.
+    clearTimeout(upgradeTimer);
+    upgradeTimer = setTimeout(() => {
+      if (el.upgrades && !el.upgrades.classList.contains('hidden')) hideUpgrades();
+    }, 30000);
+  }
+
+  function hideUpgrades() {
+    clearTimeout(upgradeTimer);
+    if (el.upgrades) {
+      el.upgrades.classList.add('hidden');
+      el.upgrades.setAttribute('aria-hidden', 'true');
+    }
+    if (el.upgradeCards) el.upgradeCards.innerHTML = '';
+    upgradeData = [];
+    upgradeOnPick = null;
+    upgradeChosen = false;
+  }
+
+  /* ------------------------------------------------------------ tutorial / atmosphere */
+  function showTutorial(text, keyLabel) {
+    const t = String(text == null ? '' : text).trim();
+    if (!t) { hideTutorial(); return; }
+    if (el.tutorialText) el.tutorialText.textContent = t;
+    const key = keyLabel == null ? '' : String(keyLabel).trim();
+    if (el.tutorialKey) el.tutorialKey.textContent = key;
+    if (el.tutorial) {
+      el.tutorial.classList.toggle('no-key', !key);
+      el.tutorial.classList.add('show');
+    }
+  }
+  function hideTutorial() {
+    if (el.tutorial) el.tutorial.classList.remove('show');
+  }
+  function setAtmosphere(label) {
+    const text = String(label == null ? '' : label).trim();
+    if (!el.atmo) return;
+    if (!text) { el.atmo.classList.add('hidden'); return; }
+    if (el.atmoValue) el.atmoValue.textContent = text;
+    el.atmo.classList.remove('hidden');
+    const k = text.toLowerCase();
+    let mode = 'dusk';
+    if (k.includes('storm') || k.includes('rain') || k.includes('雷')) mode = 'storm';
+    else if (k.includes('blue') || k.includes('night') || k.includes('蓝')) mode = 'blue';
+    else if (k.includes('noon') || k.includes('day') || k.includes('clear') || k.includes('正午')) mode = 'noon';
+    el.atmo.dataset.mode = mode;
   }
 
   /* ------------------------------------------------------------ crosshair */
@@ -500,6 +900,10 @@ export function createHUD() {
     setAmmo(30, 180, 'M4A1', 'AUTO');
     hintHold = 0;
     setHint('');
+    closeSettings();
+    hideUpgrades();
+    hideTutorial();
+    hideMode();
     compassDirty = true;
   }
 
@@ -509,6 +913,10 @@ export function createHUD() {
     setScore, setGrenades, hit, addKillFeed, setDamage, flashDamage,
     setReloadPrompt, setHint, ping, setSpread,
     setHeading(h) { state.heading = h; },
+    bindSettings, openSettings, closeSettings,
+    get isSettingsOpen() { return settingsOpen; },
+    showUpgrades, hideUpgrades, showTutorial, hideTutorial, setAtmosphere,
+    setMode, setModeProgress, setZoneDistance, hideMode,
     get state() { return state; },
   };
 }

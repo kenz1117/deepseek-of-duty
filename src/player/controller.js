@@ -18,6 +18,7 @@ export function createController(camera, colliders, bounds, audio) {
   let stepAccum = 0;
   let grounded = true, vy = 0;
   let shake = 0;
+  let adsSensitivity = 0.58, invertY = false, baseFovSetting = 78, reduceMotion = false, speedMult = 1;
   let dead = false;
   let deadT = 0;
   let lastDamage = 0;
@@ -39,9 +40,9 @@ export function createController(camera, colliders, bounds, audio) {
     if (input) {
       const { dx, dy } = input.consumeMouse();
       if (!dead) {
-        const sens = 0.00215 * input.sensitivity * (1 - adsT * 0.42);
+        const sens = 0.00215 * input.sensitivity * (1 - adsT * (1 - adsSensitivity));
         yaw -= dx * sens;
-        pitch -= dy * sens;
+        pitch += (invertY ? dy : -dy) * sens;
         pitch = THREE.MathUtils.clamp(pitch, -1.45, 1.42);
       }
     }
@@ -85,7 +86,7 @@ export function createController(camera, colliders, bounds, audio) {
     let targetSpeed = 0;
     if (len > 0) {
       targetSpeed = wantSprint ? SPEED.sprint : wantCrouch ? SPEED.crouch : wantADS ? SPEED.ads : SPEED.walk;
-      targetSpeed *= 1 - crouchT * 0.25;
+      targetSpeed *= (1 - crouchT * 0.25) * speedMult;
     }
     const accel = grounded ? (len > 0 ? 26 : 18) : 5;
     const targetVel = wish.multiplyScalar(targetSpeed);
@@ -130,7 +131,7 @@ export function createController(camera, colliders, bounds, audio) {
     const speedAbs = Math.hypot(vel.x, vel.z);
     const bobRate = 8.2 + speedAbs * 0.85;
     bobT += dt * bobRate * (0.55 + speedAbs * 0.12);
-    const targetBob = Math.min(1, speedAbs / SPEED.walk) * (wantSprint ? 1.55 : 1) * (1 - adsT * 0.55);
+    const targetBob = Math.min(1, speedAbs / SPEED.walk) * (wantSprint ? 1.55 : 1) * (1 - adsT * 0.55) * (reduceMotion ? 0.22 : 1);
     bobAmp += (targetBob - bobAmp) * Math.min(1, dt * 6);
 
     stepAccum += speedAbs * dt;
@@ -158,7 +159,7 @@ export function createController(camera, colliders, bounds, audio) {
 
     // shake
     shake = Math.max(0, shake - dt * 1.6);
-    const sh = shake * shake;
+    const sh = shake * shake * (reduceMotion ? 0.35 : 1);
     const t = performance.now() / 1000;
     const shX = Math.sin(t * 47.3) * 0.014 * sh;
     const shY = Math.cos(t * 39.1) * 0.014 * sh;
@@ -177,8 +178,7 @@ export function createController(camera, colliders, bounds, audio) {
     );
 
     // ---- fov
-    const baseFov = 78;
-    const fov = THREE.MathUtils.lerp(baseFov + sprintT * 5.5, 50, adsT);
+    const fov = THREE.MathUtils.lerp(baseFovSetting + sprintT * 5.5, baseFovSetting * 0.64, adsT);
     if (Math.abs(camera.fov - fov) > 0.01) {
       camera.fov += (fov - camera.fov) * Math.min(1, dt * 12);
       camera.updateProjectionMatrix();
@@ -195,6 +195,16 @@ export function createController(camera, colliders, bounds, audio) {
     get grounded() { return grounded; },
     get dead() { return dead; },
     get speedAbs() { return Math.hypot(vel.x, vel.z); },
+    set adsSensitivity(v) { adsSensitivity = THREE.MathUtils.clamp(v, 0.2, 1); },
+    get adsSensitivity() { return adsSensitivity; },
+    set invertY(v) { invertY = !!v; },
+    get invertY() { return invertY; },
+    set baseFov(v) { baseFovSetting = THREE.MathUtils.clamp(v, 60, 120); },
+    get baseFov() { return baseFovSetting; },
+    set reduceMotion(v) { reduceMotion = !!v; },
+    get reduceMotion() { return reduceMotion; },
+    set speedMult(v) { speedMult = Math.max(0.5, v); },
+    get speedMult() { return speedMult; },
     setPosition(x, y, z) { pos.set(x, y, z); },
     setLook(y, p) { yaw = y; pitch = p; },
     kick(pitchKick, yawKick) {
@@ -212,7 +222,7 @@ export function createController(camera, colliders, bounds, audio) {
       pos.set(x, 0, z); vel.set(0, 0, 0);
       eyeBase = 1.68; pitch = 0; yaw = 0;
       recoilPitch = recoilYaw = 0; recoilPitchVel = recoilYawVel = 0;
-      camera.fov = 78; camera.updateProjectionMatrix();
+      camera.fov = baseFovSetting; camera.updateProjectionMatrix();
     },
     get headingDeg() {
       let deg = (-yaw * 180 / Math.PI) % 360;

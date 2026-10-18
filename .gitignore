@@ -9,3 +9,14 @@ article-deepseek-of-duty.md
 .npm-logs/
 .v2c/
 .video_agent/
+
+# 开发截图 / 录屏（体积大，不进仓库）
+shots/
+recordings/
+
+# 部署产物（脚本每次现打）
+deploy/*.tar.gz
+deploy/*.png
+
+# 站外文章草稿（属于其他项目）
+article-*.html

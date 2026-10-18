@@ -27,11 +27,29 @@
         <span class="wave-sep">/</span><span class="wave-total" id="wave-total">∞</span>
         <span class="wave-bar"><i id="wave-bar-fill"></i></span>
       </div>
+      <div class="atmo hidden" id="atmosphere-tag">
+        <i class="atmo-dot"></i><span class="atmo-key">ENV</span><span class="atmo-val" id="atmosphere-value">DUSK</span>
+      </div>
     </div>
 
     <!-- top center: compass -->
     <div class="compass-wrap">
       <canvas id="compass" width="640" height="56"></canvas>
+    </div>
+
+    <!-- top center: objective mode -->
+    <div class="mode-hud" id="mode-hud" aria-hidden="true">
+      <div class="mode-head">
+        <i class="mode-mark"></i>
+        <span class="mode-label" id="mode-label">DEFEND</span>
+        <i class="mode-sep"></i>
+        <span class="mode-sub" id="mode-sub">HOLD THE ZONE</span>
+      </div>
+      <div class="mode-bar"><i id="mode-progress-fill"></i></div>
+      <div class="mode-meta">
+        <span class="mode-progress-text" id="mode-progress-text">0 / 60s</span>
+        <span class="zone-distance hidden" id="zone-distance"><i class="zone-dot"></i><span id="zone-distance-text">ZONE 18m</span></span>
+      </div>
     </div>
 
     <!-- top right: killfeed / score -->
@@ -83,8 +101,13 @@
       <div class="mag-pips" id="mag-pips"></div>
     </div>
 
-    <!-- bottom center hint -->
+    <!-- bottom center hint + tutorial -->
     <div class="hud-hint" id="hint"></div>
+    <div class="tutorial" id="tutorial" role="status" aria-live="polite">
+      <span class="tut-key" id="tutorial-key">SHIFT</span>
+      <span class="tut-text" id="tutorial-text"></span>
+      <i class="tut-mark"></i>
+    </div>
   </div>
 
   <!-- ============ START MENU ============ -->
@@ -116,6 +139,12 @@
             <span class="btn-main"><span class="btn-label">DEPLOY</span><i class="btn-arrow"></i></span>
             <span class="btn-sub">点击进入战区 · 锁定鼠标</span>
             <i class="cb tl"></i><i class="cb br"></i>
+          </button>
+
+          <button class="menu-settings" data-open-settings type="button">
+            <i class="sliders"></i>
+            <span class="ms-label">SETTINGS</span>
+            <span class="ms-sub">设置</span>
           </button>
         </div>
 
@@ -171,6 +200,9 @@
         <button id="quit" class="pause-btn">
           <span class="ba-label">RETURN TO MENU</span><span class="ba-sub">返回主菜单</span>
         </button>
+        <button class="pause-btn" data-open-settings type="button">
+          <span class="ba-label">SETTINGS</span><span class="ba-sub">设置 · 灵敏度 / 视角 / 音频</span>
+        </button>
       </div>
       <div class="quality-row">
         <span class="q-label">GRAPHICS <em>画质</em></span>
@@ -207,6 +239,86 @@
       </div>
       <button id="redeploy"><span class="rb-label">REDEPLOY</span><span class="rb-sub">重新部署</span></button>
       <div class="death-foot"><span>DEEPSEEK OF DUTY</span><i></i><span>OPERATION BLACKOUT</span></div>
+    </div>
+  </div>
+
+
+  <!-- ============ SETTINGS ============ -->
+  <div id="settings" class="overlay hidden" aria-hidden="true">
+    <div class="settings-panel" role="dialog" aria-modal="true" aria-label="设置">
+      <header class="set-head">
+        <div>
+          <div class="overlay-tag"><i></i>SYSTEM CONFIG</div>
+          <h2 class="set-title">SETTINGS<span>设置</span></h2>
+        </div>
+        <button id="settings-close" class="set-close" type="button" aria-label="关闭设置"><i></i><i></i></button>
+      </header>
+
+      <div class="set-grid">
+        <section class="set-col">
+          <h3><span class="num">01</span>INPUT<i class="hrule"></i></h3>
+          <div class="set-row">
+            <div class="set-line"><label for="set-sensitivity">鼠标灵敏度</label><output id="out-sensitivity">1.00</output></div>
+            <input id="set-sensitivity" type="range" min="0.2" max="3" step="0.05" value="1" aria-label="鼠标灵敏度">
+          </div>
+          <div class="set-row">
+            <div class="set-line"><label for="set-ads">开镜灵敏度</label><output id="out-ads">0.75</output></div>
+            <input id="set-ads" type="range" min="0.2" max="1" step="0.05" value="0.75" aria-label="开镜灵敏度">
+          </div>
+          <div class="set-row switch-row">
+            <div class="set-line"><span class="lbl">反转 Y 轴</span><em>INVERT Y</em></div>
+            <button class="switch" id="set-invertY" type="button" role="switch" aria-checked="false" aria-label="反转 Y 轴">
+              <i></i><span class="sw-state">OFF</span>
+            </button>
+          </div>
+
+          <h3 class="mt"><span class="num">02</span>AUDIO<i class="hrule"></i></h3>
+          <div class="set-row">
+            <div class="set-line"><label for="set-master">主音量</label><output id="out-master">80%</output></div>
+            <input id="set-master" type="range" min="0" max="1" step="0.05" value="0.8" aria-label="主音量">
+          </div>
+        </section>
+
+        <section class="set-col">
+          <h3><span class="num">03</span>DISPLAY<i class="hrule"></i></h3>
+          <div class="set-row">
+            <div class="set-line"><label for="set-fov">视野 FOV</label><output id="out-fov">90</output></div>
+            <input id="set-fov" type="range" min="70" max="100" step="1" value="90" aria-label="视野 FOV">
+          </div>
+          <div class="set-row switch-row">
+            <div class="set-line"><span class="lbl">减少动态效果</span><em>REDUCE MOTION</em></div>
+            <button class="switch" id="set-reduceMotion" type="button" role="switch" aria-checked="false" aria-label="减少动态效果">
+              <i></i><span class="sw-state">OFF</span>
+            </button>
+          </div>
+
+          <h3 class="mt"><span class="num">04</span>VIDEO<i class="hrule"></i></h3>
+          <div class="set-row">
+            <div class="set-line"><span class="lbl">画质</span><em>GRAPHICS</em></div>
+            <div class="quality-pills set-quality">
+              <button data-q="low" type="button">LOW</button>
+              <button data-q="medium" type="button">MED</button>
+              <button data-q="high" class="active" type="button">HIGH</button>
+              <button data-q="ultra" type="button">ULTRA</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <footer class="set-foot">
+        <span class="set-note">更改即时生效 · 由主程序保存</span>
+        <button id="settings-done" class="set-done" type="button"><span>CLOSE</span><em>关闭</em></button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ============ UPGRADES ============ -->
+  <div id="upgrades" class="overlay hidden" aria-hidden="true">
+    <div class="upgrades-inner" role="dialog" aria-modal="true" aria-label="选择升级">
+      <div class="overlay-tag"><i></i>WAVE CLEARED · 波次完成</div>
+      <h2 class="up-heading">选择一项升级<span>CHOOSE ONE UPGRADE</span></h2>
+      <div class="upgrade-cards" id="upgrade-cards"></div>
+      <div class="up-foot">点击卡片或按 <b>1</b> <b>2</b> <b>3</b> 选择</div>
     </div>
   </div>
 

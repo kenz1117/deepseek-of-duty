@@ -414,6 +414,449 @@ export function createLevel(engine) {
     D: { mat: 'facadeD', cols: 3, floors: 3, modW: 3.05, floorH: 3.25 },
   };
 
+  /* =====================================================================
+     CQB interiors: two enterable single-storey rooms carved out of the
+     solid building volumes. No stairs (enemy AI has no navmesh).
+     ===================================================================== */
+  const INTERIOR_SPECS = {
+    workshop: {
+      kind: 'workshop',
+      frontZ: [-5.0, 0.0],
+      gh: 4.35,
+      rooms: [{ x0: -16.35, x1: -10.35, z0: -5.0, z1: 0.0, ceilY: 3.0, floorY: 0.12 }],
+      light: { x: -13.0, y: 2.5, z: -2.3, i: 6.2 },
+    },
+    apartment: {
+      kind: 'apartment',
+      frontZ: [-15.0, -7.0],
+      gh: 4.35,
+      rooms: [
+        { x0: 10.35, x1: 16.35, z0: -15.0, z1: -9.0, ceilY: 3.05, floorY: 0.155 },
+        { x0: 10.35, x1: 13.2, z0: -9.0, z1: -7.0, ceilY: 3.05, floorY: 0.155 },
+      ],
+      light: { x: 13.3, y: 2.55, z: -11.8, i: 6.2 },
+    },
+  };
+
+  function clampNum(v, a, b) { return v < a ? a : v > b ? b : v; }
+
+  function subtractIv(ivs, a, b) {
+    const out = [];
+    for (const [p, q] of ivs) {
+      if (b <= p || a >= q) { out.push([p, q]); continue; }
+      if (a > p) out.push([p, a]);
+      if (b < q) out.push([b, q]);
+    }
+    return out;
+  }
+
+  /** Axis-aligned wall with rectangular holes (doors / windows).
+   *  axis 'x': thickness along x (t0..t1), runs along z (a0..a1).
+   *  axis 'z': thickness along z (t0..t1), runs along x (a0..a1). */
+  function wallWithHoles(axis, t0, t1, a0, a1, y0, y1, holes, mat, opts = {}) {
+    const uv = opts.uv ?? 2.2;
+    const collide = opts.collide !== false;
+    const cast = opts.cast !== false;
+    const cuts = [a0, a1];
+    for (const h of holes) cuts.push(clampNum(h.a0, a0, a1), clampNum(h.a1, a0, a1));
+    const us = [...new Set(cuts.map((v) => Math.round(v * 1000) / 1000))].sort((p, q) => p - q);
+    const tm = (t0 + t1) / 2, th = t1 - t0;
+    for (let i = 0; i < us.length - 1; i++) {
+      const sa = us[i], sb = us[i + 1];
+      if (sb - sa < 0.02) continue;
+      const mid = (sa + sb) / 2;
+      const cover = holes.filter((h) => h.a0 <= sa + 0.003 && h.a1 >= sb - 0.003);
+      let ivs = [[y0, y1]];
+      for (const h of cover) {
+        ivs = subtractIv(ivs, Math.max(y0, h.y0 ?? y0), Math.min(y1, h.y1 ?? y1));
+      }
+      for (const [iy0, iy1] of ivs) {
+        if (iy1 - iy0 < 0.02) continue;
+        if (axis === 'x') {
+          meshBox(th, iy1 - iy0, sb - sa, mat, tm, (iy0 + iy1) / 2, mid, 0, { uv, cast });
+          if (collide && iy0 < 1.8) addColliderRect(t0, t1, sa, sb);
+        } else {
+          meshBox(sb - sa, iy1 - iy0, th, mat, mid, (iy0 + iy1) / 2, tm, 0, { uv, cast });
+          if (collide && iy0 < 1.8) addColliderRect(sa, sb, t0, t1);
+        }
+      }
+    }
+  }
+
+  function interiorWallBox(x0, x1, z0, z1, y0, y1, mat, uv = 2.2, cast = true) {
+    meshBox(x1 - x0, y1 - y0, z1 - z0, mat, (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2, 0, { uv, cast });
+    addColliderRect(x0, x1, z0, z1);
+  }
+
+  function doorFrame(axis, t0, t1, a0, a1, yBase, yTop, mat) {
+    const tm = (t0 + t1) / 2, th = t1 - t0, fw = 0.13;
+    if (axis === 'x') {
+      meshBox(th + 0.1, yTop - yBase, fw, mat, tm, (yBase + yTop) / 2, a0 + fw / 2, 0, { uv: 0.8, cast: false });
+      meshBox(th + 0.1, yTop - yBase, fw, mat, tm, (yBase + yTop) / 2, a1 - fw / 2, 0, { uv: 0.8, cast: false });
+      meshBox(th + 0.1, fw, a1 - a0, mat, tm, yTop - fw / 2, (a0 + a1) / 2, 0, { uv: 0.8, cast: false });
+    } else {
+      meshBox(fw, yTop - yBase, th + 0.1, mat, a0 + fw / 2, (yBase + yTop) / 2, tm, 0, { uv: 0.8, cast: false });
+      meshBox(fw, yTop - yBase, th + 0.1, mat, a1 - fw / 2, (yBase + yTop) / 2, tm, 0, { uv: 0.8, cast: false });
+      meshBox(a1 - a0, fw, th + 0.1, mat, (a0 + a1) / 2, yTop - fw / 2, tm, 0, { uv: 0.8, cast: false });
+    }
+  }
+
+  function thresholdStrip(axis, t0, t1, a0, a1, y, mat) {
+    if (axis === 'x') meshBox(t1 - t0 + 0.06, 0.025, a1 - a0, mat, (t0 + t1) / 2, y - 0.012, (a0 + a1) / 2, 0, { uv: 0.8, cast: false });
+    else meshBox(a1 - a0, 0.025, t1 - t0 + 0.06, mat, (a0 + a1) / 2, y - 0.012, (t0 + t1) / 2, 0, { uv: 0.8, cast: false });
+  }
+
+  function openDoorLeaf(hingeX, hingeZ, w, h, yBase, angle, mat) {
+    const g = new THREE.Group();
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.06), mat);
+    projectBoxUV(leaf.geometry, 1.0);
+    leaf.position.set(w / 2, h / 2, 0);
+    leaf.castShadow = true; leaf.receiveShadow = true;
+    g.add(leaf);
+    const handle = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.04, 0.04), mats.metal);
+    handle.position.set(w - 0.18, h * 0.45, 0.05);
+    g.add(handle);
+    g.position.set(hingeX, yBase, hingeZ);
+    g.rotation.y = angle;
+    statics.add(g);
+  }
+
+  function interiorLamp(x, y, z, intensity = 6.2) {
+    meshCyl(0.012, 0.012, 0.4, 4, mats.rubber, x, y + 0.2, z, { cast: false });
+    meshCyl(0.16, 0.24, 0.1, 10, mats.metalTan, x, y, z, { cast: false });
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.085, 8, 6), mats.windowLit);
+    bulb.position.set(x, y - 0.08, z);
+    statics.add(bulb);
+    const pl = new THREE.PointLight(0xffb070, intensity, 7, 2);
+    pl.position.set(x, y - 0.14, z);
+    dynamic.add(pl);
+    lightPool(x, z, 1.9, 0.16);
+    return pl;
+  }
+
+  function roomFloor(x0, x1, z0, z1, y, mat, uv = 1.8) {
+    meshBox(x1 - x0, 0.1, z1 - z0, mat, (x0 + x1) / 2, y - 0.05, (z0 + z1) / 2, 0, { uv, cast: false });
+  }
+
+  /** Replace a building's solid body with boxes that leave the room voids open. */
+  function buildCarvedBody(def) {
+    const { side, z0, z1, depth, h } = def;
+    const spec = INTERIOR_SPECS[def.interior];
+    const plaster = def.plaster || mats.plasterA;
+    const bodyX0 = side < 0 ? -(WALL + depth) : WALL;
+    const bodyX1 = side < 0 ? -WALL : WALL + depth;
+    const zs = [z0, z1];
+    const xs = [bodyX0, bodyX1];
+    for (const r of spec.rooms) { zs.push(r.z0, r.z1); xs.push(r.x0, r.x1); }
+    const us = [...new Set(zs.map((v) => Math.round(v * 1000) / 1000))].sort((a, b) => a - b);
+    const vx = [...new Set(xs.map((v) => Math.round(v * 1000) / 1000))].sort((a, b) => a - b);
+    for (let i = 0; i < vx.length - 1; i++) {
+      for (let j = 0; j < us.length - 1; j++) {
+        const x0 = vx[i], x1 = vx[i + 1], cz0 = us[j], cz1 = us[j + 1];
+        if (x1 - x0 < 0.02 || cz1 - cz0 < 0.02) continue;
+        const room = spec.rooms.find((r) => x0 >= r.x0 - 0.002 && x1 <= r.x1 + 0.002 && cz0 >= r.z0 - 0.002 && cz1 <= r.z1 + 0.002);
+        if (room) {
+          const topH = h - room.ceilY;
+          if (topH > 0.02) {
+            const b = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, topH, cz1 - cz0), plaster);
+            projectBoxUV(b.geometry, 3.6);
+            b.position.set((x0 + x1) / 2, room.ceilY + topH / 2, (cz0 + cz1) / 2);
+            b.castShadow = true; b.receiveShadow = true;
+            statics.add(b);
+          }
+        } else {
+          const b = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, h, cz1 - cz0), plaster);
+          projectBoxUV(b.geometry, 3.6);
+          b.position.set((x0 + x1) / 2, h / 2, (cz0 + cz1) / 2);
+          b.castShadow = true; b.receiveShadow = true;
+          statics.add(b);
+          addColliderRect(x0, x1, cz0, cz1);
+        }
+      }
+    }
+  }
+
+  /* ---- 1) alley workshop / cafe (inside L3, x -16.35..-10.35, z -5..0) ---- */
+  function buildWorkshopInterior() {
+    const x0 = -16.35, x1 = -10.35, z0 = -5.0, z1 = 0.0;
+    const floorY = 0.12, ceilY = 3.0;
+    const wallMat = mats.plasterC;
+
+    roomFloor(x0, x1, z0, z1, floorY, mats.concreteDark, 1.6);
+    meshBox(x1 - x0, 0.07, z1 - z0, mats.plasterB, (x0 + x1) / 2, ceilY - 0.035, (z0 + z1) / 2, 0, { uv: 2.4, cast: false });
+    for (const bz of [z0 + 1.1, z0 + 2.45, z0 + 3.8]) {
+      meshBox(x1 - x0, 0.16, 0.14, mats.wood, (x0 + x1) / 2, ceilY - 0.13, bz, 0, { uv: 0.8, cast: false });
+    }
+
+    // side walls (back + south): linings with collision
+    interiorWallBox(x0, x0 + 0.16, z0, z1, floorY, ceilY, wallMat);
+    interiorWallBox(x0, x1, z0, z0 + 0.16, floorY, ceilY, wallMat);
+
+    // street front wall (through the old screen) with a 2.1 m door + shop window
+    wallWithHoles('x', -10.35, -9.85, z0, z1, floorY, 4.35, [
+      { a0: -3.25, a1: -1.15, y0: floorY, y1: 2.5 },
+      { a0: -4.8, a1: -3.65, y0: 0.95, y1: 2.2 },
+    ], wallMat, { uv: 2.4 });
+    doorFrame('x', -10.35, -9.85, -3.25, -1.15, floorY, 2.5, mats.metalTan);
+    thresholdStrip('x', -10.35, -9.85, -3.25, -1.15, floorY, mats.concreteDark);
+
+    // alley wall (z = 0) with a 2.2 m door
+    wallWithHoles('z', -0.3, 0.0, x0, x1, floorY, ceilY, [
+      { a0: -13.3, a1: -11.1, y0: floorY, y1: 2.5 },
+    ], wallMat, { uv: 2.4 });
+    doorFrame('z', -0.3, 0.0, -13.3, -11.1, floorY, 2.5, mats.metalTan);
+    thresholdStrip('z', -0.3, 0.0, -13.3, -11.1, floorY, mats.concreteDark);
+    // plinth band on the alley face (segments around the door)
+    wallWithHoles('z', -0.36, -0.30, x0, x1, 0.0, 0.55, [
+      { a0: -13.3, a1: -11.1, y0: 0.0, y1: 0.55 },
+    ], mats.concreteDark, { uv: 1.6, collide: false, cast: false });
+    // plinth on the street front wall
+    wallWithHoles('x', -9.90, -9.84, z0, z1, 0.0, 0.55, [
+      { a0: -3.25, a1: -1.15, y0: 0.0, y1: 0.55 },
+    ], mats.concreteDark, { uv: 1.6, collide: false, cast: false });
+
+    // open leaves + warm shop front
+    openDoorLeaf(-13.3, -0.15, 1.05, 2.3, floorY, -1.75, mats.wood);
+    openDoorLeaf(-10.42, -3.22, 0.95, 2.3, floorY, 2.2, mats.metal);
+    // window: half-broken glass + bars + stone sill
+    const wx = -4.22, wy = 1.57;
+    for (const [sy, sz] of [[1.05, -4.72], [2.1, -3.72], [1.6, -4.68]]) {
+      const shard = new THREE.Mesh(new THREE.PlaneGeometry(0.09, rr(0.18, 0.3)), mats.glassBroken);
+      shard.position.set(-10.04, sy, sz);
+      shard.rotation.set(0, Math.PI / 2, rr(-0.4, 0.4));
+      statics.add(shard);
+    }
+    for (const dz of [-4.72, -4.22, -3.72]) {
+      meshBox(0.03, 1.15, 0.03, mats.rust, -9.93, 1.55, dz, 0, { uv: 0.4, cast: false });
+    }
+    meshBox(0.28, 0.1, 1.3, mats.concrete, -9.93, 0.9, wx, 0, { uv: 0.9 });
+    meshBox(0.1, 0.1, 1.3, mats.concreteDark, -9.99, 2.26, wx, 0, { uv: 0.8, cast: false });
+
+    // awning + signage over the alley door
+    meshBox(1.15, 0.06, 2.9, mats.awning, -9.4, 2.85, -2.2, 0, { uv: 0.95, rz: -0.18 });
+    meshBox(0.05, 0.22, 2.9, mats.burlap, -9.95, 2.68, -2.2, 0, { uv: 0.8, cast: false });
+    for (const dz of [-3.4, -1.0]) {
+      meshBox(0.95, 0.05, 0.05, mats.rust, -9.47, 2.7, dz, 0, { uv: 0.5, cast: false });
+    }
+    wallSign(-1, -2.2, 3.15, 2.6, 0.72, mats.signB, 0.12);
+    const alleySign = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.62), mats.signA);
+    alleySign.position.set(-12.2, 2.95, 0.08);
+    statics.add(alleySign);
+    meshBox(2.3, 0.08, 0.1, mats.metalTan, -12.2, 2.62, 0.1, 0, { uv: 0.8, cast: false });
+    // work lamp over the alley door + warm spill
+    meshBox(0.42, 0.05, 0.05, mats.rust, -12.2, 3.3, 0.3, 0, { uv: 0.5, cast: false });
+    meshBox(0.3, 0.16, 0.22, mats.metalTan, -12.2, 3.17, 0.52, 0, { uv: 0.6 });
+    const doorwayBulb = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.13), mats.windowLit);
+    doorwayBulb.rotation.x = Math.PI / 2;
+    doorwayBulb.position.set(-12.2, 3.08, 0.52);
+    statics.add(doorwayBulb);
+    lightPool(-12.2, 1.2, 1.9, 0.28);
+    lightPool(-9.0, -2.2, 1.6, 0.2);
+
+    // ---- interior dressing / cover
+    // back shelving
+    for (const sy of [1.15, 1.85, 2.55]) {
+      meshBox(0.36, 0.05, 3.35, mats.wood, -16.05, sy, -2.55, 0, { uv: 0.9, cast: false });
+    }
+    for (const sz of [-4.15, -0.95]) {
+      meshBox(0.08, 2.6, 0.08, mats.wood, -16.02, 1.3, sz, 0, { uv: 0.6, cast: false });
+    }
+    addColliderRect(-16.3, -15.85, -4.4, -0.7);
+    // shelf clutter
+    for (let i = 0; i < 6; i++) {
+      meshBox(rr(0.12, 0.24), rr(0.12, 0.22), rr(0.12, 0.24), i % 2 ? mats.metalTan : mats.burlap,
+        -16.05, 1.2 + (i % 3) * 0.7, -1.2 - i * 0.45, rr(0, 1.5), { uv: 0.5, cast: false });
+    }
+    // counter (tall cover)
+    meshBox(1.1, 0.95, 1.6, mats.wood, -15.35, floorY + 0.475, -3.4, 0, { uv: 1.1 });
+    meshBox(1.2, 0.06, 1.7, mats.metal, -15.35, floorY + 0.98, -3.4, 0, { uv: 0.8, cast: false });
+    addColliderRect(-15.95, -14.75, -4.2, -2.6);
+    // crates (low cover) near the south wall
+    crate(-11.6, -4.15, 0.95, 0.3);
+    crate(-12.45, -4.05, 0.78, 1.1);
+    // workbench along the south wall
+    meshBox(1.7, 0.14, 0.6, mats.wood, -13.8, floorY + 0.86, -4.5, 0, { uv: 0.9 });
+    for (const dx of [-1.55, -0.05]) {
+      meshBox(0.08, 0.86, 0.08, mats.metal, -13.8 + dx, floorY + 0.43, -4.5, 0, { uv: 0.5, cast: false });
+    }
+    addColliderRect(-14.7, -12.9, -4.85, -4.15);
+    // tools / clutter on the bench
+    meshBox(0.34, 0.2, 0.22, mats.metal, -14.1, floorY + 1.03, -4.55, 0.3, { uv: 0.6, cast: false });
+    meshBox(0.5, 0.08, 0.2, mats.rust, -13.3, floorY + 1.0, -4.4, 0.1, { uv: 0.5, cast: false });
+    // a barrel + tyres for silhouette
+    barrel(-15.2, -1.25);
+    tire(-11.2, -2.4, 0.6);
+    // rug + scattered paper
+    meshBox(2.6, 0.012, 1.8, mats.burlap, -13.3, floorY + 0.008, -2.4, 0.05, { uv: 1.4, cast: false });
+    for (let i = 0; i < 4; i++) {
+      const p = new THREE.Mesh(new THREE.PlaneGeometry(rr(0.16, 0.28), rr(0.2, 0.34)), mats.paper);
+      p.position.set(rr(-15, -11.2), floorY + 0.015, rr(-4.6, -0.6));
+      p.rotation.set(-Math.PI / 2, 0, rr(0, 6));
+      statics.add(p);
+    }
+    // posters + grime on the back wall
+    for (let i = 0; i < 2; i++) {
+      const po = new THREE.Mesh(new THREE.PlaneGeometry(rr(0.6, 0.9), rr(0.7, 1.0)), i ? mats.signC : mats.paper);
+      po.position.set(-16.18, rr(1.5, 2.2), rr(-4.2, -1.0));
+      po.rotation.y = Math.PI / 2;
+      statics.add(po);
+    }
+    // hanging bulb (single point light in this room)
+    interiorLamp(-13.0, 2.5, -2.3, 6.2);
+    // warm interior fill panels (emissive, no extra lights)
+    const warmPanel = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.7), mats.windowLitDim);
+    warmPanel.position.set(-16.2, 2.55, -3.3);
+    warmPanel.rotation.y = Math.PI / 2;
+    statics.add(warmPanel);
+  }
+
+  /* ---- 2) street apartment (inside R4, x 10.35..16.35, z -15..-7) -------- */
+  function buildApartmentInterior() {
+    const mx0 = 10.35, mx1 = 16.35, mz0 = -15.0, mz1 = -9.0;
+    const hx0 = 10.35, hx1 = 13.2, hz0 = -9.0, hz1 = -7.0;
+    const floorY = 0.155, ceilY = 3.05;
+    const wallMat = mats.plasterC;
+
+    roomFloor(mx0, mx1, mz0, mz1, floorY, mats.wood, 2.0);
+    roomFloor(hx0, hx1, hz0, hz1, floorY, mats.wood, 2.0);
+    meshBox(mx1 - mx0, 0.07, mz1 - mz0, mats.plasterB, (mx0 + mx1) / 2, ceilY - 0.035, (mz0 + mz1) / 2, 0, { uv: 2.4, cast: false });
+    meshBox(hx1 - hx0, 0.07, hz1 - hz0, mats.plasterB, (hx0 + hx1) / 2, ceilY - 0.035, (hz0 + hz1) / 2, 0, { uv: 2.4, cast: false });
+    for (const bz of [mz0 + 1.4, mz0 + 2.9, mz0 + 4.4]) {
+      meshBox(mx1 - mx0, 0.14, 0.13, mats.wood, (mx0 + mx1) / 2, ceilY - 0.12, bz, 0, { uv: 0.8, cast: false });
+    }
+
+    // shell linings
+    interiorWallBox(mx1 - 0.16, mx1, mz0, mz1, floorY, ceilY, wallMat); // back
+    interiorWallBox(mx0, mx1, mz0, mz0 + 0.16, floorY, ceilY, wallMat); // south
+    interiorWallBox(hx1 - 0.16, hx1, hz0, hz1, floorY, ceilY, wallMat); // hall east
+    interiorWallBox(hx0, hx1, hz1 - 0.16, hz1, floorY, ceilY, wallMat); // hall north
+    // shared wall between main room and hall, with a 1.8 m door
+    wallWithHoles('z', -9.26, -9.0, mx0, mx1, floorY, ceilY, [
+      { a0: 11.15, a1: 12.95, y0: floorY, y1: 2.35 },
+    ], wallMat, { uv: 2.2 });
+    doorFrame('z', -9.26, -9.0, 11.15, 12.95, floorY, 2.35, mats.wood);
+
+    // street front wall: 2.0 m main door + window + 1.8 m back door
+    wallWithHoles('x', 9.85, 10.35, mz0, hz1, floorY, 4.35, [
+      { a0: -13.0, a1: -11.0, y0: floorY, y1: 2.5 },
+      { a0: -14.35, a1: -13.35, y0: 1.0, y1: 2.15 },
+      { a0: -8.8, a1: -7.0, y0: floorY, y1: 2.5 },
+    ], wallMat, { uv: 2.4 });
+    doorFrame('x', 9.85, 10.35, -13.0, -11.0, floorY, 2.5, mats.metalTan);
+    doorFrame('x', 9.85, 10.35, -8.8, -7.0, floorY, 2.5, mats.metalTan);
+    thresholdStrip('x', 9.85, 10.35, -13.0, -11.0, floorY, mats.concreteDark);
+    thresholdStrip('x', 9.85, 10.35, -8.8, -7.0, floorY, mats.concreteDark);
+    // street plinth around both doors
+    wallWithHoles('x', 9.84, 9.90, mz0, hz1, 0.0, 0.55, [
+      { a0: -13.0, a1: -11.0, y0: 0.0, y1: 0.55 },
+      { a0: -8.8, a1: -7.0, y0: 0.0, y1: 0.55 },
+    ], mats.concreteDark, { uv: 1.6, collide: false, cast: false });
+
+    openDoorLeaf(9.93, -12.98, 0.98, 2.3, floorY, -2.25, mats.wood);
+    openDoorLeaf(9.93, -7.03, 0.9, 2.3, floorY, -2.3, mats.metal);
+    openDoorLeaf(12.95, -9.22, 0.88, 2.2, floorY, -2.1, mats.wood);
+
+    // window: bars + half glass + sill
+    const wz = -13.85;
+    for (const [sy, sz] of [[1.1, -14.28], [2.05, -13.42], [1.55, -14.24]]) {
+      const shard = new THREE.Mesh(new THREE.PlaneGeometry(0.09, rr(0.18, 0.3)), mats.glassBroken);
+      shard.position.set(10.05, sy, sz);
+      shard.rotation.set(0, -Math.PI / 2, rr(-0.4, 0.4));
+      statics.add(shard);
+    }
+    for (const dz of [-14.3, -13.85, -13.4]) {
+      meshBox(0.03, 1.1, 0.03, mats.rust, 9.92, 1.55, dz, 0, { uv: 0.4, cast: false });
+    }
+    meshBox(0.26, 0.1, 1.2, mats.concrete, 9.92, 0.97, wz, 0, { uv: 0.9 });
+    meshBox(0.1, 0.1, 1.2, mats.concreteDark, 9.98, 2.18, wz, 0, { uv: 0.8, cast: false });
+
+    // facade dressing: sign, lamp, awning over main door
+    wallSign(1, -12.0, 3.2, 2.4, 0.7, mats.signA, 0.12);
+    meshBox(1.0, 0.06, 2.6, mats.awning, 9.4, 2.88, -12.0, 0, { uv: 0.95, rz: 0.18 });
+    meshBox(0.05, 0.2, 2.6, mats.burlap, 9.95, 2.72, -12.0, 0, { uv: 0.8, cast: false });
+    for (const dz of [-13.2, -10.8]) meshBox(0.9, 0.05, 0.05, mats.rust, 9.46, 2.7, dz, 0, { uv: 0.5, cast: false });
+    meshBox(0.4, 0.05, 0.05, mats.rust, 9.72, 3.1, -7.8, 0, { uv: 0.5, cast: false });
+    meshBox(0.26, 0.14, 0.2, mats.metalTan, 9.55, 3.0, -7.8, 0, { uv: 0.6 });
+    const dl = new THREE.Mesh(new THREE.PlaneGeometry(0.18, 0.12), mats.windowLit);
+    dl.rotation.x = Math.PI / 2;
+    dl.position.set(9.55, 2.92, -7.8);
+    statics.add(dl);
+    lightPool(8.7, -12.0, 1.7, 0.22);
+    lightPool(8.7, -7.8, 1.5, 0.2);
+
+    // ---- furnishings / cover
+    // kitchen counter along the back wall (tall cover)
+    meshBox(0.85, 0.95, 2.6, mats.wood, 15.8, floorY + 0.475, -12.9, 0, { uv: 1.1 });
+    meshBox(0.95, 0.06, 2.7, mats.metal, 15.8, floorY + 0.98, -12.9, 0, { uv: 0.8, cast: false });
+    for (const sy of [1.65, 2.15]) {
+      meshBox(0.45, 0.05, 2.5, mats.wood, 16.05, floorY + sy, -12.9, 0, { uv: 0.8, cast: false });
+    }
+    addColliderRect(15.35, 16.35, -14.25, -11.55);
+    // sofa / bench (low cover) against the north wall, east of the hall door
+    meshBox(1.6, 0.42, 0.9, mats.burlap, 14.0, floorY + 0.21, -9.48, 0, { uv: 1.0 });
+    meshBox(1.6, 0.55, 0.2, mats.burlap, 14.0, floorY + 0.62, -9.28, 0, { uv: 0.8, cast: false });
+    addColliderRect(13.15, 14.85, -9.95, -9.0);
+    // coffee table (low cover) + a chair
+    meshBox(1.2, 0.07, 0.7, mats.wood, 13.6, floorY + 0.43, -10.6, 0.06, { uv: 0.8 });
+    for (const [dx, dz] of [[-0.5, -0.28], [0.5, -0.28], [-0.5, 0.28], [0.5, 0.28]]) {
+      meshBox(0.06, 0.4, 0.06, mats.wood, 13.6 + dx, floorY + 0.2, -10.6 + dz, 0, { uv: 0.5, cast: false });
+    }
+    addColliderRect(12.95, 14.25, -11.0, -10.2);
+    meshBox(0.45, 0.06, 0.45, mats.wood, 12.6, floorY + 0.45, -10.3, 0.3, { uv: 0.7 });
+    meshBox(0.45, 0.5, 0.06, mats.wood, 12.6, floorY + 0.7, -10.52, 0.3, { uv: 0.7 });
+    for (const [dx, dz] of [[-0.18, -0.18], [0.18, -0.18], [-0.18, 0.18], [0.18, 0.18]]) {
+      meshBox(0.05, 0.45, 0.05, mats.wood, 12.6 + dx, floorY + 0.22, -10.3 + dz, 0, { uv: 0.5, cast: false });
+    }
+    addColliderRect(12.35, 12.85, -10.55, -10.05);
+    // low cabinet on the south wall + poster above
+    meshBox(1.5, 0.6, 0.42, mats.wood, 11.7, floorY + 0.3, -14.62, 0, { uv: 0.9 });
+    addColliderRect(10.95, 12.45, -14.85, -14.4);
+    const sp = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.7), mats.signC);
+    sp.position.set(11.7, 1.85, -14.83);
+    statics.add(sp);
+    // back hall: shelf + boxes
+    for (const sy of [1.2, 1.9, 2.5]) {
+      meshBox(0.34, 0.05, 1.65, mats.wood, 13.0, floorY + sy, -8.0, 0, { uv: 0.8, cast: false });
+    }
+    addColliderRect(12.8, 13.2, -8.85, -7.15);
+    meshBox(0.6, 0.6, 0.7, mats.wood, 12.3, floorY + 0.3, -8.75, 0.1, { uv: 0.8 });
+    addColliderRect(12.0, 12.6, -9.1, -8.4);
+    // rug, posters, TV panel
+    meshBox(2.8, 0.012, 2.0, mats.burlap, 12.8, floorY + 0.008, -11.1, 0.03, { uv: 1.4, cast: false });
+    meshBox(0.05, 0.9, 1.5, mats.rubber, 16.2, floorY + 1.7, -10.6, 0, { uv: 0.8, cast: false });
+    meshBox(0.06, 0.98, 1.58, mats.metalTan, 16.22, floorY + 1.7, -10.6, 0, { uv: 0.6, cast: false });
+    meshBox(0.06, 0.82, 1.42, mats.rubber, 16.19, floorY + 1.7, -10.6, 0, { uv: 0.6, cast: false });
+    for (let i = 0; i < 2; i++) {
+      const po = new THREE.Mesh(new THREE.PlaneGeometry(rr(0.5, 0.8), rr(0.6, 0.9)), i ? mats.signC : mats.paper);
+      po.position.set(16.18, rr(1.4, 2.2), rr(-14.2, -10.2));
+      po.rotation.y = -Math.PI / 2;
+      statics.add(po);
+    }
+    // ceiling lamp + a second small bulb in the back hall (emissive only)
+    interiorLamp(13.3, 2.55, -11.8, 6.2);
+    const hallBulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), mats.windowLit);
+    hallBulb.position.set(11.6, 2.55, -8.0);
+    statics.add(hallBulb);
+    const hallLight = new THREE.PointLight(0xffb070, 3.4, 4.5, 2);
+    hallLight.position.set(11.6, 2.4, -8.0);
+    dynamic.add(hallLight);
+    lightPool(11.6, -8.0, 1.4, 0.14);
+    // visible hall dressing through the back door
+    meshBox(0.9, 0.95, 0.5, mats.wood, 11.0, floorY + 0.475, -7.35, 0, { uv: 0.9 });
+    addColliderRect(10.55, 11.45, -7.6, -7.1);
+    meshBox(0.5, 0.55, 0.6, mats.metalTan, 12.2, floorY + 0.28, -7.4, 0.2, { uv: 0.7 });
+    const hallPoster = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.8), mats.signC);
+    hallPoster.position.set(13.15, 1.7, -8.2);
+    hallPoster.rotation.y = -Math.PI / 2;
+    statics.add(hallPoster);
+  }
+
+  function buildInterior(def) {
+    if (!def || !def.interior) return;
+    if (def.interior === 'workshop') buildWorkshopInterior();
+    else if (def.interior === 'apartment') buildApartmentInterior();
+  }
+
   function buildBuilding(def) {
     const { side, z0, z1, depth, h } = def;
     const len = z1 - z0, zc = (z0 + z1) / 2;
@@ -423,12 +866,16 @@ export function createLevel(engine) {
     const bodyX1 = side < 0 ? -WALL : WALL + depth;
 
     // ---- body volume (plain plaster; street face is covered by screen/panel)
-    const body = new THREE.Mesh(new THREE.BoxGeometry(depth, h, len), plaster);
-    projectBoxUV(body.geometry, 3.6);
-    body.position.set(side * (WALL + depth / 2), h / 2, zc);
-    body.castShadow = true; body.receiveShadow = true;
-    statics.add(body);
-    addColliderRect(bodyX0, bodyX1, z0, z1);
+    if (def.interior) {
+      buildCarvedBody(def);          // leaves the CQB room void open to the street
+    } else {
+      const body = new THREE.Mesh(new THREE.BoxGeometry(depth, h, len), plaster);
+      projectBoxUV(body.geometry, 3.6);
+      body.position.set(side * (WALL + depth / 2), h / 2, zc);
+      body.castShadow = true; body.receiveShadow = true;
+      statics.add(body);
+      addColliderRect(bodyX0, bodyX1, z0, z1);
+    }
 
     // roof slab lip
     meshBox(depth + 0.22, 0.26, len + 0.2, mats.concreteDark, side * (WALL + depth / 2), h + 0.06, zc, 0, { uv: 2.2, cast: false });
@@ -498,6 +945,7 @@ export function createLevel(engine) {
     buildGroundFloor(side, z0, z1, gh, bays, def);
     buildRoof(side, z0, z1, h, def);
     buildWallServices(side, z0, z1, h, gh, def);
+    if (def.interior) buildInterior(def);
   }
 
   /* ---- high detail: real window recesses -------------------------------- */
@@ -671,8 +1119,17 @@ export function createLevel(engine) {
     const xin = (d) => side * (OUT + d);
     const faceRot = -side * Math.PI / 2;
 
-    // plinth
-    meshBox(0.66, 0.56, len, mats.concreteDark, side * (OUT + 0.2), 0.28, z0 + len / 2, 0, { uv: 1.8, cast: false });
+    // plinth (split around an enterable interior frontage)
+    const frontZ = def.interior ? INTERIOR_SPECS[def.interior].frontZ : null;
+    if (frontZ) {
+      const segs = [[z0, Math.max(z0, frontZ[0])], [Math.min(z1, frontZ[1]), z1]];
+      for (const [pa, pb] of segs) {
+        if (pb - pa < 0.05) continue;
+        meshBox(0.66, 0.56, pb - pa, mats.concreteDark, side * (OUT + 0.2), 0.28, (pa + pb) / 2, 0, { uv: 1.8, cast: false });
+      }
+    } else {
+      meshBox(0.66, 0.56, len, mats.concreteDark, side * (OUT + 0.2), 0.28, z0 + len / 2, 0, { uv: 1.8, cast: false });
+    }
     // top lintel band above ground floor
     meshBox(0.74, 0.5, len + 0.04, mats.concrete, side * (OUT + 0.19), gh - 0.25, z0 + len / 2, 0, { uv: 2.2 });
     meshBox(0.72, 0.07, len + 0.06, mats.concreteDark, xf(0.03), gh - 0.53, z0 + len / 2, 0, { uv: 2.2, cast: false });
@@ -680,6 +1137,8 @@ export function createLevel(engine) {
     for (let i = 0; i < bays; i++) {
       const bz = z0 + (i + 0.5) * bayW;
       const bw = bayW - 0.62;
+      // the enterable CQB room builds its own front wall + doors here
+      if (frontZ && bz > frontZ[0] - 0.35 && bz < frontZ[1] + 0.35) continue;
       const x = side * (OUT + SCREEN / 2);
       let kind = def.ground || 'wall';
       if (kind === 'shop' && bays > 2 && i === bays - 1) kind = 'door';
@@ -1089,13 +1548,13 @@ export function createLevel(engine) {
     for (let k = 0; k < 4; k++) {
       const g = new THREE.Mesh(new THREE.PlaneGeometry(rr(1.2, 2.2), rr(1.0, 1.8)), mats.graffiti);
       const zside = k % 2 ? z0 + 0.03 : z1 - 0.03;
-      g.position.set(rr(-21, -11), rr(0.8, 2.5), zside);
+      g.position.set(k % 2 ? rr(-21.5, -16.7) : rr(-21, -11), rr(0.8, 2.5), zside);
       g.rotation.set(0, k % 2 ? 0 : Math.PI, rr(-0.1, 0.1));
       statics.add(g);
     }
     // pipes running along the walls + dripping AC
-    meshCyl(0.07, 0.07, 12, 6, mats.rust, -12.5, 3.2, z0 + 0.14, { rx: Math.PI / 2, cast: false });
-    meshCyl(0.05, 0.05, 12, 6, mats.rubber, -13.0, 4.6, z1 - 0.14, { rx: Math.PI / 2, cast: false });
+    meshCyl(0.07, 0.07, 12, 6, mats.rust, -16.3, 3.2, z0 + 0.14, { rz: Math.PI / 2, cast: false });
+    meshCyl(0.05, 0.05, 12, 6, mats.rubber, -16.3, 4.6, z1 - 0.14, { rz: Math.PI / 2, cast: false });
     for (let k = 0; k < 3; k++) {
       meshBox(0.5, 0.42, 0.62, mats.metal, -12 - k * 3.2, 5.4, z1 - 0.35, 0, { uv: 1.0, cast: false });
       addGrime(-1, -12 - k * 3.2, 4.6, z1 - 0.4, 0.7, 1.6, 0, Math.PI);
@@ -1105,43 +1564,15 @@ export function createLevel(engine) {
     for (let r = 0; r < 9; r++) {
       meshBox(0.05, 0.035, 0.7, mats.rust, -11.65, 2.62 + r * 0.33, z0 + 0.52, 0, { uv: 0.4, cast: false });
     }
-    // service front on the alley's south wall (small workshop / cafe)
-    const wz = z0 + 0.07;
-    meshBox(1.0, 2.0, 0.1, mats.metal, -12.2, 1.15, wz, 0, { uv: 0.9 });
-    meshBox(1.35, 0.9, 0.06, mats.windowLitDim, -12.2, 1.75, wz + 0.02, 0, { uv: 0.6, cast: false });
-    meshBox(1.5, 0.06, 0.06, mats.metal, -12.2, 2.22, wz + 0.03, 0, { uv: 0.5, cast: false });
-    meshBox(2.2, 0.07, 1.05, mats.awning, -12.2, 2.72, wz + 0.5, 0, { uv: 0.9, rx: 0.17 });
-    meshBox(2.2, 0.2, 0.05, mats.burlap, -12.2, 2.52, wz + 1.0, 0, { uv: 0.8, cast: false });
-    meshBox(1.9, 0.5, 0.08, pick([mats.signA, mats.signC]), -12.2, 2.95, wz + 0.02, 0, { uv: 0.8 });
-    meshBox(1.7, 0.12, 0.7, mats.concrete, -12.2, 0.07, wz + 0.4, 0, { uv: 1.0, cast: false });
-    lightPool(-12.0, 1.1, 1.5, 0.2);
-    // caged work lamp over the service door
-    meshBox(0.42, 0.05, 0.05, mats.rust, -12.2, 3.35, wz + 0.3, 0, { uv: 0.5, cast: false });
-    meshBox(0.3, 0.16, 0.22, mats.metalTan, -12.2, 3.2, wz + 0.52, 0, { uv: 0.6 });
-    const bulb = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 0.13), mats.windowLit);
-    bulb.rotation.x = Math.PI / 2;
-    bulb.position.set(-12.2, 3.11, wz + 0.52);
-    statics.add(bulb);
-    lightPool(-12.2, wz + 0.9, 1.6, 0.24);
-    meshBox(0.45, 0.06, 0.06, mats.rust, -11.9, 3.25, wz + 0.25, 0, { uv: 0.5, cast: false });
-    meshBox(0.26, 0.12, 0.18, mats.metalTan, -11.9, 3.16, wz + 0.5, 0, { uv: 0.6 });
-    meshBox(0.7, 0.55, 0.12, mats.metal, -15.6, 2.3, wz + 0.1, 0, { uv: 0.8, cast: false });
-    for (let q = 0; q < 3; q++) {
-      const po = new THREE.Mesh(new THREE.PlaneGeometry(rr(0.4, 0.62), rr(0.5, 0.8)), q === 1 ? mats.paper : pick([mats.signC, mats.signB]));
-      po.position.set(-10.9 - q * 0.7, rr(1.5, 2.2), wz + 0.04);
-      po.rotation.set(0, 0, rr(-0.06, 0.06));
-      statics.add(po);
-    }
-    dumpster(-10.7, 1.15, 1.62);
-    pallet(-12.9, 0.9, 0.7);
+    dumpster(-10.4, 2.6, 1.62);
+    pallet(-14.9, 1.3, 0.7);
     barrel(-19.9, 1.1);
     addTrashPile(1.2, -1, 1.1);
     addTrashPile(4.9, -1, 1.2);
     // overhead laundry line
-    cableLine(new THREE.Vector3(-11.5, 4.15, 2.2), new THREE.Vector3(-20.6, 3.9, 3.3), 0.32, 0.014, mats.burlap);
+    cableLine(new THREE.Vector3(-11.8, 4.15, 5.62), new THREE.Vector3(-20.6, 3.95, 5.55), 0.22, 0.014, mats.burlap);
     for (let c = 0; c < 4; c++) {
-      const cz = 2.4 + c * 0.28;
-      addLaundryCloth(-13.2 - c * 1.7, 3.82, cz, -1, true);
+      addLaundryCloth(-13.2 - c * 1.7, 3.86, 5.52, -1, true);
     }
     // dumpster, crates, trash, tires, pallet
     dumpster(-15.2, 4.9, 1.55);
@@ -1149,16 +1580,13 @@ export function createLevel(engine) {
     pallet(-17.6, 1.4, 1.2);
     crate(-18.8, 2.4, 0.9, 0.4);
     crate(-19.4, 3.1, 0.7, 1.1, 0.75);
-    tireStack(-12.8, 1.2, 3);
+    tireStack(-20.4, 5.2, 3);
     addRubble(-18.6, 5.2, 1.5, 22);
     addWeeds(-20.5, 1.4, 3);
     addWeeds(-11.5, 4.6, 3);
     addPuddles([[-14.2, 2.2, 1.1, 0.55], [-19.4, 4.6, 0.8, 0.5]]);
-    // side door on the south wall
-    meshBox(0.1, 2.0, 1.0, mats.metal, -12.4, 1.1, z0 + 0.06, 0, { uv: 0.9, cast: false });
-    meshBox(0.2, 0.12, 1.2, mats.concreteDark, -12.4, 2.16, z0 + 0.06, 0, { uv: 0.8, cast: false });
     // barred side windows + a big faded painted ad break up the blank alley wall
-    for (const [wx2, wy2] of [[-14.2, 4.6], [-16.4, 7.4], [-18.6, 4.7]]) {
+    for (const [wx2, wy2] of [[-18.6, 4.7], [-20.6, 7.4]]) {
       const cav2 = new THREE.Mesh(new THREE.BoxGeometry(0.34, 1.2, 1.0), mats.interior);
       cav2.position.set(wx2, wy2, z0 - 0.17);
       statics.add(cav2);
@@ -1170,11 +1598,11 @@ export function createLevel(engine) {
       meshBox(1.2, 0.1, 0.18, mats.concreteDark, wx2, wy2 + 0.68, z0 + 0.05, 0, { uv: 0.8, cast: false });
       addGrime(-1, wx2, wy2 - 1.0, z0 + 0.005, 1.1, 0.9, 0, Math.PI);
     }
-    const ad = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 1.5), mats.signC);
-    ad.position.set(-15.6, 2.5, z0 + 0.035);
+    const ad = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 1.3), mats.signC);
+    ad.position.set(-19.2, 2.5, z0 + 0.035);
     statics.add(ad);
-    meshCyl(0.045, 0.045, 8.5, 6, mats.rust, -14.8, 0.9, z0 + 0.09, { rz: Math.PI / 2, cast: false });
-    for (const zz of [-12.8, -17.8]) meshCyl(0.045, 0.045, 2.6, 6, mats.rust, zz, 1.3, z0 + 0.09, { cast: false });
+    meshCyl(0.045, 0.045, 8.5, 6, mats.rust, -18.4, 0.9, z0 + 0.09, { rz: Math.PI / 2, cast: false });
+    for (const zz of [-17.8, -20.4]) meshCyl(0.045, 0.045, 2.6, 6, mats.rust, zz, 1.3, z0 + 0.09, { cast: false });
   }
 
   /* ------------------------------------------------------------------ gatehouse */
@@ -1783,6 +2211,10 @@ export function createLevel(engine) {
       t.position.set(x + rr(-0.12, 0.12), 0.15 + i * 0.28, z + rr(-0.12, 0.12));
       t.castShadow = true;
       statics.add(t);
+      const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.13, 10), mats.metalTan);
+      rim.rotation.copy(t.rotation);
+      rim.position.copy(t.position);
+      statics.add(rim);
     }
     addCollider(x, z, 0.9, 0.9, 0.02);
     blob(x, z, 0.5, 0.5, 0.38);
@@ -1794,6 +2226,10 @@ export function createLevel(engine) {
     t.position.set(x, 0.15, z);
     t.castShadow = true;
     statics.add(t);
+    const rim = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.14, 10), mats.metalTan);
+    rim.rotation.copy(t.rotation);
+    rim.position.copy(t.position);
+    statics.add(rim);
   }
 
   function addTrashPile(cz, side, spread = 1.4) {
@@ -2150,7 +2586,7 @@ export function createLevel(engine) {
     // left side
     { side: -1, z0: 26, z1: 54, depth: 14, h: 19, detail: 'high', plaster: mats.plasterB, ground: 'wall', bays: 7 },
     { side: -1, z0: 6, z1: 26, depth: 15, h: 22, detail: 'high', plaster: mats.plasterA, ground: 'shutter', bays: 6 },
-    { side: -1, z0: -16, z1: 0, depth: 15, h: 16, detail: 'high', plaster: mats.plasterC, ground: 'shop', bays: 5 },
+    { side: -1, z0: -16, z1: 0, depth: 15, h: 16, detail: 'high', plaster: mats.plasterC, ground: 'shop', bays: 5, interior: 'workshop' },
     { side: -1, z0: -36, z1: -16, depth: 14, h: 25, detail: 'high', plaster: mats.plasterB, ground: 'shop', bays: 6 },
     { side: -1, z0: -54, z1: -36, depth: 13, h: 18, detail: 'mid', plaster: mats.plasterA, facade: 'C', ground: 'wall', balconies: 2 },
     { side: -1, z0: -66, z1: -54, depth: 15, h: 20, detail: 'ruin', plaster: mats.plasterB, ground: 'wall' },
@@ -2158,7 +2594,7 @@ export function createLevel(engine) {
     { side: 1, z0: 30, z1: 56, depth: 15, h: 22, detail: 'high', plaster: mats.plasterA, ground: 'shutter', bays: 7 },
     { side: 1, z0: 12, z1: 30, depth: 16, h: 15, detail: 'high', plaster: mats.plasterA, ground: 'shop', bays: 6 },
     { side: 1, z0: -6, z1: 12, depth: 15, h: 24, detail: 'high', plaster: mats.plasterB, ground: 'door', bays: 6 },
-    { side: 1, z0: -26, z1: -6, depth: 14, h: 18, detail: 'high', plaster: mats.plasterC, ground: 'shop', bays: 6 },
+    { side: 1, z0: -26, z1: -6, depth: 14, h: 18, detail: 'high', plaster: mats.plasterC, ground: 'shop', bays: 6, interior: 'apartment' },
     { side: 1, z0: -46, z1: -26, depth: 15, h: 21, detail: 'mid', plaster: mats.plasterB, facade: 'D', ground: 'wall', balconies: 2 },
     { side: 1, z0: -64, z1: -46, depth: 14, h: 13, detail: 'ruin', plaster: mats.plasterA, ground: 'wall' },
   ];
@@ -2360,8 +2796,8 @@ export function createLevel(engine) {
 
   /* ------------------------------------------------------------------ spawns */
   spawnPoints.push(
-    { x: 0, z: -61 }, { x: -4, z: -58 }, { x: 4.5, z: -60 },
-    { x: -7.2, z: -46 }, { x: 6.8, z: -40 }, { x: -6.0, z: -31 },
+    { x: 0, z: -61 }, { x: -1.6, z: -57.2 }, { x: 4.5, z: -60 },
+    { x: -5.5, z: -45.4 }, { x: 6.8, z: -40 }, { x: -6.0, z: -31 },
     { x: 6.4, z: -18 }, { x: -7.4, z: -4 }, { x: 7.2, z: 4 },
     { x: -6.8, z: 14 }, { x: 6.6, z: 24 }, { x: 0, z: -48 },
     { x: -15.5, z: 3.2 }
@@ -2374,6 +2810,39 @@ export function createLevel(engine) {
     { x: -6.9, z: -34.5, h: true }, { x: 6.2, z: -46.5, h: false },
     { x: -14.2, z: 2.2, h: true }, { x: 0.9, z: -27.2, h: true }
   );
+
+  /* ---- CQB zones + objective zones (Sprint B) ------------------------------
+     Two enterable single-storey rooms carved into L3 (alley workshop) and R4
+     (street apartment). Coordinates are the authoritative gameplay data. */
+  const cqbZones = [
+    {
+      id: 'alley-workshop',
+      name: '巷内工坊',
+      entry: { x: -12.2, z: 1.1 },
+      center: { x: -13.3, z: -2.5 },
+      radius: 3.6,
+      spawns: [{ x: -14.7, z: -1.8 }, { x: -11.5, z: -1.5 }],
+      covers: [{ x: -15.35, z: -3.4, h: true }, { x: -11.6, z: -4.15, h: false }],
+    },
+    {
+      id: 'street-apartment',
+      name: '临街公寓',
+      entry: { x: 9.0, z: -12.0 },
+      center: { x: 13.3, z: -11.6 },
+      radius: 4.2,
+      spawns: [{ x: 14.6, z: -10.4 }, { x: 11.5, z: -8.2 }],
+      covers: [{ x: 15.8, z: -12.9, h: true }, { x: 14.0, z: -9.5, h: false }],
+    },
+  ];
+  const objectiveZones = {
+    defend: { x: 0, z: -16, r: 8.5 },
+    extract: { x: -19.2, z: 3.0, r: 3.5 },
+  };
+  // expose the interior combat points through the legacy arrays too
+  for (const z of cqbZones) {
+    for (const sp of z.spawns) spawnPoints.push({ x: sp.x, z: sp.z });
+    for (const cv of z.covers) coverPoints.push({ x: cv.x, z: cv.z, h: cv.h });
+  }
 
   /* ------------------------------------------------------------------ update */
   let time = 0;
@@ -2419,6 +2888,7 @@ export function createLevel(engine) {
   return {
     root, colliders, bulletTargets, spawnPoints, coverPoints,
     bounds: { x0: -22, x1: 22, z0: -64, z1: 52 },
+    cqbZones, objectiveZones,
     update, fires,
   };
 }

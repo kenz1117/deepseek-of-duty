@@ -8,6 +8,7 @@ import { createHUD } from './ui/hud.js';
 import { createInput } from './core/input.js';
 import { createController } from './player/controller.js';
 import { Enemy } from './entities/enemy.js';
+import { loadSettings, saveSettings, sanitizeSettings, tutorialDone, markTutorialDone, DEFAULT_SETTINGS } from './core/settings.js';
 
 /* =========================================================================
    DEEPSEEK OF DUTY — browser vertical slice.
@@ -44,12 +45,19 @@ const G = {
   freezeEnemies: false, debugWaves: false, hitStop: 0, lockHint: false, debugAutoFire: false,
   readyFrames: 0, ready: false,
   hurtTimer: 0,
+  settings: { ...DEFAULT_SETTINGS },
+  upgrades: { damage: 1, fireRate: 1, mag: 1, speed: 0, regen: 1, grenades: 0, health: 0 },
+  upgradeCards: [], upgradeShown: false,
+  tutorial: { active: false, step: 0, t: 0, stepT: 0, done: false, lastX: 0, lastZ: 0 },
+  shotsFired: 0, regenRate: 26, atmosphere: 'dusk',
+  mode: 'survival', objective: null,
 };
 
 let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass;
 const enemies = [];
 const grenades = [];
 let raycaster, clock;
+let beacon = null;
 let sunOccluded = false, sunOcclusionTimer = 0;
 const _sunRay = new THREE.Raycaster();
 let lastTime = 0;
@@ -69,12 +77,420 @@ function setLoading(p, text) {
 const nextFrame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
 /* ------------------------------------------------------------------ boot */
+
+/* =========================================================================
+   Sprint: settings, wave upgrades, tutorial, atmosphere presets and
+   archetype direction. All of this is plain state on G so the debug API can
+   drive it from the headless screenshot harness.
+   ========================================================================= */
+
+const ATM_ORDER = ['dusk', 'noon', 'storm', 'bluehour'];
+
+function magCap(w) {
+  return Math.max(1, Math.round(w.magSize * G.upgrades.mag));
+}
+
+function applyAtmosphereForWave(n) {
+  const key = ATM_ORDER[(Math.max(1, n) - 1) % ATM_ORDER.length];
+  G.atmosphere = key;
+  if (!engine || !engine.applyAtmosphere) return;
+  const label = engine.applyAtmosphere(key);
+  if (hud && hud.setAtmosphere) hud.setAtmosphere(label);
+}
+
+function chooseArchetype(wave, index) {
+  const r = Math.random();
+  if (wave <= 2) return 'rifleman';
+  if (wave <= 4) return r < 0.30 ? 'rusher' : 'rifleman';
+  if (wave <= 6) {
+    if (r < 0.16) return 'shield';
+    if (r < 0.38) return 'rusher';
+    if (r < 0.50) return 'sniper';
+    return 'rifleman';
+  }
+  if (r < 0.28) return 'rusher';
+  if (r < 0.44) return 'shield';
+  if (r < 0.58) return 'sniper';
+  return 'rifleman';
+}
+
+/* --------------------------------------------------------------- settings */
+function applySettings(initial = false) {
+  if (!input || !controller) return;
+  input.sensitivity = G.settings.sensitivity;
+  controller.adsSensitivity = G.settings.adsSens;
+  controller.invertY = G.settings.invertY;
+  controller.baseFov = G.settings.fov;
+  controller.reduceMotion = G.settings.reduceMotion;
+  if (audio && audio.ctx && audio.setMasterVolume) audio.setMasterVolume(G.settings.master);
+  if (initial && engine) engine.setQuality(G.settings.quality);
+  syncQualityPills();
+}
+
+function onSettingChange(key, value) {
+  G.settings[key] = value;
+  Object.assign(G.settings, sanitizeSettings(G.settings));
+  saveSettings(G.settings);
+  if (key === 'quality' && engine) {
+    engine.setQuality(G.settings.quality);
+    onResize();
+  }
+  applySettings(false);
+}
+
+function syncQualityPills() {
+  for (const b of document.querySelectorAll('.quality-pills button')) {
+    b.classList.toggle('active', (b.dataset.q || b.dataset.pq) === G.settings.quality);
+  }
+}
+
+function openSettings() {
+  if (hud && hud.openSettings) hud.openSettings();
+  if (G.state === 'playing') {
+    G.state = 'paused';
+    pauseEl.classList.remove('hidden');
+    input.unlock();
+  }
+  if (audio && audio.ctx) audio.ui();
+}
+
+/* ---------------------------------------------------------------- upgrades */
+const UPGRADE_POOL = [
+  { id: 'damage',   title: '火力强化', desc: '武器伤害 +15%', icon: 'DMG', apply() { G.upgrades.damage += 0.15; } },
+  { id: 'firerate', title: '高速循环', desc: '射速 +12%',     icon: 'RPM', apply() { G.upgrades.fireRate += 0.12; } },
+  { id: 'mag',      title: '扩容弹匣', desc: '弹匣容量 +15%', icon: 'MAG', apply() { G.upgrades.mag += 0.15; } },
+  { id: 'armor',    title: '护甲板',   desc: '护甲上限 +20，并补 20', icon: 'ARM', apply() { G.maxArmor += 20; G.armor = Math.min(G.maxArmor, G.armor + 20); } },
+  { id: 'speed',    title: '轻装',     desc: '移动速度 +8%',  icon: 'SPD', apply() { G.upgrades.speed += 0.08; } },
+  { id: 'regen',    title: '战地急救', desc: '回血速度 +35%', icon: 'MED', apply() { G.upgrades.regen += 0.35; } },
+  { id: 'grenade',  title: '额外投掷物', desc: '手雷 +1',     icon: 'FRG', apply() { G.upgrades.grenades += 1; } },
+  { id: 'health',   title: '强健体质', desc: '生命上限 +20，并回复 20', icon: 'HP', apply() { G.maxHp += 20; G.hp = Math.min(G.maxHp, G.hp + 20); } },
+];
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function openUpgradeChoice(force = false) {
+  if ((SHOT_MODE && !force) || !hud || !hud.showUpgrades) {
+    startWave(G.wave + 1);
+    return;
+  }
+  G.state = 'upgrade';
+  G.upgradeT = 0;
+  hideObjectiveUI();
+  G.upgradeCards = shuffle(UPGRADE_POOL.slice()).slice(0, 3).map((u, i) => ({ ...u, key: String(i + 1) }));
+  hud.showUpgrades(G.upgradeCards, handleUpgradePick);
+  input.unlock();
+}
+
+function handleUpgradePick(idOrIndex) {
+  const idx = typeof idOrIndex === 'number'
+    ? idOrIndex
+    : G.upgradeCards.findIndex((c) => c.id === idOrIndex);
+  if (idx >= 0) pickUpgrade(idx);
+}
+
+function pickUpgrade(index) {
+  if (G.state !== 'upgrade') return;
+  const card = G.upgradeCards[index];
+  if (!card) return;
+  card.apply();
+  if (card.id === 'mag') {
+    const w = currentWeapon();
+    const cap = magCap(w);
+    const add = Math.max(0, cap - G.mag);
+    G.mag += add;
+    G.weaponAmmo[G.weaponIndex] = { mag: G.mag, reserve: G.reserve };
+    if (hud.setWeaponName) hud.setWeaponName(w.name, cap, w.mode);
+    if (hud.setAmmo) hud.setAmmo(G.mag, G.reserve, w.name, w.mode);
+  }
+  if (card.id === 'armor' || card.id === 'health') hud.setHealth(G.hp, pipsFor(G.armor));
+  if (card.id === 'grenade') hud.setGrenades(G.grenades);
+  if (card.id === 'speed') controller.speedMult = 1 + G.upgrades.speed;
+  if (card.id === 'regen') G.regenRate = 26 * G.upgrades.regen;
+  G.upgradeCards = [];
+  if (hud.hideUpgrades) hud.hideUpgrades();
+  G.state = 'playing';
+  if (audio && audio.ctx) audio.uiConfirm();
+  startWave(G.wave + 1);
+  if (!SHOT_MODE) input.lock();
+}
+
+/* ---------------------------------------------------------------- tutorial */
+const TUTORIAL_STEPS = [
+  { text: 'WASD 移动 · SHIFT 冲刺', key: 'WASD' },
+  { text: '鼠标左键射击', key: 'LMB' },
+  { text: '鼠标右键瞄准（按住）', key: 'RMB' },
+  { text: 'R 换弹 · G 手雷', key: 'R / G' },
+];
+
+function beginTutorial(force = false) {
+  if (G.tutorial.done || (SHOT_MODE && !force)) return;
+  G.tutorial.active = true;
+  G.tutorial.step = 0;
+  G.tutorial.stepT = 0;
+  G.tutorial.lastX = controller.pos.x;
+  G.tutorial.lastZ = controller.pos.z;
+  if (hud.showTutorial) hud.showTutorial(TUTORIAL_STEPS[0].text, TUTORIAL_STEPS[0].key);
+}
+
+function updateTutorial(dt) {
+  const t = G.tutorial;
+  if (!t.active) return;
+  t.t += dt;
+  t.stepT += dt;
+  const step = TUTORIAL_STEPS[t.step];
+  if (!step) { finishTutorial(); return; }
+  const moved = Math.hypot(controller.pos.x - t.lastX, controller.pos.z - t.lastZ);
+  let done = t.stepT > 5.0;
+  if (t.step === 0 && moved > 3) done = true;
+  if (t.step === 1 && G.shotsFired >= 3) done = true;
+  if (t.step === 2 && controller.adsAmount > 0.6) done = true;
+  if (done) {
+    t.step++;
+    t.stepT = 0;
+    if (t.step >= TUTORIAL_STEPS.length) finishTutorial();
+    else if (hud.showTutorial) hud.showTutorial(TUTORIAL_STEPS[t.step].text, TUTORIAL_STEPS[t.step].key);
+  }
+}
+
+function finishTutorial() {
+  G.tutorial.active = false;
+  G.tutorial.done = true;
+  markTutorialDone();
+  if (hud.hideTutorial) hud.hideTutorial();
+}
+
+
+/* =========================================================================
+   Sprint B: objective modes. Defend holds a zone for 60s while the director
+   reinforces; Extract clears the wave then asks the player to reach the alley
+   zone and hold for 8s. Both reuse the same wave/upgrade loop.
+   ========================================================================= */
+
+function modeForWave(n) {
+  if (n % 5 === 0) return 'extract';
+  if (n % 3 === 0) return 'defend';
+  return 'survival';
+}
+
+function objectiveZone(kind) {
+  const base = level && level.objectiveZones && level.objectiveZones[kind];
+  // Objective remix: the zone moves between street / start / alley / interiors.
+  const spots = kind === 'defend'
+    ? [
+        (base && typeof base.x === 'number') ? base : { x: 0, z: -16, r: 8.5 },
+        { x: 0, z: 14, r: 8.0 },
+        { x: -14, z: 2.5, r: 3.8 },
+      ]
+    : [
+        (base && typeof base.x === 'number') ? base : { x: -19.2, z: 3.0, r: 3.5 },
+        { x: -13.3, z: -2.5, r: 2.7 },
+        { x: 13.3, z: -11.6, r: 3.0 },
+      ];
+  const idx = kind === 'defend'
+    ? Math.floor((G.wave || 1) / 3) % spots.length
+    : Math.floor((G.wave || 1) / 5) % spots.length;
+  return spots[idx];
+}
+
+function setupObjective(n) {
+  const mode = modeForWave(n);
+  G.mode = mode;
+  G.objective = null;
+  if (mode === 'survival') { hideObjectiveUI(); return; }
+  const zone = objectiveZone(mode === 'defend' ? 'defend' : 'extract');
+  G.objective = {
+    type: mode,
+    zone,
+    need: mode === 'defend' ? 60 : 8,
+    hold: 0,
+    done: false,
+    ready: mode === 'defend',
+    inside: false,
+  };
+  if (hud && hud.setMode) hud.setMode(mode.toUpperCase(), mode === 'defend' ? 'HOLD THE ZONE' : 'CLEAR THE AREA, THEN EXTRACT');
+  showBeacon(zone, mode);
+}
+
+function isSpawnAllowed(sp) {
+  if (!level || !level.cqbZones) return true;
+  for (const z of level.cqbZones) {
+    const dZone = Math.hypot(sp.x - z.center.x, sp.z - z.center.z);
+    if (dZone < (z.radius || 4) + 4.5) {
+      // interior spawn: only use it when the player is fighting near that room
+      const dPlayer = Math.hypot(controller.pos.x - z.center.x, controller.pos.z - z.center.z);
+      return dPlayer < 14;
+    }
+  }
+  return true;
+}
+
+function spawnReinforcements(count) {
+  if (!level || !level.spawnPoints || !level.spawnPoints.length) return;
+  const p = controller.pos;
+  for (let i = 0; i < count; i++) {
+    let best = null, bestD = -1;
+    for (let k = 0; k < 4; k++) {
+      const allowed = level.spawnPoints.filter(isSpawnAllowed);
+      const src = allowed.length ? allowed : level.spawnPoints;
+      const sp = src[(Math.random() * src.length) | 0];
+      const d = Math.hypot(sp.x - p.x, sp.z - p.z);
+      if (d > bestD) { bestD = d; best = sp; }
+    }
+    if (!best) break;
+    G.spawnQueue.push({
+      x: best.x + (Math.random() - 0.5) * 1.4,
+      z: best.z + (Math.random() - 0.5) * 1.4,
+      type: chooseArchetype(G.wave, i),
+    });
+  }
+  G.waveRemaining += count;
+  G.waveTotal += count;
+}
+
+function onObjectiveDone() {
+  const obj = G.objective;
+  if (!obj || obj.done) return;
+  obj.done = true;
+  if (hud && hud.setHint) hud.setHint(obj.type === 'defend' ? 'ZONE SECURED' : 'EXTRACTED');
+  if (audio && audio.ctx) audio.uiConfirm();
+  if (beacon) {
+    beacon.done = true;
+    beacon.ringMat.color.setHex(0x9dffa8);
+    beacon.colMat.color.setHex(0x9dffa8);
+    beacon.markerMat.color.setHex(0x9dffa8);
+  }
+}
+
+function updateObjective(dt) {
+  const obj = G.objective;
+  if (!obj) return;
+  const p = controller.pos;
+  const dist = Math.hypot(p.x - obj.zone.x, p.z - obj.zone.z);
+  obj.inside = dist <= obj.zone.r;
+
+  if (obj.type === 'defend') {
+    if (!obj.done) {
+      if (obj.inside) obj.hold = Math.min(obj.need, obj.hold + dt);
+      else obj.hold = Math.max(0, obj.hold - dt * 0.6);
+      if (obj.hold >= obj.need) onObjectiveDone();
+    }
+  } else if (obj.type === 'extract') {
+    if (!obj.ready) {
+      const clear = G.waveRemaining <= 0 && G.spawnQueue.length === 0 && enemies.every((e) => !e.alive);
+      if (clear) {
+        obj.ready = true;
+        if (hud && hud.setHint) hud.setHint('AREA CLEAR — EXTRACT');
+        if (hud && hud.setMode) hud.setMode('EXTRACT', 'REACH THE ZONE');
+      }
+    } else if (!obj.done && obj.inside) {
+      obj.hold = Math.min(obj.need, obj.hold + dt);
+      if (obj.hold >= obj.need) onObjectiveDone();
+    }
+  }
+
+  if (hud && hud.setModeProgress) {
+    const pct = obj.need ? obj.hold / obj.need : 0;
+    let text;
+    if (obj.done) text = obj.type === 'defend' ? 'ZONE SECURED' : 'EXTRACTED';
+    else if (obj.type === 'defend') text = `${Math.ceil(obj.hold)} / ${obj.need}s · ${obj.inside ? 'HOLDING' : 'RETURN TO ZONE'}`;
+    else if (!obj.ready) text = 'CLEAR THE AREA';
+    else text = `${obj.hold.toFixed(1)} / ${obj.need}s · ${obj.inside ? 'EXTRACTING' : 'REACH THE ZONE'}`;
+    const active = obj.done || (obj.type === 'defend' ? obj.inside : (obj.ready && obj.inside));
+    hud.setModeProgress(pct, text, active);
+  }
+  if (hud && hud.setZoneDistance) hud.setZoneDistance(!obj.inside && !obj.done ? dist : null);
+}
+
+function ensureBeacon() {
+  if (beacon || !engine) return;
+  const group = new THREE.Group();
+  const ringMat = new THREE.MeshBasicMaterial({
+    color: 0xffb25e, transparent: true, opacity: 0.45,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.975, 1, 64), ringMat);
+  ring.rotation.x = -Math.PI / 2;
+  ring.position.y = 0.06;
+  group.add(ring);
+  const colMat = new THREE.MeshBasicMaterial({
+    color: 0xffb25e, transparent: true, opacity: 0.08,
+    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, depthTest: false,
+  });
+  const col = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 10.0, 20, 1, true), colMat);
+  col.position.y = 5.0;
+  col.renderOrder = 8;
+  group.add(col);
+  const markerMat = new THREE.MeshBasicMaterial({
+    color: 0xffb25e, transparent: true, opacity: 0.85,
+    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
+  });
+  const marker = new THREE.Mesh(new THREE.OctahedronGeometry(0.62, 0), markerMat);
+  marker.position.y = 7.6;
+  marker.renderOrder = 8;
+  group.add(marker);
+  group.visible = false;
+  group.renderOrder = 8;
+  engine.scene.add(group);
+  beacon = { group, ring, col, marker, ringMat, colMat, markerMat, t: 0, done: false };
+}
+
+function showBeacon(zone, mode) {
+  ensureBeacon();
+  if (!beacon) return;
+  beacon.group.visible = true;
+  beacon.group.position.set(zone.x, 0, zone.z);
+  beacon.ring.scale.set(zone.r, zone.r, 1);
+  beacon.done = false;
+  beacon.zone = zone;
+  beacon.col.visible = true;
+  beacon.marker.visible = true;
+  const c = mode === 'extract' ? 0x55d6e0 : 0xffb25e;
+  beacon.ringMat.color.setHex(c);
+  beacon.colMat.color.setHex(c);
+  beacon.markerMat.color.setHex(c);
+}
+
+function hideObjectiveUI() {
+  if (beacon) beacon.group.visible = false;
+  if (!hud) return;
+  if (hud.hideMode) hud.hideMode();
+  if (hud.setModeProgress) hud.setModeProgress(0, '', false);
+  if (hud.setZoneDistance) hud.setZoneDistance(null);
+}
+
+function updateBeacon(dt) {
+  if (!beacon || !beacon.group.visible) return;
+  beacon.t += dt;
+  if (beacon.zone) {
+    const cam = engine.camera.position;
+    const d = Math.hypot(cam.x - beacon.zone.x, cam.z - beacon.zone.z);
+    const close = d < beacon.zone.r + 1.2;
+    beacon.col.visible = !close;
+    beacon.marker.visible = !close;
+  }
+  const pulse = 0.5 + 0.5 * Math.sin(beacon.t * 3.2);
+  beacon.ringMat.opacity = (beacon.done ? 0.55 : 0.32) + pulse * 0.22;
+  beacon.colMat.opacity = (beacon.done ? 0.18 : 0.11) + pulse * 0.07;
+  beacon.markerMat.opacity = 0.65 + pulse * 0.3;
+  beacon.ring.rotation.z += dt * 0.25;
+  beacon.marker.rotation.y += dt * 1.4;
+  beacon.marker.position.y = 7.6 + Math.sin(beacon.t * 2.2) * 0.22;
+}
+
 async function boot() {
   try {
     setLoading(0.05, '初始化渲染器…');
     await nextFrame();
 
-    engine = createEngine(document.getElementById('gl'), 'high');
+    G.settings = loadSettings();
+    G.tutorial.done = tutorialDone();
+    engine = createEngine(document.getElementById('gl'), G.settings.quality);
     setLoading(0.34, '生成程序化 PBR 材质与大气…');
     await nextFrame();
 
@@ -91,6 +507,8 @@ async function boot() {
     hud = createHUD();
     input = createInput(engine.renderer.domElement);
     controller = createController(engine.camera, level.colliders, level.bounds, audio);
+    if (hud.bindSettings) hud.bindSettings(G.settings, onSettingChange);
+    applySettings(true);
     raycaster = new THREE.Raycaster();
     raycaster.far = 160;
     setupEnemyCtx();
@@ -100,6 +518,7 @@ async function boot() {
 
     document.getElementById('deploy').addEventListener('click', () => {
       audio.init();
+      audio.setMasterVolume(G.settings.master);
       initAudioAmbience();
       startGame(true);
     });
@@ -127,14 +546,20 @@ async function boot() {
     for (const b of document.querySelectorAll('.quality-pills button')) {
       b.addEventListener('click', () => {
         const q = b.dataset.q || b.dataset.pq;
+        G.settings.quality = q;
+        saveSettings(G.settings);
         engine.setQuality(q);
         onResize();
-        for (const other of document.querySelectorAll(`.quality-pills button`)) {
-          other.classList.toggle('active', (other.dataset.q || other.dataset.pq) === q);
-        }
+        syncQualityPills();
         audio.init(); audio.ui();
       });
     }
+
+    document.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest ? e.target.closest('[data-open-settings]') : null;
+      if (btn) openSettings();
+    });
+    window.addEventListener('dod-settings-close', () => { if (hud.closeSettings) hud.closeSettings(); });
 
     input.on('unlock', () => {
       if (SHOT_MODE) return;
@@ -152,7 +577,15 @@ async function boot() {
     });
     input.on('key', (code) => {
       if (code === 'Escape') {
+        const openNow = typeof hud.isSettingsOpen === 'function' ? hud.isSettingsOpen() : !!hud.isSettingsOpen;
+        if (openNow) { if (hud.closeSettings) hud.closeSettings(); return; }
         if (G.state === 'playing') { G.state = 'paused'; pauseEl.classList.remove('hidden'); input.unlock(); }
+      }
+      if (G.state === 'upgrade') {
+        if (code === 'Digit1') pickUpgrade(0);
+        else if (code === 'Digit2') pickUpgrade(1);
+        else if (code === 'Digit3') pickUpgrade(2);
+        return;
       }
       if (G.state !== 'playing') return;
       if (code === 'KeyR') reload();
@@ -213,6 +646,7 @@ function startGame(lock = true, silent = false) {
   if (!silent) audio.uiConfirm();
   if (lock) input.lock();
   startWave(1);
+  if (!SHOT_MODE && !G.tutorial.done) beginTutorial();
   hudEl.classList.toggle('hidden', HIDE_HUD);
   if (!SHOT_MODE) {
     const hint = document.getElementById('hint');
@@ -221,6 +655,18 @@ function startGame(lock = true, silent = false) {
 }
 
 function resetGame() {
+  G.maxHp = 100;
+  G.maxArmor = 60;
+  G.upgrades = { damage: 1, fireRate: 1, mag: 1, speed: 0, regen: 1, grenades: 0, health: 0 };
+  G.regenRate = 26;
+  G.shotsFired = 0;
+  G.upgradeShown = false;
+  G.upgradeCards = [];
+  G.mode = 'survival';
+  G.objective = null;
+  hideObjectiveUI();
+  if (controller) controller.speedMult = 1;
+  if (hud && hud.hideUpgrades) hud.hideUpgrades();
   G.hp = G.maxHp;
   G.armor = G.maxArmor;
   G.score = 0;
@@ -237,15 +683,15 @@ function resetGame() {
   G.sinceDamage = 99;
   G.time = 0;
   G.weaponIndex = 0;
-  G.weaponAmmo = [{ mag: WEAPONS[0].magSize, reserve: WEAPONS[0].reserve }, { mag: WEAPONS[1].magSize, reserve: WEAPONS[1].reserve }];
-  G.mag = WEAPONS[0].magSize;
+  G.weaponAmmo = [{ mag: magCap(WEAPONS[0]), reserve: WEAPONS[0].reserve }, { mag: magCap(WEAPONS[1]), reserve: WEAPONS[1].reserve }];
+  G.mag = magCap(WEAPONS[0]);
   G.reserve = WEAPONS[0].reserve;
   for (const e of enemies) e.root.visible = false;
   enemies.length = 0;
   for (const g of grenades) engine.scene.remove(g.mesh);
   grenades.length = 0;
   hud.reset();
-  hud.setWeaponName(WEAPONS[0].name, WEAPONS[0].magSize, WEAPONS[0].mode);
+  hud.setWeaponName(WEAPONS[0].name, magCap(WEAPONS[0]), WEAPONS[0].mode);
   hud.setAmmo(G.mag, G.reserve, WEAPONS[0].name, WEAPONS[0].mode);
   hud.setHealth(G.hp, pipsFor(G.armor));
   hud.setScore(0, 0);
@@ -258,28 +704,44 @@ function pipsFor(armor) { return Math.ceil(armor / 20); }
 /* ------------------------------------------------------------------ waves */
 function startWave(n) {
   G.wave = n;
+  G.upgradeShown = false;
+  applyAtmosphereForWave(n);
+  setupObjective(n);
   const total = Math.min(11, 3 + n);
   G.waveTotal = total;
   G.waveRemaining = total;
   G.spawnQueue = [];
   const playerPos = controller.pos;
-  const pool = level.spawnPoints.slice();
+  const allowedSpawns = level.spawnPoints.filter(isSpawnAllowed);
+  const pool = (allowedSpawns.length ? allowedSpawns : level.spawnPoints).slice();
+  const objZone = G.objective ? G.objective.zone : null;
   for (let i = 0; i < total; i++) {
-    // prefer far spawn points
-    let best = null, bestD = -1;
-    for (let k = 0; k < 4; k++) {
-      const p = pool[Math.floor(Math.random() * pool.length)];
-      const d = Math.hypot(p.x - playerPos.x, p.z - playerPos.z);
-      if (d > bestD) { bestD = d; best = p; }
+    let best = null;
+    if (objZone) {
+      // objective modes: spawn 7-30 m around the zone so pressure arrives
+      const near = pool.filter((p) => {
+        const d = Math.hypot(p.x - objZone.x, p.z - objZone.z);
+        return d > 7 && d < 30;
+      });
+      const src = near.length ? near : pool;
+      best = src[Math.floor(Math.random() * src.length)];
+    } else {
+      // survival: prefer far spawn points for the walk-in
+      let bestD = -1;
+      for (let k = 0; k < 4; k++) {
+        const p = pool[Math.floor(Math.random() * pool.length)];
+        const d = Math.hypot(p.x - playerPos.x, p.z - playerPos.z);
+        if (d > bestD) { bestD = d; best = p; }
+      }
     }
-    G.spawnQueue.push({ x: best.x + (Math.random() - 0.5) * 2.2, z: best.z + (Math.random() - 0.5) * 2.2 });
+    G.spawnQueue.push({ x: best.x + (Math.random() - 0.5) * 2.2, z: best.z + (Math.random() - 0.5) * 2.2, type: chooseArchetype(n, i) });
   }
   G.spawnTimer = 0.8;
   G.waveClearTimer = 0;
   hud.setWave(n);
   hud.setWaveProgress(0);
   hud.setObjective(`清剿残敌 · 剩余 ${total}`);
-  hud.setHint('WAVE ' + n);
+  hud.setHint('WAVE ' + n + (G.mode === 'defend' ? ' · DEFEND' : G.mode === 'extract' ? ' · EXTRACT' : ''));
   setTimeout(() => hud.setHint(''), 1400);
 }
 
@@ -292,6 +754,7 @@ function spawnEnemy(pos) {
   }
   const playerPos = controller.pos;
   const yaw = Math.atan2(-(playerPos.x - pos.x), -(playerPos.z - pos.z));
+  if (e.setArchetype) e.setArchetype(pos.type || 'rifleman');
   e.spawn(pos.x, pos.z, yaw);
   e.root.visible = true;
   if (SHOT_MODE) e.state = 'engage';
@@ -310,6 +773,21 @@ function updateWaves(dt) {
   }
   const alive = enemies.filter((e) => e.alive).length;
   if (G.waveRemaining <= 0 && G.spawnQueue.length === 0 && alive === 0) {
+    const obj = G.objective;
+    if (obj && !obj.done) {
+      if (obj.type === 'defend') {
+        spawnReinforcements(2);
+        return;
+      }
+      if (obj.type === 'extract') {
+        if (!obj.ready) {
+          obj.ready = true;
+          if (hud.setHint) hud.setHint('AREA CLEAR — EXTRACT');
+          if (hud.setMode) hud.setMode('EXTRACT', 'REACH THE ZONE');
+        }
+        return;
+      }
+    }
     if (G.waveClearTimer === 0) {
       G.waveClearTimer = 0.001;
       hud.setHint('WAVE CLEARED');
@@ -317,17 +795,17 @@ function updateWaves(dt) {
       hud.setScore(G.score, G.kills);
       // resupply between waves
       const w = currentWeapon();
-      G.mag = w.magSize;
+      G.mag = magCap(w);
       G.reserve = w.reserve;
       G.weaponAmmo[G.weaponIndex] = { mag: G.mag, reserve: G.reserve };
       hud.setAmmo(G.mag, G.reserve, w.name, w.mode);
-      G.grenades = Math.min(3, G.grenades + 1);
+      G.grenades = Math.min(5, G.grenades + 1);
       hud.setGrenades(G.grenades);
     }
     G.waveClearTimer += dt;
-    if (G.waveClearTimer > 4.0) {
-      G.waveClearTimer = 0;
-      startWave(G.wave + 1);
+    if (!G.upgradeShown && G.waveClearTimer > 1.0) {
+      G.upgradeShown = true;
+      openUpgradeChoice();
     }
   }
   hud.setWaveProgress(1 - G.waveRemaining / Math.max(1, G.waveTotal));
@@ -351,11 +829,11 @@ function switchWeapon(i) {
   G.weaponAmmo[G.weaponIndex] = { mag: G.mag, reserve: G.reserve };
   G.weaponIndex = i;
   const w = WEAPONS[i];
-  const a = G.weaponAmmo[i] || { mag: w.magSize, reserve: w.reserve };
-  G.mag = a.mag;
+  const a = G.weaponAmmo[i] || { mag: magCap(w), reserve: w.reserve };
+  G.mag = Math.min(a.mag, magCap(w));
   G.reserve = a.reserve;
   viewmodel.setWeapon(w.variant);
-  hud.setWeaponName(w.name, w.magSize, w.mode);
+  hud.setWeaponName(w.name, magCap(w), w.mode);
   hud.setAmmo(G.mag, G.reserve, w.name, w.mode);
   audio.reload('bolt');
   G.fireCooldown = 0.35;
@@ -374,6 +852,7 @@ function fireShot() {
   const w = currentWeapon();
   if (G.mag <= 0) return;
   G.mag--;
+  G.shotsFired++;
   hud.setAmmo(G.mag, G.reserve, w.name, w.mode);
   viewmodel.fire(1);
   const mz = muzzleWorld(_muzzle);
@@ -405,7 +884,7 @@ function fireShot() {
       const part = hit.object.userData.part;
       const mult = hit.object.userData.dmg || 1;
       const headshot = part === 'head';
-      const killed = enemy.takeDamage(w.dmg * mult, hit.point, _normal, part);
+      const killed = enemy.takeDamage(w.dmg * G.upgrades.damage * mult, hit.point, _normal, part);
       fx.blood(hit.point, _normal, _dir);
       audio.impact('flesh');
       audio.hitmarker(headshot);
@@ -436,7 +915,7 @@ function tryFire(dt) {
     if (G.reserve > 0) reload();
     return;
   }
-  G.fireCooldown = 60 / w.rpm;
+  G.fireCooldown = 60 / (w.rpm * G.upgrades.fireRate);
   G.shotFired = true;
   fireShot();
 }
@@ -459,7 +938,7 @@ function onEnemyKilled(enemy, headshot) {
 
 function reload() {
   const w = currentWeapon();
-  if (G.reloadTimer >= 0 || G.mag >= w.magSize || G.reserve <= 0) return;
+  if (G.reloadTimer >= 0 || G.mag >= magCap(w) || G.reserve <= 0) return;
   G.reloadTimer = 0;
   G.reloadTransferred = false;
   viewmodel.startReload();
@@ -474,7 +953,7 @@ function updateReload(dt) {
   if (!G.reloadTransferred && G.reloadTimer > 1.28) {
     G.reloadTransferred = true;
     const w = currentWeapon();
-    const need = Math.min(w.magSize - G.mag, G.reserve);
+    const need = Math.min(magCap(w) - G.mag, G.reserve);
     G.mag += need;
     G.reserve -= need;
     hud.setAmmo(G.mag, G.reserve, w.name, w.mode);
@@ -679,6 +1158,14 @@ function loop(now) {
     updateGame(dt);
   } else if (G.state === 'menu') {
     updateMenuCamera(dt);
+  } else if (G.state === 'upgrade') {
+    G.upgradeT = (G.upgradeT || 0) + dt;
+    if (G.upgradeT > 32 && G.upgradeCards.length) pickUpgrade(0);
+    engine.update(dt, controller.pos);
+    level.update(dt, engine.camera);
+    fx.update(dt);
+    hud.update(dt);
+    if (input.endFrame) input.endFrame();
   } else if (G.state === 'paused') {
     engine.update(dt, controller.pos);
   }
@@ -740,11 +1227,14 @@ function updateGame(dt) {
     // health regen
     G.sinceDamage += dt;
     if (G.sinceDamage > 4.2 && G.hp < G.maxHp) {
-      G.hp = Math.min(G.maxHp, G.hp + 26 * dt);
+      G.hp = Math.min(G.maxHp, G.hp + G.regenRate * dt);
       hud.setHealth(G.hp, pipsFor(G.armor));
       if (G.hp > 40) audio.setLowHealth(false);
     }
+    updateObjective(dt);
     updateWaves(dt);
+    updateTutorial(dt);
+    updateBeacon(dt);
   }
 
   // enemies
@@ -801,8 +1291,11 @@ boot();
 window.__game = {
   get engine() { return engine; }, get level() { return level; }, get player() { return controller; },
   get enemies() { return enemies; }, get state() { return G; }, get hud() { return hud; },
-  get fx() { return fx; }, get viewmodel() { return viewmodel; },
+  get fx() { return fx; }, get viewmodel() { return viewmodel; }, get input() { return input; },
   startGame, resetGame, spawnEnemy, applyPlayerDamage,
+  openUpgradeChoice, pickUpgrade, openSettings, applySettings, finishTutorial,
+  debugUpgrade: () => openUpgradeChoice(true), debugTutorial: () => beginTutorial(true),
+  setSetting: (k, v) => onSettingChange(k, v), loadSettings, saveSettings, startWave, modeForWave,
   fire: () => { fireShot(); }, reload: () => reload(),
   pick: (nx = 0, ny = 0) => {
     raycaster.setFromCamera(new THREE.Vector2(nx, ny), engine.camera);

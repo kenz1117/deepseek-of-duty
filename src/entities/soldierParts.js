@@ -399,15 +399,36 @@ const FORE_ARM = 0.285;
 // rifle anchors in weapon space (origin = top of the pistol grip,
 // -Z muzzle, +Z stock). Left hand sits on the rear of the handguard.
 const ANCHOR_R = new THREE.Vector3(0, 0.012, 0.02);
-const ANCHOR_L = new THREE.Vector3(0, 0.083, -0.356);
 
-export function buildSoldier(mats, variantIndex = 0) {
+/* ------------------------------------------------------- archetype looks */
+export const ARCHETYPE_ACCENTS = {
+  rusher: 0xa8261e,
+  shield: 0x2f4f8a,
+  sniper: 0x3f6b3a,
+};
+
+const _accentMats = new Map();
+function accentMaterial(hex) {
+  if (_accentMats.has(hex)) return _accentMats.get(hex);
+  const m = new THREE.MeshStandardMaterial({
+    color: hex, roughness: 0.8, metalness: 0.05, envMapIntensity: 0.55,
+  });
+  _accentMats.set(hex, m);
+  return m;
+}
+
+export function buildSoldier(mats, variantIndex = 0, archetype = 'rifleman') {
   const V = VARIANTS[variantIndex % VARIANTS.length];
   const M = materialsFor(V);
   const GUN = gunMaterials();
+  const ACCENT = ARCHETYPE_ACCENTS[archetype] ? accentMaterial(ARCHETYPE_ACCENTS[archetype]) : null;
+  const IS_RUSHER = archetype === 'rusher';
+  const IS_SHIELD = archetype === 'shield';
+  const IS_SNIPER = archetype === 'sniper';
   const meshes = [];
-  const cast = new Set([M.cloth, M.gear, M.leather, GUN.metal, GUN.polymer, GUN.tanPolymer]);
+  const cast = new Set([M.cloth, M.gear, M.leather, GUN.metal, GUN.polymer]);
   const recv = new Set([M.cloth, M.gear, M.leather]);
+  if (ACCENT) { cast.add(ACCENT); recv.add(ACCENT); }
 
   const root = new THREE.Group(); // feet on y=0, faces -Z
   const hips = new THREE.Group();
@@ -469,11 +490,11 @@ export function buildSoldier(mats, variantIndex = 0) {
     b.part(rbox(0.064, 0.12, 0.044, 0.014), M.gear, [0.152, 0.296, 0.108]);
     b.part(cyl(0.005, 0.0034, 0.30, 5), M.gear, [0.158, 0.525, 0.15], [-0.30, 0, 0.12]);
     // pack
-    if (V.pack) {
+    if (V.pack && !IS_RUSHER) {
       b.part(rbox(0.26, 0.22, 0.12, 0.034), M.gear, [0, 0.30, 0.222]);
       b.part(rbox(0.215, 0.085, 0.085, 0.024), M.gear2, [0, 0.402, 0.212]);
       b.part(box(0.24, 0.022, 0.03), M.gear2, [0, 0.255, 0.284]);
-    } else {
+    } else if (!IS_RUSHER) {
       b.part(rbox(0.235, 0.25, 0.09, 0.028), M.gear, [0, 0.30, 0.2]);
       b.part(box(0.2, 0.02, 0.025), M.gear2, [0, 0.26, 0.248]);
     }
@@ -487,11 +508,59 @@ export function buildSoldier(mats, variantIndex = 0) {
     b.part(rbox(0.095, 0.085, 0.05, 0.012), M.gear2, [-0.11, 0.318, -0.185]);
     b.part(box(0.30, 0.018, 0.014), M.gear2, [0, 0.245, -0.192]);
     b.part(box(0.30, 0.018, 0.014), M.gear2, [0, 0.34, -0.192]);
-    for (const sx of [-1, 1]) {
-      b.part(rbox(0.118, 0.05, 0.175, 0.022), M.gear2, [sx * 0.178, 0.452, 0.0], [0, 0, sx * 0.30]);
+    if (!IS_RUSHER) {
+      for (const sx of [-1, 1]) {
+        b.part(rbox(0.118, 0.05, 0.175, 0.022), M.gear2, [sx * 0.178, 0.452, 0.0], [0, 0, sx * 0.30]);
+      }
     }
     // chest light
     b.part(cyl(0.019, 0.021, 0.055, 8), M.metal, [-0.112, 0.385, -0.19], [Math.PI / 2, 0, 0]);
+
+    /* ---------------- archetype-specific silhouette ---------------- */
+    if (IS_SHIELD) {
+      // ballistic shield with a rifle firing port (port sits where the rifle
+      // crosses the shield plane so the barrel never pokes through geometry)
+      const sy = 0.15, sz = -0.375;
+      b.part(rbox(0.64, 0.22, 0.05, 0.02), M.gear, [0, sy + 0.30, sz]);       // top band
+      b.part(rbox(0.64, 0.34, 0.05, 0.02), M.gear, [0, sy - 0.09, sz]);       // bottom band
+      b.part(rbox(0.32, 0.26, 0.05, 0.02), M.gear, [-0.16, sy + 0.06, sz]);   // left of port
+      b.part(rbox(0.13, 0.26, 0.05, 0.02), M.gear, [0.255, sy + 0.06, sz]);   // right of port
+      // metal rim
+      b.part(box(0.66, 0.022, 0.058), M.metal, [0, sy + 0.41, sz]);
+      b.part(box(0.66, 0.022, 0.058), M.metal, [0, sy - 0.26, sz]);
+      for (const sx of [-1, 1]) b.part(box(0.022, 0.69, 0.058), M.metal, [sx * 0.32, sy + 0.075, sz]);
+      // port frame
+      b.part(box(0.20, 0.02, 0.062), M.metal, [0.095, sy + 0.19, sz]);
+      b.part(box(0.20, 0.02, 0.062), M.metal, [0.095, sy - 0.07, sz]);
+      // view slit + accent band + bolts
+      b.part(box(0.30, 0.05, 0.014), M.lens, [0, sy + 0.36, sz - 0.028]);
+      b.part(box(0.58, 0.075, 0.014), ACCENT, [0, sy - 0.16, sz - 0.028]);
+      for (const sx of [-1, 1]) {
+        for (const yy of [0.34, 0.12, -0.22]) {
+          b.part(box(0.018, 0.018, 0.012), M.metal, [sx * 0.295, sy + yy, sz - 0.03]);
+        }
+      }
+      // handle on the back
+      b.part(box(0.24, 0.035, 0.04), M.gear2, [0, sy + 0.05, sz + 0.045]);
+    }
+    if (IS_SNIPER) {
+      // ghillie cape strips over the shoulders and upper back
+      for (let i = 0; i < 7; i++) {
+        const sx = (i % 2 ? 1 : -1) * (0.05 + (i % 4) * 0.045);
+        b.part(box(0.07, 0.16 + (i % 3) * 0.05, 0.012), M.cloth,
+          [sx, 0.35 - (i % 3) * 0.045, 0.16], [0.15 + (i % 3) * 0.09, 0, sx * 0.35]);
+      }
+      b.part(box(0.44, 0.05, 0.22), M.cloth, [0, 0.445, 0.06], [0.28, 0, 0]);
+      b.part(box(0.28, 0.05, 0.05), M.cloth, [0, 0.30, 0.16], [0.5, 0, 0]);
+    }
+    if (IS_RUSHER) {
+      // light rig: bandolier instead of a full carrier
+      b.part(box(0.055, 0.34, 0.022), M.gear2, [0.075, 0.30, -0.205], [0, 0, 0.35]);
+      b.part(box(0.05, 0.05, 0.03), M.gear, [0.145, 0.18, -0.20]);
+      for (const px of [-0.09, 0.0, 0.09]) {
+        b.part(rbox(0.078, 0.10, 0.05, 0.014), M.gear2, [px, 0.115, -0.20]);
+      }
+    }
     b.build(torso, cast, recv, meshes);
   }
 
@@ -500,7 +569,7 @@ export function buildSoldier(mats, variantIndex = 0) {
   headPivot.position.y = 0.505;
   headPivot.rotation.order = 'YXZ';
   torso.add(headPivot);
-  buildHead(headPivot, M, V, meshes, cast, recv);
+  buildHead(headPivot, M, V, meshes, cast, recv, archetype, ACCENT);
 
   /* -------------------------------------------------------------- arms */
   const mkArm = (side) => {
@@ -523,6 +592,10 @@ export function buildSoldier(mats, variantIndex = 0) {
     b.part(cyl(0.055, 0.052, 0.055, 10), M.cloth, [0, -UPPER_ARM + 0.024, 0]);
     // issue patch on the upper arm
     b.part(box(0.05, 0.065, 0.012), M.cloth, [side * 0.055, -0.13, -0.02], [0, side * 0.35, 0]);
+    if (ACCENT && side < 0) {
+      // archetype armband (left arm) — the squad-level ID read
+      b.part(cyl(0.066, 0.066, 0.055, 10, 0.35, true), ACCENT, [0, -0.175, 0]);
+    }
     b.build(shoulder, cast, recv, meshes);
 
     const f = makeBuilder();
@@ -609,57 +682,114 @@ export function buildSoldier(mats, variantIndex = 0) {
   weapon.rotation.order = 'YXZ';
   torso.add(weapon);
   const weaponMuzzle = new THREE.Object3D();
-  const muzzleLocal = new THREE.Vector3(0, 0.052, -0.60);
+  const muzzleLocal = new THREE.Vector3(
+    0, IS_SNIPER ? 0.055 : 0.052, IS_RUSHER ? -0.455 : IS_SNIPER ? -0.965 : -0.60
+  );
   weaponMuzzle.position.copy(muzzleLocal);
   weapon.add(weaponMuzzle);
 
   {
     const mt = makeBuilder();
     const pl = makeBuilder();
-    const pol = GUN.polymer;
+    const pol = GUN.polymer;      // all furniture is dark matte polymer
     const dark = GUN.polymer;
     const rail = 0.16;
 
-    // receiver group (origin = top of the pistol grip, -Z forward)
+    /* ---- shared receiver, pistol grip, trigger guard, buffer tube */
     mt.part(box(0.05, 0.078, 0.26, rail), GUN.metal, [0, 0.046, -0.11]);
     mt.part(box(0.046, 0.05, 0.13, rail), GUN.metal, [0, -0.002, -0.12]);
-    mt.part(box(0.014, 0.03, 0.055), GUN.metal, [0.027, 0.052, -0.12]); // ejection port
-    mt.part(box(0.028, 0.016, 0.30, rail), GUN.metal, [0, 0.09, -0.13]); // top rail
-    for (let i = 0; i < 8; i++) mt.part(box(0.03, 0.009, 0.013), GUN.metal, [0, 0.098, -0.02 - i * 0.026]);
-    // handguard
-    pl.part(cyl(0.032, 0.029, 0.26, 8, 0.3), pol, [0, 0.052, -0.37], [Math.PI / 2, 0, 0], [1, 1, 0.85]);
-    mt.part(box(0.026, 0.013, 0.24, rail), GUN.metal, [0, 0.081, -0.37]);
-    mt.part(box(0.013, 0.024, 0.17), GUN.metal, [0.034, 0.05, -0.365]);
-    mt.part(box(0.013, 0.024, 0.17), GUN.metal, [-0.034, 0.05, -0.365]);
-    // barrel + brake
-    mt.part(cyl(0.0115, 0.0115, 0.135, 8), GUN.metal, [0, 0.052, -0.505], [Math.PI / 2, 0, 0]);
-    mt.part(cyl(0.016, 0.014, 0.062, 8), GUN.metal, [0, 0.052, -0.577], [Math.PI / 2, 0, 0]);
-    mt.part(cyl(0.0175, 0.0175, 0.013, 8), GUN.metal, [0, 0.052, -0.548], [Math.PI / 2, 0, 0]);
-    mt.part(box(0.028, 0.03, 0.032), GUN.metal, [0, 0.077, -0.493]); // gas block
-    // magazine (two blocks approximate the curve)
-    pl.part(rbox(0.032, 0.12, 0.068, 0.009), dark, [0, -0.077, -0.155], [0.06, 0, 0]);
-    pl.part(rbox(0.032, 0.085, 0.063, 0.009), dark, [0, -0.16, -0.172], [0.24, 0, 0]);
-    pl.part(box(0.036, 0.014, 0.072), dark, [0, -0.202, -0.182], [0.24, 0, 0]);
-    // grip + trigger guard
+    mt.part(box(0.014, 0.03, 0.055), GUN.metal, [0.027, 0.052, -0.12]);
     pl.part(rbox(0.035, 0.105, 0.052, 0.015), pol, [0, -0.045, 0.022], [-0.33, 0, 0]);
     pl.part(box(0.02, 0.009, 0.06), dark, [0, -0.012, -0.02]);
-    // buffer tube + stock
     mt.part(cyl(0.017, 0.017, 0.10, 8), GUN.metal, [0, 0.055, 0.06], [Math.PI / 2, 0, 0]);
     pl.part(rbox(0.048, 0.09, 0.115, 0.014), pol, [0, 0.035, 0.185]);
-    pl.part(rbox(0.04, 0.024, 0.10, 0.01), pol, [0, 0.088, 0.175]);
     pl.part(rbox(0.052, 0.098, 0.016, 0.006), pol, [0, 0.032, 0.248]);
-    // optic
-    mt.part(box(0.036, 0.013, 0.08), GUN.metal, [0, 0.104, -0.055]);
-    mt.part(box(0.052, 0.062, 0.017), GUN.metal, [0, 0.148, -0.088]);
-    mt.part(box(0.052, 0.022, 0.064), GUN.metal, [0, 0.172, -0.06]);
-    mt.part(box(0.052, 0.062, 0.015), GUN.metal, [0, 0.148, -0.012]);
-    mt.part(box(0.028, 0.013, 0.032), GUN.metal, [0, 0.07, 0.012]);
-    // optic glass uses the variant's lens material
+
+    if (IS_RUSHER) {
+      /* ---- compact shotgun / SMG: short barrel, fat mag, vertical grip */
+      mt.part(box(0.026, 0.014, 0.17, rail), GUN.metal, [0, 0.09, -0.105]);
+      for (let i = 0; i < 5; i++) {
+        mt.part(box(0.028, 0.008, 0.012), GUN.metal, [0, 0.098, -0.035 - i * 0.028]);
+      }
+      pl.part(cyl(0.034, 0.031, 0.155, 8, 0.3), pol, [0, 0.052, -0.30], [Math.PI / 2, 0, 0], [1, 1, 0.9]);
+      mt.part(box(0.012, 0.024, 0.11), GUN.metal, [0.036, 0.05, -0.305]);
+      mt.part(box(0.012, 0.024, 0.11), GUN.metal, [-0.036, 0.05, -0.305]);
+      mt.part(cyl(0.012, 0.012, 0.06, 8), GUN.metal, [0, 0.052, -0.41], [Math.PI / 2, 0, 0]);
+      mt.part(cyl(0.021, 0.018, 0.05, 8), GUN.metal, [0, 0.052, -0.44], [Math.PI / 2, 0, 0]);
+      mt.part(box(0.028, 0.03, 0.03), GUN.metal, [0, 0.075, -0.39]);
+      // fat magazine
+      pl.part(rbox(0.04, 0.15, 0.09, 0.01), dark, [0, -0.09, -0.15], [0.05, 0, 0]);
+      pl.part(rbox(0.04, 0.09, 0.082, 0.01), dark, [0, -0.19, -0.168], [0.2, 0, 0]);
+      // vertical foregrip
+      pl.part(rbox(0.03, 0.105, 0.036, 0.01), pol, [0, -0.078, -0.295], [0.16, 0, 0]);
+      // folded stock
+      pl.part(rbox(0.046, 0.06, 0.06, 0.012), pol, [0, 0.052, 0.115]);
+      // small red dot
+      mt.part(box(0.03, 0.012, 0.055), GUN.metal, [0, 0.106, -0.06]);
+      mt.part(box(0.042, 0.046, 0.014), GUN.metal, [0, 0.136, -0.087]);
+      mt.part(box(0.042, 0.046, 0.012), GUN.metal, [0, 0.136, -0.034]);
+    } else if (IS_SNIPER) {
+      /* ---- long precision rifle: extended rail, fat scope, folded bipod */
+      mt.part(box(0.03, 0.016, 0.48, rail), GUN.metal, [0, 0.09, -0.30]);
+      for (let i = 0; i < 13; i++) {
+        mt.part(box(0.032, 0.008, 0.013), GUN.metal, [0, 0.098, -0.06 - i * 0.033]);
+      }
+      pl.part(cyl(0.031, 0.028, 0.34, 8, 0.3), pol, [0, 0.052, -0.46], [Math.PI / 2, 0, 0], [1, 1, 0.86]);
+      mt.part(box(0.013, 0.024, 0.25), GUN.metal, [0.035, 0.05, -0.46]);
+      mt.part(box(0.013, 0.024, 0.25), GUN.metal, [-0.035, 0.05, -0.46]);
+      mt.part(cyl(0.012, 0.012, 0.30, 8), GUN.metal, [0, 0.055, -0.80], [Math.PI / 2, 0, 0]);
+      mt.part(cyl(0.016, 0.014, 0.075, 8), GUN.metal, [0, 0.055, -0.925], [Math.PI / 2, 0, 0]);
+      mt.part(cyl(0.0175, 0.0175, 0.012, 8), GUN.metal, [0, 0.055, -0.888], [Math.PI / 2, 0, 0]);
+      // folded bipod under the handguard
+      mt.part(box(0.013, 0.013, 0.20), GUN.metal, [0.026, -0.004, -0.55], [0, 0.18, 0.12]);
+      mt.part(box(0.013, 0.013, 0.20), GUN.metal, [-0.026, -0.004, -0.55], [0, -0.18, -0.12]);
+      // big scope: tube, bells, mounts
+      mt.part(cyl(0.031, 0.031, 0.25, 10), GUN.metal, [0, 0.163, -0.06], [Math.PI / 2, 0, 0]);
+      mt.part(cyl(0.039, 0.033, 0.03, 10), GUN.metal, [0, 0.163, -0.19], [Math.PI / 2, 0, 0]);
+      mt.part(cyl(0.035, 0.038, 0.03, 10), GUN.metal, [0, 0.163, 0.07], [Math.PI / 2, 0, 0]);
+      mt.part(box(0.03, 0.052, 0.036), GUN.metal, [0, 0.117, -0.13]);
+      mt.part(box(0.03, 0.052, 0.036), GUN.metal, [0, 0.117, 0.015]);
+      // adjustable cheek riser
+      pl.part(rbox(0.045, 0.022, 0.10, 0.008), pol, [0, 0.098, 0.185]);
+    } else {
+      /* ---- standard carbine (rifleman and shield) */
+      mt.part(box(0.028, 0.016, 0.30, rail), GUN.metal, [0, 0.09, -0.13]);
+      for (let i = 0; i < 8; i++) {
+        mt.part(box(0.03, 0.009, 0.013), GUN.metal, [0, 0.098, -0.02 - i * 0.026]);
+      }
+      pl.part(cyl(0.032, 0.029, 0.26, 8, 0.3), pol, [0, 0.052, -0.37], [Math.PI / 2, 0, 0], [1, 1, 0.85]);
+      mt.part(box(0.026, 0.013, 0.24, rail), GUN.metal, [0, 0.081, -0.37]);
+      mt.part(box(0.013, 0.024, 0.17), GUN.metal, [0.034, 0.05, -0.365]);
+      mt.part(box(0.013, 0.024, 0.17), GUN.metal, [-0.034, 0.05, -0.365]);
+      mt.part(cyl(0.0115, 0.0115, 0.135, 8), GUN.metal, [0, 0.052, -0.505], [Math.PI / 2, 0, 0]);
+      mt.part(cyl(0.016, 0.014, 0.062, 8), GUN.metal, [0, 0.052, -0.577], [Math.PI / 2, 0, 0]);
+      mt.part(cyl(0.0175, 0.0175, 0.013, 8), GUN.metal, [0, 0.052, -0.548], [Math.PI / 2, 0, 0]);
+      mt.part(box(0.028, 0.03, 0.032), GUN.metal, [0, 0.077, -0.493]);
+      // magazine
+      pl.part(rbox(0.032, 0.12, 0.068, 0.009), dark, [0, -0.077, -0.155], [0.06, 0, 0]);
+      pl.part(rbox(0.032, 0.085, 0.063, 0.009), dark, [0, -0.16, -0.172], [0.24, 0, 0]);
+      pl.part(box(0.036, 0.014, 0.072), dark, [0, -0.202, -0.182], [0.24, 0, 0]);
+      // optic
+      mt.part(box(0.036, 0.013, 0.08), GUN.metal, [0, 0.104, -0.055]);
+      mt.part(box(0.052, 0.062, 0.017), GUN.metal, [0, 0.148, -0.088]);
+      mt.part(box(0.052, 0.022, 0.064), GUN.metal, [0, 0.172, -0.06]);
+      mt.part(box(0.052, 0.062, 0.015), GUN.metal, [0, 0.148, -0.012]);
+      mt.part(box(0.028, 0.013, 0.032), GUN.metal, [0, 0.07, 0.012]);
+      pl.part(rbox(0.04, 0.024, 0.10, 0.01), pol, [0, 0.088, 0.175]);
+    }
+
     mt.build(weapon, cast, null, meshes);
     pl.build(weapon, cast, null, meshes);
 
     const ln = makeBuilder();
-    ln.part(box(0.038, 0.044, 0.007), M.lens, [0, 0.148, -0.083]);
+    if (IS_RUSHER) {
+      ln.part(box(0.03, 0.032, 0.007), M.lens, [0, 0.136, -0.082]);
+    } else if (IS_SNIPER) {
+      ln.part(cyl(0.03, 0.03, 0.008, 12), M.lens, [0, 0.163, -0.207], [Math.PI / 2, 0, 0]);
+      ln.part(cyl(0.032, 0.032, 0.008, 12), M.lens, [0, 0.163, 0.087], [Math.PI / 2, 0, 0]);
+    } else {
+      ln.part(box(0.038, 0.044, 0.007), M.lens, [0, 0.148, -0.083]);
+    }
     ln.build(weapon, null, null, meshes);
   }
 
@@ -672,12 +802,22 @@ export function buildSoldier(mats, variantIndex = 0) {
   flash.position.copy(muzzleLocal);
   weapon.add(flash);
 
+  const anchorL = IS_RUSHER
+    ? new THREE.Vector3(0, 0.083, -0.262)
+    : IS_SNIPER
+      ? new THREE.Vector3(0, 0.083, -0.372)
+      : new THREE.Vector3(0, 0.083, -0.356);
+
   return {
     root, body: root, hips, torso, headPivot,
     armL, armR, legL, legR,
     weapon, weaponMuzzle, weaponFlash: flash,
-    variant: V, meshes,
-    anchorR: ANCHOR_R, anchorL: ANCHOR_L,
+    variant: V, meshes, archetype,
+    anchorR: ANCHOR_R, anchorL,
+    // scope lens position (sniper glint) in weapon space
+    scopePos: new THREE.Vector3(0, IS_SNIPER ? 0.163 : 0.148, IS_SNIPER ? -0.207 : -0.083),
+    hasShield: IS_SHIELD,
+    muzzleLocal: muzzleLocal.clone(),
     height: 1.82, eyeHeight: 1.685,
     dispose() {
       for (const m of meshes) if (m.geometry) m.geometry.dispose();
@@ -688,7 +828,10 @@ export function buildSoldier(mats, variantIndex = 0) {
 
 /* ------------------------------------------------------------------- head */
 
-function buildHead(headPivot, M, V, meshes, cast, recv) {
+function buildHead(headPivot, M, V, meshes, cast, recv, archetype = 'rifleman', ACCENT = null) {
+  const IS_RUSHER = archetype === 'rusher';
+  const IS_SHIELD = archetype === 'shield';
+  const IS_SNIPER = archetype === 'sniper';
   // single builder -> one merged mesh per material on the head
   const b = makeBuilder();
 
@@ -703,14 +846,40 @@ function buildHead(headPivot, M, V, meshes, cast, recv) {
   b.part(sph(0.103, 14, 0.86, Math.PI - 0.86), M.gear, [0, 0.158, 0.002], [0, 0, 0], [0.815, 1.0, 0.935]);
   b.part(cyl(0.064, 0.075, 0.12, 10), M.gear, [0, 0.015, 0.0]);
 
-  // helmet: closed-ish cap sitting above the goggles
-  b.part(sph(0.106, 18, 0, 1.63), M.cloth, [0, 0.186, 0.0], [0, 0, 0], [1.04, 0.98, 1.10]);
-  // cloth rim ring (torus: no caps, so it can't slice the face)
-  b.part(torus(0.105, 0.009, 6, 20), M.cloth, [0, 0.1805, 0.0], [Math.PI / 2, 0, 0], [1, 1, 1.06]);
-  // scrim band around the helmet (open tube)
-  b.part(cyl(0.1095, 0.1095, 0.024, 20, 0.35, true), M.gear2, [0, 0.207, 0.0], [0, 0, 0], [1, 1, 1.06]);
-  // crown strap
-  b.part(box(0.032, 0.018, 0.20, 0.2), M.cloth, [0, 0.281, 0.012], [0.1, 0, 0]);
+  if (IS_RUSHER) {
+    /* ---- hooded rusher: soft beanie + bandana tail, no helmet */
+    b.part(sph(0.105, 14, 0, 1.55), M.cloth, [0, 0.184, 0.0], [0, 0, 0], [1.02, 0.99, 1.08]);
+    b.part(torus(0.103, 0.013, 6, 18), M.cloth, [0, 0.196, 0], [Math.PI / 2, 0, 0], [1, 1, 1.06]);
+    b.part(cyl(0.1045, 0.1045, 0.026, 18, 0.35, true), ACCENT, [0, 0.213, 0], [0, 0, 0], [1, 1, 1.06]);
+    // bandana tails at the back
+    b.part(box(0.07, 0.16, 0.014), M.cloth, [0.012, 0.12, 0.112], [0.4, 0, 0.14]);
+    b.part(box(0.05, 0.12, 0.012), M.cloth, [-0.03, 0.095, 0.12], [0.5, 0, -0.2]);
+  } else {
+    /* ---- helmet: camo cover, rim, scrim band, crown strap */
+    b.part(sph(0.106, 18, 0, 1.63), M.cloth, [0, 0.186, 0.0], [0, 0, 0], [1.04, 0.98, 1.10]);
+    b.part(torus(0.105, 0.009, 6, 20), M.cloth, [0, 0.1805, 0.0], [Math.PI / 2, 0, 0], [1, 1, 1.06]);
+    b.part(cyl(0.1095, 0.1095, 0.024, 20, 0.35, true), M.gear2, [0, 0.207, 0.0], [0, 0, 0], [1, 1, 1.06]);
+    b.part(box(0.032, 0.018, 0.20, 0.2), M.cloth, [0, 0.272, 0.012], [0.1, 0, 0]);
+
+    if (IS_SNIPER) {
+      /* ---- ghillie hood over the helmet + ragged strips */
+      b.part(sph(0.117, 16, 0, 1.72), M.cloth, [0, 0.183, 0.006], [0, 0, 0], [1.06, 0.99, 1.14]);
+      for (let i = 0; i < 6; i++) {
+        const a = -0.95 + i * 0.38;
+        b.part(box(0.05, 0.11, 0.012), M.cloth,
+          [Math.sin(a) * 0.105, 0.12 + (i % 2) * 0.035, Math.cos(a) * 0.105],
+          [0.25, a, 0]);
+      }
+      b.part(box(0.19, 0.03, 0.05), M.cloth, [0, 0.186, -0.115]);
+    }
+    if (IS_SHIELD) {
+      /* ---- heavy armoured face plate + brow bar */
+      b.part(rbox(0.178, 0.108, 0.042, 0.014), M.gear, [0, 0.162, -0.096]);
+      for (const sx of [-1, 1]) b.part(box(0.022, 0.10, 0.032), M.metal, [sx * 0.092, 0.162, -0.092]);
+      b.part(box(0.17, 0.02, 0.032), M.metal, [0, 0.219, -0.09]);
+      b.part(box(0.19, 0.026, 0.06), M.gear2, [0, 0.078, -0.06]);
+    }
+  }
 
   // shemagh variant wraps the neck and lower face
   if (V.face === 'shemagh') {
@@ -719,18 +888,21 @@ function buildHead(headPivot, M, V, meshes, cast, recv) {
   }
 
   // goggles sit just under the helmet rim
-  if (V.goggles === 'eyes' || V.face === 'mask') {
-    b.part(rbox(0.144, 0.056, 0.048, 0.016), M.gear, [0, 0.150, -0.077], [0.06, 0, 0]);
-    b.part(box(0.156, 0.028, 0.026), M.gear, [0, 0.150, -0.05]);
-    for (const sx of [-1, 1]) b.part(box(0.019, 0.038, 0.095), M.gear, [sx * 0.084, 0.150, -0.012]);
-  } else {
-    b.part(rbox(0.144, 0.056, 0.058, 0.016), M.gear, [0, 0.252, -0.072], [0.95, 0, 0]);
-    for (const sx of [-1, 1]) b.part(box(0.019, 0.032, 0.08), M.gear, [sx * 0.084, 0.244, -0.02]);
+  if (!IS_SHIELD) {
+    if (V.goggles === 'eyes' || V.face === 'mask') {
+      b.part(rbox(0.144, 0.056, 0.048, 0.016), M.gear, [0, 0.150, -0.077], [0.06, 0, 0]);
+      b.part(box(0.156, 0.028, 0.026), M.gear, [0, 0.150, -0.05]);
+      for (const sx of [-1, 1]) b.part(box(0.019, 0.038, 0.095), M.gear, [sx * 0.084, 0.150, -0.012]);
+    } else {
+      b.part(rbox(0.144, 0.056, 0.058, 0.016), M.gear, [0, 0.252, -0.072], [0.95, 0, 0]);
+      for (const sx of [-1, 1]) b.part(box(0.019, 0.032, 0.08), M.gear, [sx * 0.084, 0.244, -0.02]);
+    }
   }
-  if (V.face === 'mask') {
+
+  if (V.face === 'mask' && !IS_SHIELD) {
     b.part(rbox(0.132, 0.108, 0.095, 0.03), M.gear, [0, 0.09, -0.05]);
     b.part(cyl(0.03, 0.03, 0.028, 10), M.gear, [0, 0.095, -0.112], [Math.PI / 2, 0, 0]);
-  } else {
+  } else if (!IS_SHIELD) {
     // neoprene half-mask: hides the goggle/balaclava seam and reads as a face
     b.part(rbox(0.142, 0.088, 0.052, 0.022), M.gear, [0, 0.096, -0.072]);
     b.part(box(0.06, 0.014, 0.02), M.gear2, [0, 0.05, -0.096]);
@@ -741,25 +913,27 @@ function buildHead(headPivot, M, V, meshes, cast, recv) {
   }
   b.part(box(0.066, 0.02, 0.017), M.gear, [0, 0.04, -0.048]);
 
-  // NVG mount + side rails (metal)
-  b.part(rbox(0.054, 0.044, 0.03, 0.008), M.metal, [0, 0.244, -0.092]);
-  b.part(box(0.026, 0.052, 0.017), M.metal, [0, 0.214, -0.097], [0.25, 0, 0]);
-  for (const sx of [-1, 1]) {
-    b.part(box(0.015, 0.026, 0.105), M.metal, [sx * 0.1, 0.196, -0.005]);
-    b.part(box(0.013, 0.013, 0.032), M.metal, [sx * 0.106, 0.17, -0.046]);
-  }
-  if (V.nvg === 'active') {
-    b.part(box(0.035, 0.03, 0.04), M.metal, [0, 0.248, -0.12]);
+  // NVG mount + side rails (helmet wearers only)
+  if (!IS_RUSHER && !IS_SNIPER) {
+    b.part(rbox(0.054, 0.044, 0.03, 0.008), M.metal, [0, 0.244, -0.092]);
+    b.part(box(0.026, 0.052, 0.017), M.metal, [0, 0.214, -0.097], [0.25, 0, 0]);
     for (const sx of [-1, 1]) {
-      b.part(cyl(0.02, 0.022, 0.058, 10), M.metal, [sx * 0.025, 0.258, -0.16], [Math.PI / 2, 0, 0]);
-      b.part(cyl(0.021, 0.021, 0.008, 10), M.lens, [sx * 0.025, 0.258, -0.19], [Math.PI / 2, 0, 0]);
+      b.part(box(0.015, 0.026, 0.105), M.metal, [sx * 0.1, 0.196, -0.005]);
+      b.part(box(0.013, 0.013, 0.032), M.metal, [sx * 0.106, 0.17, -0.046]);
     }
-  } else if (V.nvg === 'stowed') {
-    b.part(box(0.044, 0.044, 0.054), M.metal, [0, 0.29, -0.056], [0.95, 0, 0]);
+    if (V.nvg === 'active') {
+      b.part(box(0.035, 0.03, 0.04), M.metal, [0, 0.248, -0.12]);
+      for (const sx of [-1, 1]) {
+        b.part(cyl(0.02, 0.022, 0.058, 10), M.metal, [sx * 0.025, 0.258, -0.16], [Math.PI / 2, 0, 0]);
+        b.part(cyl(0.021, 0.021, 0.008, 10), M.lens, [sx * 0.025, 0.258, -0.19], [Math.PI / 2, 0, 0]);
+      }
+    } else if (V.nvg === 'stowed') {
+      b.part(box(0.044, 0.044, 0.054), M.metal, [0, 0.29, -0.056], [0.95, 0, 0]);
+    }
   }
 
-  // goggle glass
-  if (V.goggles === 'eyes' || V.face === 'mask') {
+  // goggle glass (shield uses the armoured plate instead)
+  if (!IS_SHIELD && (V.goggles === 'eyes' || V.face === 'mask')) {
     b.part(box(0.128, 0.04, 0.01), M.lens, [0, 0.150, -0.1], [0.06, 0, 0]);
   }
 

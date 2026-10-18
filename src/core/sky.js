@@ -157,9 +157,23 @@ export function createSky(renderer, opts = {}) {
     console.warn('PMREM env generation failed', e);
   }
 
+  function setPreset(p) {
+    if (!p) return;
+    if (p.sunDir) {
+      sunDir.set(p.sunDir[0], p.sunDir[1], p.sunDir[2]).normalize();
+      uniforms.uSunDir.value.copy(sunDir);
+    }
+    if (p.horizon) uniforms.uHorizon.value.setRGB(p.horizon[0], p.horizon[1], p.horizon[2]);
+    if (p.zenith) uniforms.uZenith.value.setRGB(p.zenith[0], p.zenith[1], p.zenith[2]);
+    if (p.sunColor) uniforms.uSunColor.value.setRGB(p.sunColor[0], p.sunColor[1], p.sunColor[2]);
+    if (p.sunIntensity !== undefined) uniforms.uSunIntensity.value = p.sunIntensity;
+    if (p.cloud !== undefined) uniforms.uCloudCover.value = p.cloud;
+  }
+
   return {
     dome,
     sunDir,
+    setPreset,
     sunColor: new THREE.Color(1.0, 0.86, 0.68),
     envTexture,
     update(t) { uniforms.uTime.value = t; },

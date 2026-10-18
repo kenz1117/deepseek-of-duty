@@ -216,6 +216,17 @@ export function createPost(renderer, scene, camera, quality = 'high') {
       finalPass.uniforms.uTime.value += dt;
       composer.render(dt);
     },
+    setGrade(g) {
+      if (!g) return;
+      const u = finalPass.uniforms;
+      if (g.contrast !== undefined) u.uContrast.value = g.contrast;
+      if (g.saturation !== undefined) u.uSaturation.value = g.saturation;
+      if (g.lift) u.uLift.value.setRGB(g.lift[0], g.lift[1], g.lift[2]);
+      if (g.gain) u.uGain.value.setRGB(g.gain[0], g.gain[1], g.gain[2]);
+      if (g.vignette !== undefined) u.uVignette.value = g.vignette;
+      if (g.grain !== undefined) u.uGrain.value = g.grain;
+      if (g.bloom !== undefined) bloom.strength = g.bloom;
+    },
     applyQuality(next) {
       const nq = presets(next);
       state.quality = next; state.q = nq;
