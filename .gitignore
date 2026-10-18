@@ -20,3 +20,6 @@ deploy/*.png
 
 # 站外文章草稿（属于其他项目）
 article-*.html
+
+# 封面原图（README 使用压缩后的 docs/cover.jpg）
+dod.png
