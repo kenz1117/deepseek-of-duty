@@ -32,7 +32,9 @@ npm run build >/dev/null
 ok "vite build 完成（dist/）"
 
 step "2/6 打包构建产物"
-TARBALL=$(mktemp /tmp/dod-dist.XXXXXX.tar.gz)
+# macOS/BSD mktemp 要求 X 在模板末尾；tar 不在乎扩展名，上传到服务器时固定命名为 dist.tar.gz
+TARBALL=$(mktemp /tmp/dod-dist.XXXXXXXX)
+trap 'rm -f "$TARBALL"' EXIT
 tar --exclude='.DS_Store' -czf "$TARBALL" -C dist .
 ok "$(du -h "$TARBALL" | cut -f1) → $TARBALL"
 

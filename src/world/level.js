@@ -888,18 +888,18 @@ export function createLevel(engine) {
      ===================================================================== */
   const RAMP = { x0: 24.6, x1: 25.9, z0: -15.6, z1: -7.1, rise: 3.2 };
   const ROOF_ZONES = [
-    { x0: 18.2, x1: 23.8, z0: -13.8, z1: -7.6, y: 3.2 },   // market roof deck
-    { x0: 23.7, x1: 26.0, z0: -8.4, z1: -6.8, y: 3.2 },    // ramp top landing
+    { x0: 18.6, x1: 23.4, z0: -13.4, z1: -7.9, y: 3.2 },   // market roof deck
+    { x0: 23.3, x1: 26.0, z0: -8.4, z1: -6.8, y: 3.2 },    // ramp top landing
     { x0: 17.45, x1: 18.3, z0: -11.9, z1: -11.1, y: 3.2 }, // catwalk to the apartment edge
   ];
   const ROOF_SPAWNS = [
-    { x: 22.2, z: -11.8, y: 3.2 },
+    { x: 22.0, z: -11.6, y: 3.2 },
     { x: 25.0, z: -7.2, y: 3.2 },
     { x: 17.8, z: -11.5, y: 3.2 },
   ];
   const ROOF_COVERS = [
-    { x: 22.8, z: -8.6, y: 3.2, h: true },
-    { x: 18.5, z: -8.0, y: 3.2, h: false },
+    { x: 22.6, z: -8.7, y: 3.2, h: true },
+    { x: 20.0, z: -12.8, y: 3.2, h: false },
   ];
   const MARKET_CQB = {
     id: 'yard-market',
@@ -907,8 +907,8 @@ export function createLevel(engine) {
     entry: { x: 21.2, z: -15.2 },
     center: { x: 20.8, z: -10.7 },
     radius: 4.4,
-    spawns: [{ x: 18.6, z: -12.4 }, { x: 22.6, z: -9.2 }],
-    covers: [{ x: 17.45, z: -8.5, h: true }, { x: 22.85, z: -7.1, h: false }],
+    spawns: [{ x: 18.9, z: -12.3 }, { x: 22.9, z: -9.6 }],
+    covers: [{ x: 17.45, z: -8.5, h: true }, { x: 19.1, z: -14.35, h: false }],
   };
   const DESTRUCTIBLE_DEFS = [
     { id: 'market-west-counter', x: 17.475, z: -8.5, w: 0.85, h: 1.0, d: 2.6, mat: 'wood', hp: 110 },
@@ -1103,41 +1103,43 @@ export function createLevel(engine) {
     const mx0 = 17.0, mx1 = 24.0, mz0 = -14.6, mz1 = -6.8;
     meshBox(mx1 - mx0, 0.08, mz1 - mz0, mats.concreteDark, (mx0 + mx1) / 2, 0.04, (mz0 + mz1) / 2, 0, { uv: 2.4, cast: false });
     // posts OUTSIDE the deck footprint (no colliders, so no roof air walls)
-    for (const [px, pz] of [[17.95, -14.0], [24.05, -14.0], [17.95, -7.4], [24.05, -7.4], [17.95, -10.7], [24.05, -10.7]]) {
+    for (const [px, pz] of [[18.4, -13.6], [23.6, -13.6], [18.4, -7.7], [23.6, -7.7], [18.4, -10.65], [23.6, -10.65]]) {
       meshBox(0.15, 3.2, 0.15, mats.metal, px, 1.6, pz, 0, { uv: 0.8 });
       meshBox(0.55, 0.12, 0.55, mats.concreteDark, px, 0.08, pz, 0, { uv: 0.8, cast: false });
     }
-    for (const pz of [-14.0, -7.4]) {
-      meshBox(6.4, 0.16, 0.16, mats.metal, 21.0, 3.0, pz, 0, { uv: 0.8, cast: false });
-    }
-    for (const px of [17.95, 24.05]) meshBox(0.16, 0.16, 6.9, mats.metal, px, 3.0, -10.7, 0, { uv: 0.8, cast: false });
+    for (const pz of [-13.6, -7.7]) meshBox(5.4, 0.16, 0.16, mats.metal, 21.0, 3.0, pz, 0, { uv: 0.8, cast: false });
+    for (const px of [18.4, 23.6]) meshBox(0.16, 0.16, 6.1, mats.metal, px, 3.0, -10.65, 0, { uv: 0.8, cast: false });
     // the walkable deck (top exactly 3.2)
-    meshBox(5.6, 0.2, 6.2, mats.metal, 21.0, 3.1, -10.7, 0, { uv: 1.2 });
-    for (let i = 0; i < 7; i++) meshBox(5.4, 0.06, 0.1, mats.rust, 21.0, 3.21, -13.5 + i * 0.92, 0, { uv: 0.6, cast: false });
+    meshBox(4.8, 0.2, 5.5, mats.metal, 21.0, 3.1, -10.65, 0, { uv: 1.2 });
+    for (let i = 0; i < 6; i++) meshBox(4.6, 0.06, 0.1, mats.rust, 21.0, 3.21, -12.9 + i * 0.86, 0, { uv: 0.6, cast: false });
     // low parapet (visual)
-    for (const [w, d, x, z] of [[5.6, 0.06, 21.0, -13.77], [0.06, 6.2, 18.23, -10.7]]) {
+    for (const [w, d, x, z] of [[4.8, 0.06, 21.0, -13.37], [0.06, 5.5, 18.63, -10.65]]) {
       meshBox(w, 0.34, d, mats.metal, x, 3.39, z, 0, { uv: 0.9, cast: false });
     }
-    meshBox(0.06, 0.34, 5.9, mats.metal, 23.77, 3.39, -11.2, 0, { uv: 0.9, cast: false });
-    meshBox(5.6, 0.34, 0.06, mats.metal, 21.0, 3.39, -7.63, 0, { uv: 0.9, cast: false });
+    meshBox(0.06, 0.34, 4.4, mats.metal, 23.37, 3.39, -11.5, 0, { uv: 0.9, cast: false });
+    meshBox(4.8, 0.34, 0.06, mats.metal, 21.0, 3.39, -7.93, 0, { uv: 0.9, cast: false });
     // skylight + roof clutter (visual only, no colliders)
     meshBox(1.3, 0.07, 1.3, mats.metalTan, 21.0, 3.24, -10.6, 0, { uv: 0.7, cast: false });
     const sky = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 1.05), mats.windowGlass);
     sky.rotation.x = -Math.PI / 2; sky.position.set(21.0, 3.28, -10.6);
     statics.add(sky);
-    meshBox(0.95, 0.9, 0.95, mats.wood, 22.8, 3.65, -8.6, 0.2, { uv: 0.8 });
-    meshBox(0.85, 0.8, 0.85, mats.wood, 19.4, 3.6, -12.8, -0.15, { uv: 0.8 });
-    meshBox(0.7, 0.7, 0.6, mats.metal, 20.0, 3.55, -9.0, 0, { uv: 0.6 });
+    meshBox(0.95, 0.9, 0.95, mats.wood, 22.6, 3.65, -8.7, 0.2, { uv: 0.8 });
+    meshBox(0.85, 0.8, 0.85, mats.wood, 19.6, 3.6, -12.5, -0.15, { uv: 0.8 });
+    meshBox(0.7, 0.7, 0.6, mats.metal, 20.0, 3.55, -12.8, 0, { uv: 0.6 });
     // awnings over the side stalls
     meshBox(1.5, 0.05, 7.7, mats.awning, 17.45, 2.62, -10.7, 0, { uv: 0.9, rz: -0.12 });
     meshBox(0.05, 0.2, 7.7, mats.burlap, 16.75, 2.48, -10.7, 0, { uv: 0.8, cast: false });
     for (const zz of [-14.2, -7.2]) meshBox(1.2, 0.05, 7.0, mats.awning, 21.0, 2.66, zz, 0, { uv: 0.9, rx: 0.12 });
     // stall counters (outside the deck footprint; all are ground colliders)
-    for (const [cx, cz] of [[19.45, -14.25], [22.85, -14.25], [19.45, -7.1], [22.85, -7.1]]) {
+    for (const [cx, cz] of [[19.1, -14.35], [22.7, -14.35]]) {
       meshBox(1.7, 0.95, 0.55, mats.wood, cx, 0.475, cz, 0, { uv: 1.0 });
       meshBox(1.85, 0.07, 0.68, mats.metalTan, cx, 0.98, cz, 0, { uv: 0.8, cast: false });
       addColliderRect(cx - 0.85, cx + 0.85, cz - 0.28, cz + 0.28);
     }
+    // one stall counter north of the deck (clear of the roof edge)
+    meshBox(1.5, 0.95, 0.5, mats.wood, 19.35, 0.475, -6.75, 0, { uv: 1.0 });
+    meshBox(1.65, 0.07, 0.62, mats.metalTan, 19.35, 0.98, -6.75, 0, { uv: 0.8, cast: false });
+    addColliderRect(18.6, 20.1, -7.0, -6.5);
     // goods on the counters / shelves along the west side (outside deck)
     for (let i = 0; i < 4; i++) {
       meshBox(0.26, 0.2, 0.3, i % 2 ? mats.burlap : mats.metalTan, 17.15, 1.12 + (i % 2) * 1.2, -9.4 + i * 0.6, 0, { uv: 0.5, cast: false });
@@ -1167,8 +1169,8 @@ export function createLevel(engine) {
     }
     // crates at the hall edges (outside the deck)
     crate(17.35, -13.9, 0.8, 0.3);
-    crate(23.75, -14.4, 0.75, 1.1);
-    crate(23.35, -6.45, 0.7, 0.7);
+    crate(23.0, -14.55, 0.75, 1.1);
+    crate(24.4, -13.0, 0.7, 0.7);
     // floor grime / paper
     for (let i = 0; i < 5; i++) {
       const pp = new THREE.Mesh(new THREE.PlaneGeometry(rr(0.16, 0.3), rr(0.2, 0.36)), mats.paper);
@@ -1180,11 +1182,11 @@ export function createLevel(engine) {
     // ---------- ramp: yard ground -> market roof (no stairs)
     const ang = Math.atan2(RAMP.rise, RAMP.z1 - RAMP.z0);
     const rlen = Math.hypot(RAMP.rise, RAMP.z1 - RAMP.z0);
-    meshBox(1.3, 0.14, rlen, mats.metal, (RAMP.x0 + RAMP.x1) / 2, 1.6, (RAMP.z0 + RAMP.z1) / 2, 0, { rx: -ang, uv: 1.0 });
+    meshBox(1.3, 0.14, rlen, mats.metal, (RAMP.x0 + RAMP.x1) / 2, 1.6 - 0.07 * Math.cos(ang), (RAMP.z0 + RAMP.z1) / 2, 0, { rx: -ang, uv: 1.0 });
     for (let k = 0; k < 11; k++) {
       const z = RAMP.z0 + 0.6 + k * 0.8;
       const h = RAMP.rise * (z - RAMP.z0) / (RAMP.z1 - RAMP.z0);
-      meshBox(1.16, 0.035, 0.07, mats.rust, (RAMP.x0 + RAMP.x1) / 2, h + 0.09, z, 0, { uv: 0.5, cast: false, rx: -ang });
+      meshBox(1.16, 0.035, 0.07, mats.rust, (RAMP.x0 + RAMP.x1) / 2, h + 0.02, z, 0, { uv: 0.5, cast: false, rx: -ang });
     }
     // side rails (visual only)
     for (const rx of [RAMP.x0 - 0.03, RAMP.x1 + 0.03]) {
@@ -1237,7 +1239,19 @@ export function createLevel(engine) {
     tireStack(26.4, -14.6, 2);
     pallet(26.0, -13.4, 0.8);
     crate(23.9, -15.4, 0.8, 0.9);
-    addTrashPile(1.2, -1, 1.2);
+    for (let i = 0; i < 6; i++) {
+      const bag = new THREE.Mesh(roundedGeo(rr(0.24, 0.4), rr(0.2, 0.34), rr(0.24, 0.42), 0.1, 0.6), i % 2 ? mats.burlap : mats.metal);
+      bag.position.set(26.45 + rr(-0.55, 0.55), 0.14, -15.2 + rr(-0.6, 0.6));
+      bag.rotation.set(rr(-0.2, 0.2), rr(0, 6), rr(-0.2, 0.2));
+      bag.castShadow = true; bag.receiveShadow = true;
+      statics.add(bag);
+    }
+    for (let i = 0; i < 3; i++) {
+      const pp = new THREE.Mesh(new THREE.PlaneGeometry(rr(0.3, 0.6), rr(0.4, 0.7)), mats.paper);
+      pp.rotation.set(-Math.PI / 2.1, rr(0, 6), 0);
+      pp.position.set(26.2 + rr(-0.6, 0.6), 0.07 + i * 0.03, -14.6 + rr(-0.8, 0.8));
+      statics.add(pp);
+    }
     // a small yard lamp on the apartment wall
     meshBox(0.3, 0.05, 0.05, mats.rust, 17.05, 3.55, -10.2, 0, { uv: 0.5, cast: false });
     meshBox(0.22, 0.13, 0.17, mats.metalTan, 17.2, 3.44, -10.2, 0, { uv: 0.6 });
@@ -3011,6 +3025,7 @@ export function createLevel(engine) {
     { side: 1, z0: -64, z1: -46, depth: 14, h: 13, detail: 'ruin', plaster: mats.plasterA, ground: 'wall' },
   ];
   for (const b of BUILDINGS) buildBuilding(b);
+  buildYardMarketStatic();
   buildAlley();
   buildGatehouse();
 
@@ -3205,6 +3220,7 @@ export function createLevel(engine) {
     const ud = (o.material && o.material.userData) || {};
     if (!ud.noBullet) bulletTargets.push(o);
   });
+  buildYardDestructibles();
 
   /* ------------------------------------------------------------------ spawns */
   spawnPoints.push(
@@ -3236,6 +3252,7 @@ export function createLevel(engine) {
       spawns: [{ x: -14.7, z: -1.8 }, { x: -11.5, z: -1.5 }],
       covers: [{ x: -15.35, z: -3.4, h: true }, { x: -11.6, z: -4.15, h: false }],
     },
+    MARKET_CQB,
     {
       id: 'street-apartment',
       name: '临街公寓',
@@ -3249,18 +3266,38 @@ export function createLevel(engine) {
   const objectiveZones = {
     defend: { x: 0, z: -16, r: 8.5 },
     extract: { x: -19.2, z: 3.0, r: 3.5 },
+    backyard: { x: 21.8, z: -11.0, r: 5.2 },
+    market: { x: 20.8, z: -10.7, r: 3.8 },
   };
   // expose the interior combat points through the legacy arrays too
   for (const z of cqbZones) {
     for (const sp of z.spawns) spawnPoints.push({ x: sp.x, z: sp.z });
     for (const cv of z.covers) coverPoints.push({ x: cv.x, z: cv.z, h: cv.h });
   }
+  for (const sp of ROOF_SPAWNS) spawnPoints.push({ x: sp.x, z: sp.z, y: sp.y });
+  for (const cv of ROOF_COVERS) coverPoints.push({ x: cv.x, z: cv.z, h: cv.h, y: cv.y });
 
   /* ------------------------------------------------------------------ update */
   let time = 0;
   const pos = dust.geometry.attributes.position;
   function update(dt, camera) {
     time += dt;
+    // destructible debris
+    for (let i = debris.length - 1; i >= 0; i--) {
+      const p = debris[i];
+      p.life -= dt;
+      if (p.life <= 0) { root.remove(p.m); debris.splice(i, 1); continue; }
+      p.vy -= 18 * dt;
+      p.m.position.x += p.vx * dt;
+      p.m.position.y += p.vy * dt;
+      p.m.position.z += p.vz * dt;
+      if (p.m.position.y < 0.06) {
+        p.m.position.y = 0.06;
+        p.vy *= -0.28; p.vx *= 0.62; p.vz *= 0.62;
+      }
+      p.m.rotation.x += p.spin * dt;
+      p.m.rotation.z += p.spin * 0.7 * dt;
+    }
     for (const f of fires) {
       const flick = 0.78 + Math.sin(time * 17.3 + f.base.x) * 0.1 + Math.sin(time * 7.1) * 0.08 + Math.pow(Math.random(), 3) * 0.25;
       if (f.light) f.light.intensity = f.intensity * flick;
@@ -3299,8 +3336,10 @@ export function createLevel(engine) {
 
   return {
     root, colliders, bulletTargets, spawnPoints, coverPoints,
-    bounds: { x0: -22, x1: 22, z0: -64, z1: 52 },
+    bounds: { x0: -30, x1: 30, z0: -64, z1: 52 },
     cqbZones, objectiveZones,
+    groundHeight, roofZones: ROOF_ZONES, roofSpawns: ROOF_SPAWNS, roofCovers: ROOF_COVERS,
+    destructibles, hitDestructible,
     update, fires,
   };
 }
