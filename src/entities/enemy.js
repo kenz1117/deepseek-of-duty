@@ -108,6 +108,7 @@ export class Enemy {
     this.scene = scene;
     this.mats = mats;
     this.colliders = colliders;
+    this.occluders = [];
     this.rnd = rnd || Math.random;
 
     this.archetype = 'rifleman';
@@ -521,6 +522,8 @@ export class Enemy {
   }
 
   /* --------------------------------------------------------------- vision */
+  setOccluders(list) { this.occluders = Array.isArray(list) ? list : []; }
+
   canSeePlayer(playerPos) {
     const a = this.eyePos.clone();
     const b = playerPos.clone();
@@ -531,6 +534,16 @@ export class Enemy {
     const elevated = this.baseY > 0.5;
     const px = this.root.position.x, pz = this.root.position.z;
     const host = elevated ? this.colliders.find((c) => px > c.x0 && px < c.x1 && pz > c.z0 && pz < c.z1) : null;
+    // 3D roof decks: an elevated shooter cannot see through a deck into the room below
+    if (elevated && a.y > b.y + 0.2) {
+      for (const o of this.occluders) {
+        if (!(a.y > o.y && b.y < o.y - 0.05)) continue;
+        const t = (o.y - a.y) / (b.y - a.y);
+        if (t <= 0 || t >= 1) continue;
+        const x = a.x + dx * t, z = a.z + dz * t;
+        if (x > o.x0 && x < o.x1 && z > o.z0 && z < o.z1) return false;
+      }
+    }
     for (let i = 1; i < steps; i++) {
       const t = i / steps;
       const x = a.x + dx * t, z = a.z + dz * t;
@@ -818,8 +831,10 @@ export class Enemy {
     this.weaponMuzzle.getWorldPosition(_v1);
     _v2.set(playerPos.x, playerPos.y - 0.12, playerPos.z).sub(_v1);
     const len = _v2.length();
+    // stop the beam short of the player's eye so it never fills the screen
+    const visLen = Math.max(0.4, len - 1.15);
     this.laser.position.copy(_v1);
-    this.laser.scale.set(0.011, Math.max(0.01, len), 0.011);
+    this.laser.scale.set(0.011, visLen, 0.011);
     this.laser.quaternion.setFromUnitVectors(_up, _v2.divideScalar(len || 1));
     const flick = 0.62 + 0.32 * Math.sin(this.animT * 46);
     this.laser.material.opacity = this.warnT < 0.28 ? flick : flick * 0.68;

@@ -304,6 +304,8 @@ function objectiveZone(kind) {
       ];
   const market = level && level.cqbZones && level.cqbZones.find((z) => /market|yard|后院|市场/.test((z.id || '') + (z.name || '')));
   if (market) spots.push({ x: market.center.x, z: market.center.z, r: Math.min(3.6, market.radius || 3.6) });
+  const extra = level && level.objectiveZones;
+  if (kind === 'defend' && extra && extra.backyard) spots.push(extra.backyard);
   const idx = kind === 'defend'
     ? Math.floor((G.wave || 1) / 3) % spots.length
     : Math.floor((G.wave || 1) / 5) % spots.length;
@@ -750,11 +752,11 @@ function startWave(n) {
     G.spawnQueue.push({ x: best.x + (Math.random() - 0.5) * 2.2, z: best.z + (Math.random() - 0.5) * 2.2, type: chooseArchetype(n, i) });
   }
   const roofSpawns = level.roofSpawns || [];
-  if (roofSpawns.length) {
-    const count = Math.min(2, 1 + Math.floor(n / 4));
+  if (roofSpawns.length && n >= 3) {
+    const count = Math.min(2, 1 + Math.floor((n - 3) / 3));
     for (let i = 0; i < count; i++) {
       const sp = roofSpawns[(n + i) % roofSpawns.length];
-      G.spawnQueue.push({ x: sp.x, z: sp.z, y: sp.y, type: 'sniper', roof: true });
+      G.spawnQueue.unshift({ x: sp.x, z: sp.z, y: sp.y, type: 'sniper', roof: true });
     }
     G.waveRemaining += count;
     G.waveTotal += count;
@@ -780,6 +782,7 @@ function spawnEnemy(pos) {
   if (e.setArchetype) e.setArchetype(pos.type || 'rifleman');
   if (e.clearBounds) e.clearBounds();
   e.spawn(pos.x, pos.z, yaw, pos.y || 0);
+  if (e.setOccluders && level.roofZones) e.setOccluders(level.roofZones);
   if ((pos.y || 0) > 1 && e.setBounds && level.roofZones) {
     const zone = level.roofZones.find((r) => pos.x >= r.x0 && pos.x <= r.x1 && pos.z >= r.z0 && pos.z <= r.z1);
     if (zone) e.setBounds(zone);
@@ -837,7 +840,10 @@ function updateWaves(dt) {
     }
   }
   hud.setWaveProgress(1 - G.waveRemaining / Math.max(1, G.waveTotal));
-  if (G.waveRemaining > 0 || alive > 0) {
+  const roofAlive = enemies.filter((e) => e.alive && e.baseY > 1).length;
+  if (roofAlive > 0 && alive === roofAlive) {
+    hud.setObjective('屋顶狙击手 · 从后院坡道上屋顶');
+  } else if (G.waveRemaining > 0 || alive > 0) {
     hud.setObjective(`清剿残敌 · 剩余 ${Math.max(alive, G.waveRemaining)}`);
   }
 }
