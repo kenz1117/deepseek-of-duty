@@ -1,79 +1,52 @@
+<div align="center">
+
 # DEEPSEEK OF DUTY
 
-一个在浏览器里运行的**第一人称射击垂直切片**：Three.js 渲染、全程序化资产生成、无任何外部贴图/模型/音频下载。目标是尽可能逼近现代 AAA 军事 FPS（Call of Duty: Modern Warfare 系列）的**观感与手感**，同时保持「打开网页即玩」。
+**在浏览器里运行的第一人称射击垂直切片** — Three.js 渲染 · 全程序化资产 · 打开网页即玩
+
+[![在线试玩](https://img.shields.io/badge/🎮_在线试玩-dod.goodpoint.top-success?style=for-the-badge&labelColor=1a1a2e)](https://dod.goodpoint.top/)
+[![Three.js](https://img.shields.io/badge/Three.js-r169-049EF4?style=flat-square&labelColor=1a1a2e)](https://threejs.org/)
+[![WebGL2](https://img.shields.io/badge/WebGL-2-990099?style=flat-square&labelColor=1a1a2e)](https://www.khronos.org/webgl/)
+[![零外部资产](https://img.shields.io/badge/资产-100%25程序化生成-orange?style=flat-square&labelColor=1a1a2e)](##-技术栈与特性)
+
+**→ [dod.goodpoint.top](https://dod.goodpoint.top/) 无需下载、无需注册，桌面浏览器打开即玩 ←**
+
+</div>
+
+---
+
+*55 秒实机演示（波次推进 · 街区攻坚）：*
+
+![实机演示视频](docs/dod-gameplay-720p.mp4)
+
+| 黄昏街区的推进路线 | 关卡全景（AL-MAZRAH CROSSING） |
+| --- | --- |
+| ![第一人称视角](docs/screenshot-street.jpg) | ![关卡俯瞰](docs/screenshot-overview.jpg) |
 
 > **诚实的边界**：这不是、也不可能是《使命召唤》的替代品。真正的 3A FPS 由数百人团队、自研引擎、数亿美元预算、实拍扫描资产、动作捕捉、烘焙全局光照与主机级 GPU 管线支撑。本项目是在浏览器 WebGL2 + 单文件程序化资产的约束下，把能做的部分做到尽量好。它不会在盲测中"打败"CoD；它是一份可运行、可交互、可继续迭代的工程与美术样本。
 
 ---
 
-## 快速开始
+## 🎮 在线试玩
 
-```bash
-npm install          # 首次（仓库已带 node_modules 时跳过）
-npm run dev          # http://127.0.0.1:5173
-```
+**地址：[https://dod.goodpoint.top/](https://dod.goodpoint.top/)**
 
-生产构建：`npm run build` → `dist/`（任意静态服务器可托管）。
+- 推荐 **Chrome / Edge** 桌面版，性能预算面向桌面独显 / Apple Silicon
+- 点击页面 → 进入指针锁定 → WASD 移动、鼠标射击；`Esc` 暂停释放鼠标
+- 低端设备请在菜单里切换画质（LOW / MED / HIGH / ULTRA）
 
-### 部署（仅本地手动）
+## 操作
 
-线上地址 [dod.goodpoint.top](https://dod.goodpoint.top)，**只接受本机发起的部署**，没有 CI 自动发布——外部 PR 合并进仓库的代码不会触碰服务器，须先在本地跑过、验证过，再手动部署：
+| 键位 | 功能 | 键位 | 功能 |
+| --- | --- | --- | --- |
+| `WASD` | 移动 | 鼠标左键 | 射击 |
+| `Shift` | 冲刺 | 鼠标右键 | 瞄准（ADS） |
+| `Ctrl` / `C` | 蹲伏 | `R` | 换弹 |
+| `Space` | 跳跃 | `1` / `2` | 切换武器（M4A1 / MK18） |
+| `G` | 投掷手雷 | `F` | 检视武器 |
+| `Esc` | 暂停 | | |
 
-```bash
-scripts/deploy.sh              # 构建 → 推送 GitHub → 同步服务器 → 健康检查（失败自动回滚）
-SKIP_GIT=1 scripts/deploy.sh   # 只同步服务器，不动 git
-```
-
-服务器侧架构与脚本见 `deploy/`（Dockerfile、Nginx 配置）与 `scripts/server-deploy.sh`（原子切换 + 自动回滚）。服务器拉不动 Docker Hub，Dockerfile 基于本机已有 alpine 基础镜像构建，勿改回 `FROM nginx:...`。
-
-### 操作
-
-| 键位 | 功能 |
-| --- | --- |
-| `WASD` | 移动 |
-| `Shift` | 冲刺 |
-| `Ctrl` / `C` | 蹲伏 |
-| `Space` | 跳跃 |
-| 鼠标左键 | 射击 |
-| 鼠标右键 | 瞄准（ADS） |
-| `R` | 换弹 |
-| `1` / `2` | 主武器切换（M4A1 / MK18） |
-| `G` | 投掷手雷 |
-| `F` | 检视武器 |
-| `Esc` | 暂停（释放鼠标） |
-| `1` / `2` / `3` | 波间升级时选择卡牌 |
-| 菜单 / 暂停 → SETTINGS | 灵敏度、ADS 灵敏度、FOV、反转 Y、音量、减少动态效果、画质 |
-
----
-
-## Sprint 2：留存 / 可玩性（已交付）
-
-| 能力 | 说明 |
-| --- | --- |
-| 设置与持久化 | 灵敏度、ADS 灵敏度、FOV、反转 Y、主音量、减少动态效果、画质；`localStorage` 保存，重进自动恢复 |
-| 首次教程 | 首次部署后依次提示：移动/冲刺 → 射击 → ADS → 换弹/手雷；条件达成自动推进，完成后不再出现 |
-| 波间 3 选 1 | 每波清空后暂停并弹出 3 张升级卡（伤害/射速/弹匣/护甲/移速/回血/手雷/生命），按 `1/2/3` 或点击选择，效果立即生效并跨波保留 |
-| 时段/天气 | 每波轮换 DUSK → NOON → STORM → BLUE HOUR；天空、太阳、雾、曝光、调色、Bloom 整组切换，HUD 显示当前环境 |
-| 敌人 archetype | rifleman / rusher（58HP 高速霰弹）/ shield（150HP 正面盾，需侧翼或爆头）/ sniper（82HP 远距激光预警），波次导演按阶段混编 |
-| 性能 | 混合 6 敌人（wave 7）：444 draw calls / 60fps；含室内新增 3 点光 |
-
----
-
-## Sprint B：可进入 CQB + 目标模式（已交付）
-
-| 能力 | 说明 |
-| --- | --- |
-| 巷内工坊 | 左巷 6×5m 单层室内，巷侧 + 临街两个门洞，货架/柜台/木箱掩体，吊灯暖光；街↔巷可绕后 |
-| 临街公寓 | 右街 6×6m 主间 + 2.85×2m 后厅，临街主门/后门/内门三个开口，厨房柜台/沙发/餐桌掩体，两盏室内灯 |
-| 敌人可进入 | 两个室内各有 2 个 spawnPoint / 2 个 coverPoint；门洞碰撞开口 1.8–2.2m，无门槛；AI 可从室内穿门出击 |
-| DEFEND | 清波后继续压制：站在目标区累计 60s，离开会衰减；区域内无敌人时会补充 2 名增援；HUD 显示进度/距离/返回提示 |
-| EXTRACT | 先清空区域，再进入目标区按住 8s 撤离；HUD 从“清空敌人”切到“进入区域” |
-| 目标 remix | 防守区在街心 / 出生点街口 / 左巷之间轮换；撤离区在左巷深处 / 工坊室内 / 公寓室内之间轮换 |
-| 模式节奏 | Wave 3/6/9 防守，Wave 5/10/15 撤离，其余生存；每波环境仍按 DUSK→NOON→STORM→BLUE HOUR 轮换 |
-
----
-
-## 技术栈与特性
+## ✨ 技术栈与特性
 
 - **渲染**：Three.js r169，WebGL2，PBR + IBL（PMREM 程序化天空）、ACES Filmic 色调映射、4×MSAA。
 - **后期**：UnrealBloom → ACES/sRGB → 自定义终级 Pass（对比/分离色调/去饱和、暗角、色差、胶片颗粒、USM 锐化、屏幕空间体积光、镜头光晕/横向光条、冲刺径向模糊、受伤/低血量/命中闪屏）。
@@ -86,9 +59,38 @@ SKIP_GIT=1 scripts/deploy.sh   # 只同步服务器，不动 git
 - **音频**：Web Audio 全合成（分层枪声、换弹 foley、脚步、弹着、跳弹、爆炸、心跳、环境风/远处交火），程序化卷积混响。
 - **UI**：CoD 风格 HUD（罗盘、动态准星、命中/爆头、击杀播报、弹药刻度、护甲/血量、受击方向、波次/目标）、部署/暂停/阵亡界面。
 
----
+## 🚀 本地运行
 
-## 目录结构
+```bash
+npm install          # 首次
+npm run dev          # http://127.0.0.1:5173
+```
+
+生产构建：`npm run build` → `dist/`（任意静态服务器可托管）。
+
+### 部署（仅本地手动）
+
+线上地址 [dod.goodpoint.top](https://dod.goodpoint.top) **只接受维护者本机发起的部署**，没有 CI 自动发布——外部 PR 合并进仓库的代码不会触碰服务器，须先在本地跑过、验证过，再手动部署：
+
+```bash
+scripts/deploy.sh              # 构建 → 推送 GitHub → 同步服务器 → 健康检查（失败自动回滚）
+SKIP_GIT=1 scripts/deploy.sh   # 只同步服务器，不动 git
+```
+
+服务器侧架构与脚本见 `deploy/`（Dockerfile、Nginx 配置）与 `scripts/server-deploy.sh`（原子切换 + 自动回滚）。服务器拉不动 Docker Hub，Dockerfile 基于本机已有 alpine 基础镜像构建，勿改回 `FROM nginx:...`。
+
+## 🤝 欢迎共创
+
+这是一个开放的水平切片项目，欢迎各种形式的参与：
+
+- **试玩反馈** → [提 Issue](https://github.com/kenz1117/deepseek-of-duty/issues/new)：手感、性能、Bug、兼容性（附浏览器与显卡信息更好）
+- **代码贡献** → Fork + PR。热门方向：敌人 AI 寻路（navmesh）、更多武器/关卡、SSAO/GTAO 与 TSR/FSR、可破坏掩体、角色骨骼蒙皮与动画状态机、程序化贴花分层、移动端适配
+- **美术 / 音频** → 本项目全部资产都是程序化生成的，欢迎来挑战新的生成算法（材质、天空、音效合成……）
+- **开发工具** → `tools/shoot.mjs`（headless Chrome 确定性截图）、`tools/record.mjs`（实机录制）均可复用
+
+> 📌 **部署安全边界**：服务器不接入任何 CI/CD 自动部署。所有 PR 合并后仅存在于仓库中，由维护者本地验证后手动发布——你的贡献不会在未经人工验证的情况下上线。
+
+## 📁 目录结构
 
 ```
 index.html                 入口 + HUD/菜单 DOM
@@ -109,20 +111,10 @@ src/fx/fx.js               火花/烟/曳光/弹孔/血/爆炸
 src/fx/atmosphere.js       浮尘与大气雾壳
 src/ui/hud.js              HUD 逻辑与 Canvas 绘制
 tools/shoot.mjs            headless Chrome + CDP 确定性截图工具
+tools/record.mjs           实机录制工具（视频演示用它生成）
+scripts/deploy.sh          一键部署（构建 → 推 GitHub → 同步服务器 → 健康检查）
+scripts/server-deploy.sh   服务器端原子部署（时间戳镜像 + 自动回滚）
 ```
-
----
-
-## 视觉自检（开发用）
-
-```bash
-node tools/shoot.mjs "http://127.0.0.1:5173/?shot=1&pose=hero" shots/hero.png 1800 1600 900
-```
-
-可用参数：`pose=hero|wide|combat|gun|alley|enemy`、`hidehud=1`、`EVAL='js 表达式'`（截图前在页面执行，用于触发特效/切换 UI）。
-工具会等待 `window.__READY`，并打印 console 报错。
-
----
 
 ## 已知局限 / 下一步
 
@@ -132,3 +124,11 @@ node tools/shoot.mjs "http://127.0.0.1:5173/?shot=1&pose=hero" shots/hero.png 18
 - 敌人寻路为转向 + AABB 推挤，无 navmesh；复杂地形会卡角。
 - 性能预算面向桌面独显/Apple Silicon；低端设备请切画质（菜单内 LOW/MED/HIGH/ULTRA）。
 - 若继续推进：角色骨骼层级与蒙皮、武器动画曲线、程序化贴花分层、SSAO/GTAO、TSR/FSR、可破坏掩体、更多关卡与模式。
+
+---
+
+<div align="center">
+
+**[🎮 立即在线试玩](https://dod.goodpoint.top/)** · 觉得有意思就点个 ⭐ 吧
+
+</div>
