@@ -18,6 +18,7 @@ import { createNavGrid } from './systems/navgrid.js';
 import { createCinema } from './cinema.js';
 import { createVoice } from './voice.js';
 import { createVideoIntro } from './videointro.js';
+import { createMinimap } from './ui/minimap.js';
 import { createResults, renderDailyList, renderMenuBoard } from './ui/results.js';
 import {
   OPERATIONS, operationById, isUnlocked, loadCampaign, saveCampaign,
@@ -95,7 +96,7 @@ const G = {
   stats: null, scoreMult: 1, uavUntil: 0, uavTick: 0,
 };
 
-let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro;
+let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap;
 let slotT = 0;
 let pickups = null, leaderboard = null, results = null, streakSys = null, artillery = null;
 let lastRunPayload = null;
@@ -1003,6 +1004,7 @@ async function boot() {
     hud.setVoicePlayer((id) => voice.play(id));
     cinema = createCinema({ engine, viewmodel, hud, voice });
     videoIntro = createVideoIntro();
+    minimap = createMinimap({ level });
     cinema.setVoice(G.settings.voice !== false);
     input = createInput(engine.renderer.domElement);
     controller = createController(engine.camera, level.colliders, level.bounds, audio, (x, z, y) => (level.groundHeight ? level.groundHeight(x, z, y) : 0));
@@ -1126,6 +1128,11 @@ async function boot() {
       }
     });
     input.on('key', (code) => {
+      if (code === 'KeyM' && minimap && G.state === 'playing') {
+        const on = minimap.toggle();
+        if (hud && hud.toast) hud.toast(on ? '小地图 ON' : '小地图 OFF', 1100);
+        return;
+      }
       if (videoIntro && videoIntro.playing && (code === 'Space' || code === 'Escape')) {
         videoIntro.skip();
         return;
@@ -2821,6 +2828,16 @@ function updateGame(dt) {
   // hud
   hud.setHeading(controller.headingDeg);
   hud.setSpread(spreadToPixels(playerSpread()), controller.adsAmount > 0.6);
+  if (minimap) {
+    minimap.update(dt, {
+      x: controller.pos.x, z: controller.pos.z,
+      heading: controller.headingDeg,
+      enemies,
+      objective: G.objective,
+      uav: G.uavUntil > G.time,
+      time: G.time,
+    });
+  }
   hud.setReloadPrompt(playing && (G.mag === 0 || (G.mag <= Math.ceil(currentWeapon().magSize * 0.15) && G.reloadTimer < 0)) && G.reserve > 0);
   hud.setGrenades(G.grenades);
   hud.update(dt);
@@ -2863,6 +2880,7 @@ window.__game = {
   get voice() { return voice; },
   get cinema() { return cinema; },
   get videoIntro() { return videoIntro; },
+  get minimap() { return minimap; },
   selectOperation: (id) => selectOperation(id),
   finishOperation: () => finishOperation(),
   renderOps: () => renderOps(),
