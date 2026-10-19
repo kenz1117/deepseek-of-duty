@@ -17,7 +17,7 @@ import { buildSoldier, applyPose } from './entities/soldierParts.js';
 export const SCENES = {
   /* OP 01 — an ally squad holds the corner while VEGA talks you in. */
   op01_intro: {
-    duration: 13.5,
+    duration: 16.0,
     fadeIn: 0.8,
     fadeOut: 0.9,
     actors: [
@@ -27,14 +27,14 @@ export const SCENES = {
     ],
     camera: [
       { t: 0, pos: [5.6, 2.7, 30.5], look: [1.0, 1.9, 19] },
-      { t: 5, pos: [3.0, 2.15, 27.5], look: [0.2, 1.8, 18] },
-      { t: 9, pos: [1.2, 1.9, 25.0], look: [0.8, 1.72, 17] },
-      { t: 13.5, pos: [0.2, 1.78, 23.4], look: [2.4, 1.62, 14] },
+      { t: 5.8, pos: [3.0, 2.15, 27.5], look: [0.2, 1.8, 18] },
+      { t: 10.4, pos: [1.2, 1.9, 25.0], look: [0.8, 1.72, 17] },
+      { t: 16.0, pos: [0.2, 1.78, 23.4], look: [2.4, 1.62, 14] },
     ],
     lines: [
-      { t: 0.5, speaker: 'VEGA', voice: 'op01_1', text: '灰狼，能听到吗？这里是 VEGA。街区已经失守，整条防线只剩你还在推进。' },
-      { t: 4.6, speaker: 'VEGA', voice: 'op01_2', text: '我们的人在路口顶着。你从南边切进去，先把街面清出来。' },
-      { t: 9.0, speaker: 'VEGA', voice: 'op01_3', text: '记住：别在开阔地停留。他们的狙击手喜欢屋顶。' },
+      { t: 0.6, speaker: 'VEGA', voice: 'op01_1', text: '灰狼，能听到吗？这里是 VEGA。街区已经失守，整条防线只剩你还在推进。' },
+      { t: 6.8, speaker: 'VEGA', voice: 'op01_2', text: '我们的人在路口顶着。你从南边切进去，先把街面清出来。' },
+      { t: 10.5, speaker: 'VEGA', voice: 'op01_3', text: '记住：别在开阔地停留。他们的狙击手喜欢屋顶。' },
     ],
   },
 

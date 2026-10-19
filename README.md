@@ -216,8 +216,8 @@
 
 ### 配音（MiniMax speech-02-hd）
 
-- 28 条台词用 MiniMax `speech-02-hd` 生成，存在 `public/audio/voice/`（3.2 MB），VEGA 女声、灰狼男声。
-- 过场按 `voice:` id 播放录音；录音缺失/播放失败时回退浏览器 TTS，再不行只保留字幕。
+- 32 条台词用 MiniMax `speech-02-hd` 生成，存在 `public/audio/voice/`（2.5 MB）：VEGA = `male-qn-badao-jingpin`（语速 1.30、音高 -3，低沉急促的指挥官），灰狼 = `male-qn-jingying-jingpin`（语速 1.25、音高 -1，更年轻的行动员），两人中位基频相差约 20 Hz，无线电里能听出是两个人。
+- 过场按 `voice:` id 播放录音；录音缺失/播放失败时回退浏览器 TTS，再不行只保留字幕。**注意**：接口返回的是 hex，不是 base64，落盘前必须 hex 解码。
 - 无线电台词同样带 `voice` id，字幕与录音同步入队。
 - 设置 → AUDIO → `战役语音合成 VOICE TTS` 可整体关闭（录音与 TTS 一起静音）。
 

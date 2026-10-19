@@ -1370,7 +1370,7 @@ function startWave(n) {
       G.atmosphere = op.atmosphere;
     }
     const line = op.radio.find((r) => r.at === n || (n === 1 && r.at === 'start'));
-    if (line && hud.radio && !(n === 1 && op.intro)) hud.radio(line.speaker, line.text, 5600, line.voice);
+    if (line && hud.radio && !(n === 1 && op.intro)) hud.radio(line.speaker, line.text, 7200, line.voice);
     if (op.bossWave === n) {
       if (op.bossIntro && cinema && (!SHOT_MODE || CINE_MODE)) {
         G.state = 'cinema';

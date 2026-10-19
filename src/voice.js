@@ -1,6 +1,11 @@
 /* =========================================================================
    Recorded voice lines (MiniMax speech-02-hd).
 
+   Casting: VEGA = male-qn-badao-jingpin (speed 1.30, pitch -3) — low, clipped
+   commander; 灰狼 = male-qn-jingying-jingpin (speed 1.25, pitch -1) — younger
+   operator. The two sit ~20 Hz apart in median F0 so they read as different
+   people on radio. Audio is stored as real MP3 (the API returns hex, not b64).
+
    The files live in public/audio/voice and are generated once; every line has
    a stable id so the story data only stores `voice: 'op2_1'`. If a file is
    missing or playback fails, the cinema falls back to browser TTS — the game
