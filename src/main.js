@@ -84,6 +84,104 @@ const menuCallsign = document.getElementById('menu-callsign');
 const menuCallsignInput = document.getElementById('menu-callsign-input');
 const menuCallsignHint = document.getElementById('menu-callsign-hint');
 const menuDeck = { tab: 'board', cache: new Map(), pages: new Map(), req: 0 };
+
+/* ------------------------------------------------------- deploy flavor line */
+
+const DEPLOY_FLAVOR = [
+  '城市街区已失守 · 你是唯一还在推进的资产',
+  '在连续波次中存活 · 清空每一波敌军',
+  '保持移动 · 掩体不会救你两次',
+  '弹药有限 · 每一发都要有去处',
+  '屋顶有眼 · 别在开阔地停留',
+  '撤离点不会等你 · 打完就撤',
+  '侦察机失联 · 这一区没有支援',
+  '天黑之前 · 清出一条生路',
+];
+
+function rollDeployFlavor() {
+  const el = document.getElementById('deploy-flavor');
+  if (el) el.textContent = DEPLOY_FLAVOR[(Math.random() * DEPLOY_FLAVOR.length) | 0];
+}
+rollDeployFlavor();
+
+/* ------------------------------------------------------- full board modal */
+
+const bmNum = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+const boardModal = { open: false, entries: [], nextOffset: 0, done: false, loading: false };
+
+function isBoardModalOpen() { return boardModal.open; }
+
+function renderBoardModalRows() {
+  const list = document.getElementById('board-modal-list');
+  if (!list) return;
+  list.textContent = '';
+  if (!boardModal.entries.length) {
+    const li = document.createElement('li');
+    li.className = 'mb-empty';
+    li.textContent = boardModal.loading ? '加载中…' : '暂无记录 · 成为第一个上榜的人';
+    list.appendChild(li);
+  }
+  boardModal.entries.forEach((e, i) => {
+    if (!e || typeof e !== 'object') return;
+    const li = document.createElement('li');
+    li.className = 'mb-row';
+    const r = document.createElement('span'); r.className = 'mb-rank'; r.textContent = String(bmNum(e.rank, i + 1));
+    const n = document.createElement('span'); n.className = 'mb-name'; n.textContent = String(e.name || 'UNKNOWN');
+    const s = document.createElement('span'); s.className = 'mb-score'; s.textContent = bmNum(e.score, 0).toLocaleString('en-US');
+    const w = document.createElement('span'); w.className = 'mb-wave'; w.textContent = String(bmNum(e.wave, 1));
+    const k = document.createElement('span'); k.className = 'mb-kills'; k.textContent = String(bmNum(e.kills, 0));
+    li.append(r, n, s, w, k);
+    list.appendChild(li);
+  });
+  const more = document.getElementById('board-modal-more');
+  if (more) {
+    more.disabled = boardModal.done || boardModal.loading;
+    more.textContent = boardModal.loading ? '加载中…' : boardModal.done ? '已到 TOP 100' : '加载下一页';
+  }
+  const note = document.getElementById('board-modal-note');
+  if (note) note.textContent = boardModal.entries.length ? `已显示 ${boardModal.entries.length} / 100` : 'TOP 100';
+}
+
+function loadBoardModalPage() {
+  if (!leaderboard || boardModal.loading || boardModal.done) return;
+  boardModal.loading = true;
+  renderBoardModalRows();
+  leaderboard.fetchBoard(G.settings.runMode, 50, leaderboard.clientId, boardModal.nextOffset).then((res) => {
+    boardModal.loading = false;
+    if (!res || !res.ok) { boardModal.done = true; renderBoardModalRows(); return; }
+    const seen = new Set(boardModal.entries.map((e) => e.runId));
+    for (const e of res.entries || []) {
+      if (e && !seen.has(e.runId)) { boardModal.entries.push(e); seen.add(e.runId); }
+    }
+    boardModal.nextOffset = res.nextOffset === undefined ? null : res.nextOffset;
+    if (boardModal.nextOffset === null || boardModal.entries.length >= 100) boardModal.done = true;
+    renderBoardModalRows();
+  }).catch(() => { boardModal.loading = false; boardModal.done = true; renderBoardModalRows(); });
+}
+
+function openBoardModal() {
+  if (!leaderboard) return;
+  boardModal.open = true;
+  boardModal.entries = [];
+  boardModal.nextOffset = 0;
+  boardModal.done = false;
+  const modeEl = document.getElementById('board-modal-mode');
+  if (modeEl) modeEl.textContent = String(G.settings.runMode || 'rotation').toUpperCase();
+  document.getElementById('board-modal')?.classList.remove('hidden');
+  loadBoardModalPage();
+}
+
+function closeBoardModal() {
+  boardModal.open = false;
+  document.getElementById('board-modal')?.classList.add('hidden');
+}
+
+document.getElementById('board-more')?.addEventListener('click', openBoardModal);
+document.getElementById('board-modal-close')?.addEventListener('click', closeBoardModal);
+document.getElementById('board-modal-more')?.addEventListener('click', loadBoardModalPage);
+document.getElementById('board-modal')?.addEventListener('click', (e) => {
+  if (e.target && e.target.id === 'board-modal') closeBoardModal();
+});
 const BOARD_SYNC_KEY = 'dod.board.sync.v1';
 const enemies = [];
 const grenades = [];
@@ -741,6 +839,7 @@ async function boot() {
       hudEl.classList.add('hidden');
       menuEl.classList.remove('hidden');
       closePrestart();
+      rollDeployFlavor();
       G.state = 'menu';
       input.unlock();
       resetGame();
@@ -784,6 +883,7 @@ async function boot() {
     });
     input.on('key', (code) => {
       if (code === 'Escape') {
+        if (isBoardModalOpen()) { closeBoardModal(); return; }
         if (prestartEl && !prestartEl.classList.contains('hidden')) { closePrestart(); return; }
         const openNow = typeof hud.isSettingsOpen === 'function' ? hud.isSettingsOpen() : !!hud.isSettingsOpen;
         if (openNow) { if (hud.closeSettings) hud.closeSettings(); return; }
