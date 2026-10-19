@@ -87,13 +87,13 @@ const FinalShader = {
         vec2 delta = (uSunScreen - uv) * (0.90 / 14.0);
         vec2 suv = uv;
         float illum = 0.0;
-        for (int i = 0; i < 14; i++) {
+        for (int i = 0; i < 8; i++) {
           vec3 s = sampleC(suv);
           float lum = dot(s, vec3(0.30, 0.55, 0.15));
           illum += max(0.0, lum - 0.80);
           suv += delta;
         }
-        illum *= uSunVisible / 14.0;
+        illum *= uSunVisible / 8.0;
         float edge = smoothstep(0.0, 0.22, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
         c += uSunColor * illum * uGodrays * 0.85 * edge;
       }
@@ -255,9 +255,9 @@ export function presets(quality) {
     case 'medium':
       return { msaa: 2, bloom: true, bloomStrength: 0.38, godrays: 0.5, grain: 0.024, ca: 0.0010, shadows: 2048, pixelRatio: 1, ssao: false };
     case 'ultra':
-      return { msaa: 4, bloom: true, bloomStrength: 0.46, godrays: 1.25, grain: 0.034, ca: 0.0020, shadows: 4096, pixelRatio: 2, ssao: true };
+      return { msaa: 4, bloom: true, bloomStrength: 0.46, godrays: 1.25, grain: 0.034, ca: 0.0020, shadows: 2048, pixelRatio: 2, ssao: true };
     case 'high':
     default:
-      return { msaa: 4, bloom: true, bloomStrength: 0.40, godrays: 1.0, grain: 0.028, ca: 0.0016, shadows: 2048, pixelRatio: 1.5, ssao: true };
+      return { msaa: 2, bloom: true, bloomStrength: 0.40, godrays: 1.0, grain: 0.028, ca: 0.0016, shadows: 2048, pixelRatio: 1.25, ssao: true };
   }
 }

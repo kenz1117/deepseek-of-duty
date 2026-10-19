@@ -126,7 +126,13 @@ function cleanup(code) {
 
     // wait for the game to flag itself ready
     let ready = false;
-    for (let i = 0; i < 120; i++) {
+    const skipReady = process.env.SKIP_READY === '1';
+    if (skipReady) {
+      // live mode (no ?shot=1): wait for the heavy boot instead of __READY
+      await sleep(Number(process.env.BOOT_MS || 9000));
+      ready = true;
+    }
+    for (let i = 0; i < 120 && !ready; i++) {
       const r = await send('Runtime.evaluate', { expression: 'window.__READY === true', returnByValue: true }).catch(() => null);
       if (r && r.result && r.result.value === true) { ready = true; break; }
       await sleep(250);

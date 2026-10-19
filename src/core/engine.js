@@ -139,11 +139,16 @@ export function createEngine(canvas, quality = 'high') {
   // ---------- post ----------
   const post = createPost(renderer, scene, camera, quality);
 
-  const state = { quality, fps: 60, frame: 0 };
+  const state = {
+    quality, fps: 60, frame: 0,
+    // dynamic resolution: scales the preset pixel ratio to hold ~60 fps
+    renderScale: 1, basePR: Math.min(window.devicePixelRatio || 1, q.pixelRatio),
+    emaMs: 16.7, lastAdjust: 0,
+  };
 
   function onResize() {
     const w = window.innerWidth, h = window.innerHeight;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, presets(state.quality).pixelRatio));
+    renderer.setPixelRatio(state.basePR * state.renderScale);
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
@@ -179,15 +184,39 @@ export function createEngine(canvas, quality = 'high') {
     post.uniforms.uSunColor.value.copy(sky.sunColor);
   }
 
+  /* Dynamic resolution: if frames run long, drop render scale in small steps;
+     recover when there is headroom again. Only geometry/post buffers scale —
+     the HUD is DOM, so text stays crisp at 1x. */
+  function applyDynamicResolution(dt) {
+    if (!(dt > 0)) return;
+    state.emaMs = state.emaMs * 0.94 + dt * 1000 * 0.06;
+    if (state.quality === 'low') return;
+    const now = performance.now();
+    if (now - state.lastAdjust < 1600) return;
+    let next = state.renderScale;
+    if (state.emaMs > 19.5 && next > 0.72) next = Math.max(0.72, next - 0.08);
+    else if (state.emaMs < 12.5 && next < 1) next = Math.min(1, next + 0.05);
+    state.lastAdjust = now;
+    if (Math.abs(next - state.renderScale) < 0.001) return;
+    state.renderScale = next;
+    renderer.setPixelRatio(state.basePR * next);
+    post.resize(window.innerWidth, window.innerHeight, renderer.getPixelRatio());
+  }
+
   function render(dt) {
     renderer.info.reset();
+    applyDynamicResolution(dt);
     post.render(dt);
   }
 
   function setQuality(next) {
     const nq = presets(next);
     state.quality = next;
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, nq.pixelRatio));
+    state.basePR = Math.min(window.devicePixelRatio || 1, nq.pixelRatio);
+    state.renderScale = 1;
+    state.emaMs = 16.7;
+    state.lastAdjust = performance.now();
+    renderer.setPixelRatio(state.basePR);
     renderer.setSize(window.innerWidth, window.innerHeight, false);
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -238,6 +267,7 @@ export function createEngine(canvas, quality = 'high') {
   return {
     renderer, scene, camera, sky, sun, fill, mats, post, state, addOverlay, applyAtmosphere, enableSSAO,
     update, render, setQuality, onResize,
+    get renderScale() { return state.renderScale; },
     get quality() { return state.quality; },
     resize: onResize,
   };

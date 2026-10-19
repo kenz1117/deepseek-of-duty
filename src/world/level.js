@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { projectBoxUV, mergeStatic } from '../core/geo.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mulberry32 } from '../core/materials.js';
+import { buildBoundsTreeFor } from '../core/bvh.js';
 
 /* =========================================================================
    LEVEL: "AL-MAZRAH CROSSING" — a contested city block at dusk.
@@ -3615,33 +3616,31 @@ export function createLevel(engine) {
   root.add(farMerged);
   farGroup.clear();
 
-  // static surfaces receive bullet impacts (decals are excluded)
+  // Static surfaces receive bullet impacts (decals are excluded). The merged
+  // meshes are FrontSide, so a shot fired from inside a room would exit through
+  // a back face and ignore the wall. Ray against invisible DoubleSide copies of
+  // the same geometry instead: real triangles, both faces, no AABB guesses.
+  // The copies share the merged geometry, so this costs no extra memory.
   bulletTargets.length = 0;
+  const rayOnlyMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, visible: false });
+  const rayGroup = new THREE.Group();
+  rayGroup.name = 'bullet-surfaces';
   merged.traverse((o) => {
-    if (!o.isMesh) return;
+    if (!o.isMesh || !o.geometry) return;
     const ud = (o.material && o.material.userData) || {};
-    if (!ud.noBullet) bulletTargets.push(o);
+    if (ud.noBullet) return;
+    const m = new THREE.Mesh(o.geometry, rayOnlyMat);
+    m.matrixAutoUpdate = false;
+    m.matrix.copy(o.matrixWorld);
+    m.matrixWorld.copy(o.matrixWorld);
+    m.userData.rayOnly = true;
+    m.userData.srcMat = o.material;   // impact FX still needs the real material
+    rayGroup.add(m);
+    bulletTargets.push(m);
   });
-
-  // Bullet blockers: the merged meshes are FrontSide, so a shot fired from
-  // inside a room would exit through back faces and ignore the wall. The
-  // colliders are the authoritative solid volumes, so mirror every tall one
-  // with an invisible double-sided box (no draw call, raycast only).
-  const blockerMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, visible: false });
-  const blockerGroup = new THREE.Group();
-  blockerGroup.name = 'bullet-blockers';
-  for (const c of colliders) {
-    const top = c.top == null ? 10 : c.top;
-    if (top < 2.0) continue;
-    const w = c.x1 - c.x0, d = c.z1 - c.z0;
-    if (w <= 0.02 || d <= 0.02) continue;
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, top, d), blockerMat);
-    m.position.set((c.x0 + c.x1) / 2, top / 2, (c.z0 + c.z1) / 2);
-    m.userData.blocker = true;
-    blockerGroup.add(m);
-  }
-  root.add(blockerGroup);
-  bulletTargets.push(...blockerGroup.children);
+  root.add(rayGroup);
+  // BVH once per merged buffer: a bullet costs 9 ms brute-force, <0.3 ms here.
+  const bvhStats = buildBoundsTreeFor(bulletTargets);
   buildYardDestructibles();
 
   /* ------------------------------------------------------------------ spawns */
@@ -3793,7 +3792,7 @@ export function createLevel(engine) {
   }
 
   return {
-    root, colliders, bulletTargets, spawnPoints, coverPoints,
+    root, colliders, bulletTargets, spawnPoints, coverPoints, bvhStats,
     bounds: { x0: -30, x1: 30, z0: -64, z1: 84 },
     cqbZones, objectiveZones, regionAt, regions: REGIONS,
     groundHeight, roofZones: ROOF_ZONES, roofSpawns: ROOF_SPAWNS, roofCovers: ROOF_COVERS,

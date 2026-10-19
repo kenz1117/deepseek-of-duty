@@ -144,6 +144,12 @@ export class Enemy {
     this.archetype = 'rifleman';
     this.def = ARCHETYPES.rifleman;
     this.maxHp = this.def.hp;
+    // difficulty layer (applied by main.js per wave); 1 = archetype baseline
+    this.diff = null;
+    this.accuracyMult = 1;
+    this.damageMult = 1;
+    this.firstShotMult = 1;
+    this.burstMult = 1;
 
     this.hp = this.maxHp;
     this.alive = true;
@@ -225,6 +231,17 @@ export class Enemy {
   }
 
   /* ------------------------------------------------------------ archetype */
+  /** Per-wave difficulty knobs. Kept as multipliers so the archetype table
+   *  stays the single description of baseline behaviour. */
+  setDifficulty(tier) {
+    this.diff = tier || null;
+    this.accuracyMult = tier ? tier.accuracy : 1;
+    this.damageMult = tier ? tier.damage : 1;
+    this.firstShotMult = tier ? tier.firstShot : 1;
+    this.burstMult = tier ? tier.burst : 1;
+    this.fireTimer = (this.def.firstShot + Math.random() * 0.4) * this.firstShotMult;
+  }
+
   /**
    * Switch archetype. Safe before or after spawn(): rebuilds the visual,
    * hit volumes and combat profile, and resets hp / speed / damage / timers /
@@ -250,7 +267,7 @@ export class Enemy {
     this.warnT = 0;
     this.warnActive = false;
     this.repositionT = 0;
-    this.fireTimer = this.def.firstShot;
+    this.fireTimer = this.def.firstShot * this.firstShotMult;
     this.canSee = false;
     this.sightTimer = this.rnd() * 0.3;
     this.coverPoint = null;
@@ -343,6 +360,26 @@ export class Enemy {
 
     this.setupOverlays();
     this.buildHitboxes();
+    this.collectDetails();
+  }
+
+  /** Small meshes (pouches, straps, eyes, patches) are invisible past ~24 m.
+   *  Hiding them is a cheap per-enemy draw-call cut without touching the rig. */
+  collectDetails() {
+    this.detailMeshes = [];
+    this.rig.root.traverse((o) => {
+      if (!o.isMesh || o.userData.enemy || !o.visible) return;
+      if (!o.geometry.boundingSphere) o.geometry.computeBoundingSphere();
+      const r = o.geometry.boundingSphere ? o.geometry.boundingSphere.radius : 1;
+      if (r < 0.075) this.detailMeshes.push(o);
+    });
+    this._detailOn = true;
+  }
+
+  setDetailVisible(show) {
+    if (this._detailOn === show) return;
+    this._detailOn = show;
+    for (const m of this.detailMeshes) m.visible = show;
   }
 
   /** sniper laser + scope glint (no lights) */
@@ -477,7 +514,7 @@ export class Enemy {
     this.state = 'advance';
     this.deathT = 0;
     this.burstLeft = 0;
-    this.fireTimer = this.def.firstShot + Math.random() * 0.6;
+    this.fireTimer = (this.def.firstShot + Math.random() * 0.6) * this.firstShotMult;
     this.crouch = 0.10;
     this.flinch = 0;
     this.recoil = 0;
@@ -956,7 +993,13 @@ export class Enemy {
           this.fireTimer = def.burstGap + Math.random() * 0.05;
         }
       } else if (this.fireTimer <= 0) {
-        this.burstLeft = def.burstMin + Math.floor(Math.random() * (def.burstMax - def.burstMin + 1));
+        // global aggression budget: only N soldiers may open fire at once
+        if (ctx.tryFire && !ctx.tryFire(this)) {
+          this.fireTimer = 0.28 + Math.random() * 0.22;
+          return;
+        }
+        const base = def.burstMin + Math.floor(Math.random() * (def.burstMax - def.burstMin + 1));
+        this.burstLeft = Math.max(2, Math.round(base * this.burstMult));
         this.fireTimer = def.burstPause + Math.random() * 0.3;
       }
     } else if (this.burstLeft > 0) {
@@ -1276,8 +1319,8 @@ export class Enemy {
 
     const playerSpeed = ctx.playerSpeed || 0;
     const hitChance = clamp(
-      def.hitBase - dist * def.hitFalloff - playerSpeed * def.hitSpeedFalloff,
-      0.12, 0.95
+      def.hitBase * this.accuracyMult - dist * def.hitFalloff - playerSpeed * def.hitSpeedFalloff,
+      0.06, 0.95
     );
     const hit = Math.random() < hitChance;
     const pan = ctx.panFor ? ctx.panFor(this.root.position) : 0;
@@ -1285,7 +1328,7 @@ export class Enemy {
     if (this.archetype === 'rusher') {
       /* shotgun: several pellets, brutal up close, useless far away */
       const falloff = clamp(1 - dist / (def.fireRange + 3), 0.1, 1);
-      const dmg = (def.shotDamage[0] + Math.random() * (def.shotDamage[1] - def.shotDamage[0])) * (0.35 + 0.65 * falloff);
+      const dmg = (def.shotDamage[0] + Math.random() * (def.shotDamage[1] - def.shotDamage[0])) * (0.35 + 0.65 * falloff) * this.damageMult;
       const end = hit
         ? playerPos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.3, -0.12, (Math.random() - 0.5) * 0.3))
         : playerPos.clone().add(new THREE.Vector3(
@@ -1307,7 +1350,7 @@ export class Enemy {
     }
 
     if (this.archetype === 'sniper') {
-      const dmg = def.shotDamage[0] + Math.random() * (def.shotDamage[1] - def.shotDamage[0]);
+      const dmg = (def.shotDamage[0] + Math.random() * (def.shotDamage[1] - def.shotDamage[0])) * this.damageMult;
       const end = hit
         ? playerPos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.12, -0.1, (Math.random() - 0.5) * 0.12))
         : playerPos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.5, -0.2, (Math.random() - 0.5) * 0.5));
@@ -1335,7 +1378,7 @@ export class Enemy {
     ctx.fx.tracer(muzzle, endpoint, { color: 0xffc98a, width: 0.03, life: 0.05 });
     ctx.fx.muzzleFlash(muzzle);
     if (hit) {
-      const dmg = def.shotDamage[0] + Math.random() * (def.shotDamage[1] - def.shotDamage[0]);
+      const dmg = (def.shotDamage[0] + Math.random() * (def.shotDamage[1] - def.shotDamage[0])) * this.damageMult;
       ctx.damagePlayer(dmg, this.root.position);
     }
     ctx.audio.enemyShot(pan, dist);

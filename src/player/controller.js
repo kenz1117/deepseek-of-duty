@@ -163,11 +163,17 @@ export function createController(camera, colliders, bounds, audio, groundProvide
     const breathe = Math.sin(performance.now() / 1000 * 1.1) * 0.006;
 
     // ---- recoil spring
+    // Impulse-driven, but capped: a long spray must never walk the camera off
+    // the target, otherwise the crosshair stops meaning anything.
     const K = 190, D = 17;
     recoilPitchVel += (-K * recoilPitch - D * recoilPitchVel) * dt;
     recoilPitch += recoilPitchVel * dt;
     recoilYawVel += (-K * recoilYaw - D * recoilYawVel) * dt;
     recoilYaw += recoilYawVel * dt;
+    if (recoilPitch > 0.0115) { recoilPitch = 0.0115; if (recoilPitchVel > 0) recoilPitchVel = 0; }
+    if (recoilPitch < -0.014) { recoilPitch = -0.014; if (recoilPitchVel < 0) recoilPitchVel = 0; }
+    if (recoilYaw > 0.010) { recoilYaw = 0.010; if (recoilYawVel > 0) recoilYawVel = 0; }
+    if (recoilYaw < -0.010) { recoilYaw = -0.010; if (recoilYawVel < 0) recoilYawVel = 0; }
 
     // ---- camera
     const standEye = THREE.MathUtils.lerp(1.68, 1.05, crouchT);

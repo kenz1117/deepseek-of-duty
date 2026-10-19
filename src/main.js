@@ -45,6 +45,18 @@ const WEAPONS = [
   },
 ];
 
+/* Recoil pattern: the first shots kick hardest, then the climb settles into a
+   small repeatable pattern with alternating horizontal drift. Values are camera
+   degrees; controller.kick() takes an angular impulse, and DEG_TO_KICK was
+   measured against the spring (190 / 17) so a value of 0.3 really is about
+   0.3 degrees of climb. */
+const RECOIL_UP = [0.26, 0.33, 0.37, 0.39, 0.40, 0.40, 0.39, 0.38];
+const RECOIL_SIDE = [0.02, -0.05, 0.08, -0.10, 0.11, -0.11, 0.09, -0.08];
+const RECOIL_RESET_MS = 320;
+const DEG_TO_KICK = 0.50;
+const ADS_RECOIL = 0.60;
+const MOVE_SPREAD = 0.60;   // was 1.4 => 2.4x spread while moving, now 1.6x
+
 const G = {
   state: 'loading',
   hp: 100, maxHp: 100, armor: 60, maxArmor: 60,
@@ -58,6 +70,7 @@ const G = {
   reloadTimer: -1, reloadTransferred: false, reloadShells: 0,
   fireCooldown: 0, grenades: 2,
   firing: false, shotFired: false,
+  recoilIndex: 0, lastShotAt: -1e9,
   freezeEnemies: false, debugWaves: false, hitStop: 0, lockHint: false, debugAutoFire: false,
   readyFrames: 0, ready: false,
   hurtTimer: 0,
@@ -298,19 +311,53 @@ function applyAtmosphereForWave(n) {
   if (hud && hud.setAtmosphere) hud.setAtmosphere(label);
 }
 
+/* Difficulty ladder. The archetype table stays the baseline; every tier is a
+   multiplier on top so a wave can be tuned without forking enemy behaviour. */
+const DIFF_TIERS = [
+  { id: 'D1', label: 'TRAINING', wave: 1, accuracy: 0.62, damage: 0.55, firstShot: 1.9, burst: 0.65, maxFiring: 2 },
+  { id: 'D2', label: 'CONTACT', wave: 3, accuracy: 0.72, damage: 0.72, firstShot: 1.5, burst: 0.80, maxFiring: 2 },
+  { id: 'D3', label: 'PRESSURE', wave: 5, accuracy: 0.85, damage: 0.85, firstShot: 1.3, burst: 0.90, maxFiring: 3 },
+  { id: 'D4', label: 'VETERAN', wave: 8, accuracy: 1.00, damage: 1.00, firstShot: 1.1, burst: 1.00, maxFiring: 4 },
+  { id: 'D5', label: 'ELITE', wave: 12, accuracy: 1.08, damage: 1.10, firstShot: 0.9, burst: 1.10, maxFiring: 5 },
+];
+
+function diffForWave(n) {
+  let tier = DIFF_TIERS[0];
+  for (const t of DIFF_TIERS) if (n >= t.wave) tier = t;
+  return tier;
+}
+
+/* Global aggression budget: N soldiers may open fire in the same window.
+   Without it four riflemen can start a burst on the same frame and delete
+   the player before the first tracer is readable. */
+const firingSlots = { max: 1, life: 1.15, at: [] };
+function tryEnemyFire() {
+  const now = performance.now() / 1000;
+  while (firingSlots.at.length && now - firingSlots.at[0] > firingSlots.life) firingSlots.at.shift();
+  if (firingSlots.at.length >= firingSlots.max) return false;
+  firingSlots.at.push(now);
+  return true;
+}
+
 function chooseArchetype(wave, index) {
   const r = Math.random();
-  if (wave <= 2) return 'rifleman';
-  if (wave <= 4) return r < 0.30 ? 'rusher' : 'rifleman';
-  if (wave <= 6) {
-    if (r < 0.16) return 'shield';
-    if (r < 0.38) return 'rusher';
-    if (r < 0.50) return 'sniper';
+  // specials unlock later: rusher 4, shield 9, sniper 9+ (roof snipers from 6)
+  if (wave <= 3) return 'rifleman';
+  if (wave <= 5) return r < 0.22 ? 'rusher' : 'rifleman';
+  if (wave <= 8) {
+    if (r < 0.12) return 'shield';
+    if (r < 0.34) return 'rusher';
     return 'rifleman';
   }
-  if (r < 0.28) return 'rusher';
-  if (r < 0.44) return 'shield';
-  if (r < 0.58) return 'sniper';
+  if (wave <= 11) {
+    if (r < 0.10) return 'sniper';
+    if (r < 0.26) return 'shield';
+    if (r < 0.50) return 'rusher';
+    return 'rifleman';
+  }
+  if (r < 0.14) return 'sniper';
+  if (r < 0.34) return 'shield';
+  if (r < 0.58) return 'rusher';
   return 'rifleman';
 }
 
@@ -878,6 +925,8 @@ async function boot() {
     applySettings(true);
     raycaster = new THREE.Raycaster();
     raycaster.far = 160;
+    // three-mesh-bvh stops at the first hit inside each merged world buffer
+    raycaster.firstHitOnly = true;
     setupEnemyCtx();
 
     vmPass = engine.addOverlay(viewmodel.scene, viewmodel.camera);
@@ -1062,6 +1111,11 @@ function resetGame() {
   G.upgrades = { damage: 1, fireRate: 1, mag: 1, speed: 0, regen: 1, grenades: 0, health: 0 };
   G.regenRate = 26;
   G.shotsFired = 0;
+  G.recoilIndex = 0;
+  G.lastShotAt = -1e9;
+  G.diff = DIFF_TIERS[0];
+  firingSlots.max = G.diff.maxFiring;
+  firingSlots.at.length = 0;
   G.upgradeShown = false;
   G.upgradeCards = [];
   G.mode = 'survival';
@@ -1123,11 +1177,18 @@ function pipsFor(armor) { return Math.ceil(armor / 20); }
 
 /* ------------------------------------------------------------------ waves */
 function startWave(n) {
+  const prevTier = G.diff;
+  G.diff = diffForWave(n);
+  firingSlots.max = G.diff.maxFiring;
+  firingSlots.at.length = 0;
   G.wave = n;
   G.upgradeShown = false;
   if (G.stats) G.stats.damagedThisWave = false;
   applyAtmosphereForWave(n);
   setupObjective(n);
+  if (prevTier && prevTier.id !== G.diff.id && hud.toast) {
+    hud.toast(`敌方战术升级 · ${G.diff.id} ${G.diff.label}`, 2200);
+  }
   if (n >= 3 && !G.unlockedShotgun) {
     G.unlockedShotgun = true;
     if (hud.toast) hud.toast('M870 已解锁 · 按 3 装备');
@@ -1157,8 +1218,8 @@ function startWave(n) {
     G.spawnQueue.push({ x: best.x + (Math.random() - 0.5) * 2.2, z: best.z + (Math.random() - 0.5) * 2.2, type: chooseArchetype(n, i) });
   }
   const roofSpawns = level.roofSpawns || [];
-  if (roofSpawns.length && n >= 3) {
-    const count = Math.min(2, 1 + Math.floor((n - 3) / 3));
+  if (roofSpawns.length && n >= 6) {
+    const count = Math.min(2, 1 + Math.floor((n - 6) / 3));
     for (let i = 0; i < count; i++) {
       const sp = roofSpawns[(n + i) % roofSpawns.length];
       G.spawnQueue.unshift({ x: sp.x, z: sp.z, y: sp.y, type: 'sniper', roof: true });
@@ -1298,6 +1359,7 @@ function spawnEnemy(pos) {
   if (e.setArchetype) e.setArchetype(pos.type || 'rifleman');
   if (e.clearBounds) e.clearBounds();
   e.spawn(pos.x, pos.z, yaw, pos.y || 0);
+  if (e.setDifficulty) e.setDifficulty(G.diff);
   if (e.setOccluders && level.roofZones) e.setOccluders(level.roofZones);
   if ((pos.y || 0) > 1 && e.setBounds && level.roofZones) {
     const zone = level.roofZones.find((r) => pos.x >= r.x0 && pos.x <= r.x1 && pos.z >= r.z0 && pos.z <= r.z1);
@@ -1440,6 +1502,22 @@ function muzzleWorld(out) {
   return out;
 }
 
+/* One spread definition for both the bullet cone and the crosshair, so the
+   reticle finally shows where the gun actually shoots. */
+function playerSpread() {
+  const w = currentWeapon();
+  const moving = controller.state.speed;
+  const ads = controller.adsAmount;
+  return (ads > 0.5 ? w.adsSpread : w.spread) * (1 + moving * MOVE_SPREAD) * (1 - ads * 0.65);
+}
+
+/** radians of spread -> crosshair radius in CSS pixels at the current FOV */
+function spreadToPixels(rad) {
+  const halfH = window.innerHeight * 0.5;
+  const halfFov = THREE.MathUtils.degToRad(engine.camera.fov) * 0.5;
+  return Math.max(1.5, (Math.tan(rad) / Math.tan(halfFov)) * halfH);
+}
+
 function fireShot() {
   const w = currentWeapon();
   if (G.mag <= 0) return;
@@ -1452,11 +1530,17 @@ function fireShot() {
   const mz = muzzleWorld(_muzzle);
   fx.muzzleFlash(mz);
   audio.gunshot(0);
-  controller.kick(0.72 * w.recoil + Math.random() * 0.16, (Math.random() - 0.5) * 0.30 * w.recoil);
-  controller.addShake(0.09);
-  const moving = controller.state.speed;
   const ads = controller.adsAmount;
-  const spread = (ads > 0.5 ? w.adsSpread : w.spread) * (1 + moving * 1.4) * (1 - ads * 0.65);
+  const nowMs = performance.now();
+  if (nowMs - G.lastShotAt > RECOIL_RESET_MS) G.recoilIndex = 0;
+  G.lastShotAt = nowMs;
+  const ri = G.recoilIndex++;
+  const adsMul = ads > 0.5 ? ADS_RECOIL : 1;
+  const upDeg = RECOIL_UP[Math.min(ri, RECOIL_UP.length - 1)] * w.recoil * adsMul;
+  const sideDeg = RECOIL_SIDE[ri % RECOIL_SIDE.length] * w.recoil * adsMul;
+  controller.kick(upDeg * DEG_TO_KICK, sideDeg * DEG_TO_KICK);
+  controller.addShake(0.09);
+  const spread = playerSpread();
   const pellets = w.pellets || 1;
   const targets = level.bulletTargets.slice();
   for (const e of enemies) if (e.alive) targets.push(...e.hitboxes);
@@ -1466,18 +1550,19 @@ function fireShot() {
   _up.set(0, 1, 0).applyQuaternion(engine.camera.quaternion);
   let effects = 0;
   let hitMarked = false;
+  const cone = pellets > 1 ? spread * 1.45 : spread;
+  const GOLDEN = 2.399963229728653;   // low-discrepancy: even pellet coverage
   for (let p = 0; p < pellets; p++) {
-    // pellets spread inside a cone; the first one keeps the base direction
-    const cone = pellets > 1 ? spread * 1.45 : spread;
-    const ang = Math.random() * Math.PI * 2;
-    const rad = Math.sqrt(Math.random()) * cone;
+    // pellet 0 keeps the base direction, the rest spiral outwards evenly
+    const ang = (p - 1) * GOLDEN;
+    const rad = p === 0 ? 0 : cone * Math.sqrt((p - 0.35) / (pellets - 0.7));
     _dir.copy(baseDir)
       .addScaledVector(_right, Math.cos(ang) * rad)
       .addScaledVector(_up, Math.sin(ang) * rad)
       .normalize();
     raycaster.set(engine.camera.position, _dir);
     const hits = raycaster.intersectObjects(targets, false);
-    const hit = hits.find((h) => h.object.visible || h.object.userData.enemy);
+    const hit = hits.find((h) => h.object.visible || h.object.userData.enemy || h.object.userData.rayOnly);
     _end.copy(engine.camera.position).addScaledVector(_dir, 120);
     if (p === 0) _endFirst.copy(_end);
     if (hit) {
@@ -1514,7 +1599,7 @@ function fireShot() {
           if (!hitMarked) { hitMarked = true; audio.hitmarker(headshot); hud.hit(headshot, killed); }
           if (killed) onEnemyKilled(enemy, headshot, 'bullet');
         } else if (effects < 3) {
-          const mat = hit.object.material;
+          const mat = hit.object.userData.srcMat || hit.object.material;
           let kind = 'concrete';
           if (mat === engine.mats.metal || mat === engine.mats.metalTan || mat === engine.mats.rust || mat === engine.mats.shop) kind = 'metal';
           if (mat === engine.mats.wood) kind = 'wood';
@@ -2110,6 +2195,7 @@ function setupEnemyCtx() {
   enemyCtx.audio = audio;
   enemyCtx.camera = engine.camera;
   enemyCtx.coverPoints = level.coverPoints;
+  enemyCtx.tryFire = tryEnemyFire;
   enemyCtx.nav = nav;
   enemyCtx.groundAt = (x, z, y) => level.groundHeight(x, z, y);
   enemyCtx.playerGroundY = 0;
@@ -2391,6 +2477,15 @@ function updateGame(dt) {
       continue;
     }
     e.update(dt, enemyCtx);
+    // shadow LOD: far soldiers stop casting (each one is ~47 shadow draws)
+    const dx = e.root.position.x - controller.pos.x;
+    const dz = e.root.position.z - controller.pos.z;
+    const castShadow = dx * dx + dz * dz < 26 * 26;
+    if (e._shadowOn !== castShadow) {
+      e._shadowOn = castShadow;
+      e.root.traverse((o) => { if (o.isMesh) o.castShadow = castShadow; });
+    }
+    if (e.setDetailVisible) e.setDetailVisible(dx * dx + dz * dz < 24 * 24);
   }
 
   // pickups / artillery / killstreak counter keep ticking through death so the
@@ -2419,9 +2514,7 @@ function updateGame(dt) {
 
   // hud
   hud.setHeading(controller.headingDeg);
-  const speedNorm = controller.state.speed;
-  const spreadPx = (G.firing ? 7 : 2) + speedNorm * 9 + (controller.adsAmount > 0.5 ? 0 : 4);
-  hud.setSpread(spreadPx, controller.adsAmount > 0.6);
+  hud.setSpread(spreadToPixels(playerSpread()), controller.adsAmount > 0.6);
   hud.setReloadPrompt(playing && (G.mag === 0 || (G.mag <= Math.ceil(currentWeapon().magSize * 0.15) && G.reloadTimer < 0)) && G.reserve > 0);
   hud.setGrenades(G.grenades);
   hud.update(dt);
@@ -2450,9 +2543,10 @@ window.__game = {
   // debug: what does a shot ray hit first (blockers included)
   debugRay: (ox, oy, oz, dx, dy, dz, max = 120) => {
     const rr = new THREE.Raycaster(new THREE.Vector3(ox, oy, oz), new THREE.Vector3(dx, dy, dz).normalize(), 0, max);
+    rr.firstHitOnly = true;
     const hits = rr.intersectObjects(level.bulletTargets, false);
-    const h = hits.find((x) => x.object.visible || x.object.userData.enemy);
-    return h ? { d: +h.distance.toFixed(2), blocker: !!h.object.userData.blocker, p: [+h.point.x.toFixed(1), +h.point.y.toFixed(1), +h.point.z.toFixed(1)] } : null;
+    const h = hits.find((x) => x.object.visible || x.object.userData.enemy || x.object.userData.rayOnly);
+    return h ? { d: +h.distance.toFixed(2), surface: h.object.userData.rayOnly ? 'world' : 'mesh', p: [+h.point.x.toFixed(1), +h.point.y.toFixed(1), +h.point.z.toFixed(1)] } : null;
   },
   get enemies() { return enemies; }, get state() { return G; }, get hud() { return hud; },
   get fx() { return fx; }, get viewmodel() { return viewmodel; }, get input() { return input; },
@@ -2473,8 +2567,8 @@ window.__game = {
     return {
       point: h.point.toArray().map((v) => +v.toFixed(2)),
       dist: +h.distance.toFixed(2),
-      mat: h.object.material?.color?.getHexString?.() || null,
-      mt: h.object.material?.type || null,
+      mat: (h.object.userData.srcMat || h.object.material)?.color?.getHexString?.() || null,
+      mt: (h.object.userData.srcMat || h.object.material)?.type || null,
       name: h.object.name || h.object.parent?.name || '',
     };
   },
