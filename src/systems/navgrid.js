@@ -424,6 +424,12 @@ export function createNavGrid(level, opts = {}) {
     isWalkable: (x, z) => { const { c, r } = cellOf(x, z); return freeIn(0, c, r); },
     isWalkableOn: (x, z, l) => { const { c, r } = cellOf(x, z); return freeIn(l, c, r); },
     closestWalkable: (x, z) => { const f = closestFreeIn(0, x, z); return f ? worldOf(f.c, f.r) : null; },
+    isWalkableAt: (x, z, y = 0) => { const l = layerAt(x, z, y); const { c, r } = cellOf(x, z); return freeIn(l, c, r); },
+    closestWalkableOn: (x, z, y = 0) => {
+      const l = layerAt(x, z, y);
+      const f = closestFreeIn(l, x, z);
+      return f ? { ...worldOf(f.c, f.r), layer: l, height: layers[l].height } : null;
+    },
     layerAt, markThreat, update, refreshRegion,
     debugBlocked(x, z) {
       const { c, r } = cellOf(x, z);

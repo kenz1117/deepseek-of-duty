@@ -890,23 +890,98 @@ function isSpawnAllowed(sp) {
 
 /** Far spawn by default, but a slice of waves now arrives on the flank/behind
     so the player cannot camp one sightline (Sprint G). */
-function pickSpawnPoint(pool, allowFlank) {
+/* ---- spawn safety -------------------------------------------------------
+   A spawn point is only usable if (a) it is on a walkable nav cell and
+   (b) a ground path to the player exists. Without this, random +/-1 m jitter
+   dropped enemies inside walls, containers or sealed rooms and both sides
+   could never find each other. */
+function resolveSpawn(x, z, y = 0) {
+  if (nav.isWalkableAt ? nav.isWalkableAt(x, z, y) : nav.isWalkable(x, z)) return { x, z, y };
+  const w = nav.closestWalkableOn ? nav.closestWalkableOn(x, z, y) : nav.closestWalkable(x, z);
+  return w ? { x: w.x, z: w.z, y } : null;
+}
+
+function spawnReachesPlayer(sp) {
+  if (sp.y > 1) return true;
+  return !!nav.findPath(sp.x, sp.z, 0, controller.pos.x, controller.pos.z, controller.pos.y);
+}
+
+function ringSpawn(minR = 12, maxR = 24) {
   const p = controller.pos;
-  let best = null, bestD = -1, flank = null, flankD = -1;
+  for (let i = 0; i < 28; i++) {
+    const a = (i / 28) * Math.PI * 2 + Math.random() * 0.35;
+    const r = minR + Math.random() * (maxR - minR);
+    const sp = resolveSpawn(p.x + Math.cos(a) * r, p.z + Math.sin(a) * r, 0);
+    if (sp && spawnReachesPlayer(sp)) return sp;
+  }
+  return null;
+}
+
+function normalizeSpawns() {
+  if (!level || !nav) return;
+  for (const sp of level.spawnPoints || []) {
+    const r = resolveSpawn(sp.x, sp.z, 0);
+    if (r) { sp.x = r.x; sp.z = r.z; }
+  }
+  for (const sp of level.roofSpawns || []) {
+    const r = resolveSpawn(sp.x, sp.z, sp.y || 3.2);
+    if (r) { sp.x = r.x; sp.z = r.z; }
+  }
+}
+
+function validCandidates(pool, requirePath) {
+  const out = [];
+  const seen = new Set();
+  for (const sp of pool) {
+    const key = `${sp.x.toFixed(1)}:${sp.z.toFixed(1)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const r = resolveSpawn(sp.x, sp.z, sp.y || 0);
+    if (!r) continue;
+    if (requirePath && !spawnReachesPlayer(r)) continue;
+    out.push(r);
+  }
+  return out;
+}
+
+function pickSpawnPoint(pool, allowFlank, requirePath = true) {
+  const p = controller.pos;
+  const valid = validCandidates(pool, requirePath);
+  if (!valid.length) {
+    if (requirePath) return ringSpawn();
+    const any = validCandidates(pool, false);
+    return any.length ? any[Math.floor(Math.random() * any.length)] : ringSpawn();
+  }
+  let best = null, bestD = -1, mid = null, midD = -1, near = null, nearD = 1e9, flank = null, flankD = -1;
   const H = controller.headingDeg * Math.PI / 180;
-  const fx = Math.sin(H), fz = -Math.cos(H);   // camera facing on the ground plane
-  for (let k = 0; k < 6; k++) {
-    const sp = pool[Math.floor(Math.random() * pool.length)];
+  const fx = Math.sin(H), fz = -Math.cos(H);
+  for (const sp of valid) {
     const dx = sp.x - p.x, dz = sp.z - p.z;
     const d = Math.hypot(dx, dz);
     if (d > bestD) { bestD = d; best = sp; }
+    // engagement band: close enough to arrive in ~10-20 s, far enough to not
+    // pop in on top of the player (the old "always farthest" rule put waves
+    // 120 m away once the dock opened)
+    if (d >= 18 && d <= 45 && d > midD) { midD = d; mid = sp; }
+    if (d > 10 && d < nearD) { nearD = d; near = sp; }
     if (d > 16 && d < 52) {
       const front = (dx * fx + dz * fz) / Math.max(1, d);
       if (front < -0.15 && d > flankD) { flankD = d; flank = sp; }
     }
   }
   if (allowFlank && flank && Math.random() < 0.34) return flank;
-  return best;
+  return mid || near || best;
+}
+
+function pickZoneSpawn(pool, zone) {
+  const near = pool.filter((p2) => {
+    const d = Math.hypot(p2.x - zone.x, p2.z - zone.z);
+    return d > 7 && d < 30;
+  });
+  const src = near.length ? near : pool;
+  const valid = validCandidates(src, true);
+  if (valid.length) return valid[Math.floor(Math.random() * valid.length)];
+  return pickSpawnPoint(pool, false) || ringSpawn();
 }
 
 function spawnReinforcements(count) {
@@ -916,11 +991,7 @@ function spawnReinforcements(count) {
     const src = allowed.length ? allowed : level.spawnPoints;
     const best = pickSpawnPoint(src, true);
     if (!best) break;
-    G.spawnQueue.push({
-      x: best.x + (Math.random() - 0.5) * 1.4,
-      z: best.z + (Math.random() - 0.5) * 1.4,
-      type: chooseArchetype(G.wave, i),
-    });
+    G.spawnQueue.push({ x: best.x, z: best.z, y: best.y || 0, type: chooseArchetype(G.wave, i) });
   }
   G.waveRemaining += count;
   G.waveTotal += count;
@@ -1074,6 +1145,7 @@ async function boot() {
 
     level = createLevel(engine);
     nav = createNavGrid(level, { cell: 0.8, radius: 0.32, groundAt: (x, z, y) => level.groundHeight(x, z, y), links: level.navLinks });
+    normalizeSpawns();
     setLoading(0.58, '构建战区街区…');
     await nextFrame();
 
@@ -1548,21 +1620,19 @@ function startWave(n) {
   }
   const pool = (allowedSpawns.length ? allowedSpawns : level.spawnPoints).slice();
   const objZone = G.objective ? G.objective.zone : null;
+  const sealed = !!(op && op.spawnRect);
   for (let i = 0; i < total; i++) {
     let best = null;
-    if (objZone) {
-      // objective modes: spawn 7-30 m around the zone so pressure arrives
-      const near = pool.filter((p) => {
-        const d = Math.hypot(p.x - objZone.x, p.z - objZone.z);
-        return d > 7 && d < 30;
-      });
-      const src = near.length ? near : pool;
-      best = src[Math.floor(Math.random() * src.length)];
-    } else {
-      // survival: far spawns, but ~1/3 arrive on the flank or from behind
-      best = pickSpawnPoint(pool, n >= 2);
+    if (objZone) best = pickZoneSpawn(pool, objZone);
+    else best = pickSpawnPoint(pool, n >= 2, !sealed);
+    if (!best) continue;
+    let sx = best.x, sz = best.z, sy = best.y || 0;
+    for (let t = 0; t < 5; t++) {
+      const a = Math.random() * Math.PI * 2, r = 0.9 + Math.random() * 1.3;
+      const cand = resolveSpawn(best.x + Math.cos(a) * r, best.z + Math.sin(a) * r, sy);
+      if (cand && (sealed || spawnReachesPlayer(cand))) { sx = cand.x; sz = cand.z; sy = cand.y || sy; break; }
     }
-    G.spawnQueue.push({ x: best.x + (Math.random() - 0.5) * 2.2, z: best.z + (Math.random() - 0.5) * 2.2, type: chooseArchetype(n, i) });
+    G.spawnQueue.push({ x: sx, z: sz, y: sy, type: chooseArchetype(n, i) });
   }
   const roofSpawns = level.roofSpawns || [];
   if (roofSpawns.length && n >= 6) {
@@ -1694,6 +1764,28 @@ function updateDropFx(dt) {
   if (t > 0.6) _dropFx.visible = false;
 }
 
+function relocateEnemy(e) {
+  const p = e.root.position;
+  // first choice: if it is standing inside geometry, snap it to the nearest
+  // free cell on its own nav layer (keeps interior fights inside the room)
+  if (!nav.isWalkableAt(p.x, p.z, p.y)) {
+    const w = nav.closestWalkableOn(p.x, p.z, p.y);
+    if (w) {
+      p.set(w.x, w.y != null ? w.y : p.y, w.z);
+      e.path = null; e.pathI = 0; e.pathTimer = 0;
+      return true;
+    }
+  }
+  // second choice: re-insert at a reachable ring around the player
+  const sp = ringSpawn(12, 26);
+  if (sp) {
+    p.set(sp.x, sp.y || 0, sp.z);
+    e.path = null; e.pathI = 0; e.pathTimer = 0; e.navTarget.x = NaN;
+    return true;
+  }
+  return false;
+}
+
 function spawnEnemy(pos) {
   let e = enemies.find((x) => !x.alive && x.root.visible === false) || enemies.find((x) => !x.alive);
   if (!e) {
@@ -1702,10 +1794,14 @@ function spawnEnemy(pos) {
     enemies.push(e);
   }
   const playerPos = controller.pos;
-  const yaw = Math.atan2(-(playerPos.x - pos.x), -(playerPos.z - pos.z));
+  let sp = resolveSpawn(pos.x, pos.z, pos.y || 0);
+  const sealed = !!(G.operation && G.operation.spawnRect);
+  if (!sp) sp = ringSpawn() || { x: pos.x, z: pos.z, y: pos.y || 0 };
+  else if (!sealed && sp.y <= 1 && !spawnReachesPlayer(sp)) sp = ringSpawn() || sp;
+  const yaw = Math.atan2(-(playerPos.x - sp.x), -(playerPos.z - sp.z));
   if (e.setArchetype) e.setArchetype(pos.type || 'rifleman');
   if (e.clearBounds) e.clearBounds();
-  e.spawn(pos.x, pos.z, yaw, pos.y || 0);
+  e.spawn(sp.x, sp.z, yaw, sp.y || 0);
   if (e.setDifficulty) e.setDifficulty(G.diff);
   if (e.setOccluders && level.roofZones) e.setOccluders(level.roofZones);
   if ((pos.y || 0) > 1 && e.setBounds && level.roofZones) {
@@ -2950,6 +3046,27 @@ function updateGame(dt) {
       continue;
     }
     e.update(dt, enemyCtx);
+    // soft-lock guard: an enemy inside geometry (or stranded far away with no
+    // walkable line) is re-seated instead of standing there forever.
+    if (e.alive) {
+      const ep = e.root.position;
+      const pdist = Math.hypot(ep.x - controller.pos.x, ep.z - controller.pos.z);
+      if (!nav.isWalkableAt(ep.x, ep.z, ep.y)) {
+        e._wallT = (e._wallT || 0) + dt;
+        if (e._wallT > 0.4) { if (relocateEnemy(e)) e._wallT = 0; }
+      } else {
+        e._wallT = 0;
+        const moved = Math.hypot(ep.x - (e._lastX ?? ep.x), ep.z - (e._lastZ ?? ep.z));
+        const cutOff = !e.canSee && !nav.lineWalkable(ep.x, ep.z, controller.pos.x, controller.pos.z);
+        if (cutOff && ep.y < 1.2 && !e.isBoss && e.archetype !== 'sniper' && pdist > 24 && moved < 0.03) {
+          e._stuckT = (e._stuckT || 0) + dt;
+          if (e._stuckT > 7) { if (relocateEnemy(e)) e._stuckT = 0; }
+        } else {
+          e._stuckT = 0;
+        }
+      }
+      e._lastX = ep.x; e._lastZ = ep.z;
+    }
     // shadow LOD: far soldiers stop casting (each one is ~47 shadow draws)
     const dx = e.root.position.x - controller.pos.x;
     const dz = e.root.position.z - controller.pos.z;
@@ -3049,6 +3166,10 @@ window.__game = {
   selectOperation: (id) => selectOperation(id),
   finishOperation: () => finishOperation(),
   renderOps: () => renderOps(),
+  auditSpawns: () => ({
+    ground: (level.spawnPoints || []).filter((p) => !nav.isWalkableAt(p.x, p.z, 0)).map((p) => [p.x, p.z]),
+    roof: (level.roofSpawns || []).filter((p) => !nav.isWalkableAt(p.x, p.z, p.y)).map((p) => [p.x, p.z, p.y]),
+  }),
   finishRun, playerDie,
   startGame, resetGame, spawnEnemy, applyPlayerDamage,
   openUpgradeChoice, pickUpgrade, openSettings, applySettings, finishTutorial,
