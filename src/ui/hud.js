@@ -366,6 +366,8 @@ export function createHUD() {
   let radioQueue = [];
   let radioTimer = 0;
   let radioHold = false;
+  let voicePlayer = null;
+  function setVoicePlayer(fn) { voicePlayer = typeof fn === 'function' ? fn : null; }
   function nextRadio() {
     if (!el.radio) return;
     const item = radioQueue.shift();
@@ -374,12 +376,13 @@ export function createHUD() {
     if (el.radioSpeaker) el.radioSpeaker.textContent = item.speaker;
     if (el.radioText) el.radioText.textContent = item.text;
     el.radio.classList.add('show');
+    if (item.voice && voicePlayer) voicePlayer(item.voice);
     clearTimeout(radioTimer);
     radioTimer = setTimeout(nextRadio, item.ms);
   }
-  function radio(speaker, text, ms = 4400) {
+  function radio(speaker, text, ms = 4400, voiceId = null) {
     if (!el.radio || !text) return;
-    radioQueue.push({ speaker: speaker || 'VEGA', text: String(text), ms });
+    radioQueue.push({ speaker: speaker || 'VEGA', text: String(text), ms, voice: voiceId });
     if (!radioHold) nextRadio();
   }
   function clearRadio() {
@@ -625,6 +628,7 @@ export function createHUD() {
     setSwitch('set-invertY', !!settings.invertY);
     setSwitch('set-reduceMotion', !!settings.reduceMotion);
     setSwitch('set-wayfinder', settings.wayfinder !== false);
+    setSwitch('set-voice', settings.voice !== false);
     setQualityState(settings.quality);
     document.documentElement.classList.toggle('reduce-motion', !!settings.reduceMotion);
   }
@@ -669,6 +673,7 @@ export function createHUD() {
     bindSwitch('set-invertY', 'invertY');
     bindSwitch('set-reduceMotion', 'reduceMotion');
     bindSwitch('set-wayfinder', 'wayfinder');
+    bindSwitch('set-voice', 'voice');
 
     // quality reuses the same pill markup as menu/pause; main.js also binds those buttons
     if (el.settings) {
@@ -745,6 +750,7 @@ export function createHUD() {
         reduceMotion: !!next.reduceMotion,
         wayfinder: next.wayfinder !== false,
         quality: String(next.quality || DEFAULT_SETTINGS.quality),
+        voice: next.voice !== false,
       };
     }
     if (typeof onChange === 'function') settingsOnChange = onChange;
@@ -1147,7 +1153,7 @@ export function createHUD() {
     el, show, update, reset,
     setHealth, setAmmo, setWeaponName, setWeaponTag, setSlots, setWave, setWaveProgress, setObjective,
     setScore, setGrenades, hit, addKillFeed, setDamage, flashDamage,
-    setReloadPrompt, setHint, ping, setSpread, radio, clearRadio,
+    setReloadPrompt, setHint, ping, setSpread, radio, clearRadio, setVoicePlayer,
     setHeading(h) { state.heading = h; },
     bindSettings, openSettings, closeSettings,
     get isSettingsOpen() { return settingsOpen; },

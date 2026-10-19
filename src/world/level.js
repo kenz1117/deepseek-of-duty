@@ -376,8 +376,8 @@ export function createLevel(engine) {
     addSkid([[-1.2, -36], [-1.6, -40], [-1.0, -44]], 0.34);
 
     // world bounds (players)
-    addColliderRect(-30, -22, -80, 80);
-    addColliderRect(-30, 30, -80, -66);
+    addColliderRect(-30, -22, -96, 80);
+    addColliderRect(-30, 30, -98, -96);  // north backstop behind the checkpoint wall
     addColliderRect(-30, 30, 82, 100);   // south backstop sits behind the depot yard wall
   }
 
@@ -2097,6 +2097,18 @@ export function createLevel(engine) {
       for (let i = 0; i < 7; i++) {
         meshRound(0.62, 0.25, 0.34, 0.09, mats.sandbag, cx - 2.4 + (i % 4) * 0.64, h + 0.92 + Math.floor(i / 4) * 0.22, z + 4.55, rnd() * 0.2, { uv: 0.8 });
       }
+      // yard-facing elevation: the checkpoint sees this side, so give it
+      // window cavities instead of a bare box
+      for (const yy of [3.6, 6.6, 9.8, 12.4]) {
+        for (const dx of [-2.6, 1.4]) {
+          meshBox(1.5, 1.15, 0.3, mats.interior, cx + dx, yy, z - 5.02, 0, { uv: 0.7, cast: false });
+          meshBox(1.7, 0.12, 0.52, mats.concreteDark, cx + dx, yy - 0.64, z - 5.06, 0, { uv: 0.7, cast: false });
+          meshBox(1.7, 0.16, 0.56, mats.concrete, cx + dx, yy + 0.66, z - 5.06, 0, { uv: 0.7, cast: false });
+        }
+      }
+      // downpipe + a wall lamp over the gate side
+      meshCyl(0.055, 0.055, h - 1.4, 5, mats.metal, cx - 4.1, (h - 1.4) / 2, z - 5.3);
+      meshBox(0.26, 0.14, 0.2, mats.metalTan, cx + 3.8, 4.6, z - 5.2, 0, { uv: 0.6 });
     }
     // bridge across the gap
     const bridge = new THREE.Mesh(new THREE.BoxGeometry(12.4, 1.3, 3.6), mats.concreteDark);
@@ -2104,7 +2116,8 @@ export function createLevel(engine) {
     bridge.position.set(0, 8.4, z);
     bridge.castShadow = true; bridge.receiveShadow = true;
     statics.add(bridge);
-    addCollider(0, z, 12.4, 3.6);
+    // no ground collider: the bridge is 8.4 m up and the checkpoint pass runs
+    // underneath it (a 2D collider here sealed the only route north)
     for (const dz of [-1.55, 1.55]) {
       meshBox(12.4, 0.95, 0.3, mats.concreteDark, 0, 9.5, z + dz, 0, { uv: 1.4 });
       meshBox(12.4, 0.1, 0.4, mats.concrete, 0, 10.02, z + dz, 0, { uv: 1.4, cast: false });
@@ -2208,6 +2221,129 @@ export function createLevel(engine) {
      a walkable garage roof reached by an outside ramp, and a truck bay you
      can fight inside. Everything here is additive; the north block is intact.
      ===================================================================== */
+  /* ------------------------------------------------------------------ north checkpoint */
+  /* A small walled yard beyond the gatehouse: the story's last stand. It reuses
+     the street's concrete/asphalt kit, so it costs a fraction of a new block. */
+  function buildNorthYard() {
+    const Z0 = -96, Z1 = -66;
+    const cz = (Z0 + Z1) / 2;
+    const wallMat = mats.concreteDark;
+    const copMat = mats.concrete;
+
+    // ground: asphalt pad over the dirt, drains toward the back wall
+    meshPlane(64, Z1 - Z0 + 4, mats.asphalt, 0, 0.006, cz, { rx: -Math.PI / 2, uvScale: 3.0, recv: true });
+    addPuddles([[-8.4, -88.0, 1.3, 0.5], [9.6, -76.0, 0.9, 0.4], [15.0, -92.5, 1.1, 0.42]]);
+    addRubble(-19.4, -90.2, 1.2, 12);
+    addRubble(18.8, -74.4, 1.0, 10);
+    addWeeds(-22.0, -84.0, 4);
+    addWeeds(21.6, -92.0, 3);
+
+    // perimeter: side walls + backstop with a closed gate in the middle
+    meshBox(0.36, 3.1, Z1 - Z0, wallMat, -30, 1.55, cz, 0, { collide: true, uv: 2.4 });
+    meshBox(0.36, 3.1, Z1 - Z0, wallMat, 30, 1.55, cz, 0, { collide: true, uv: 2.4 });
+    for (const [xa, xb] of [[-30, -3], [3, 30]]) {
+      meshBox(xb - xa, 3.1, 0.36, wallMat, (xa + xb) / 2, 1.55, Z0, 0, { collide: true, uv: 2.4 });
+    }
+    meshBox(0.52, 0.12, Z1 - Z0, copMat, -30, 3.16, cz, 0, { uv: 2.0, cast: false });
+    meshBox(0.52, 0.12, Z1 - Z0, copMat, 30, 3.16, cz, 0, { uv: 2.0, cast: false });
+    for (const [xa, xb] of [[-30, -3], [3, 30]]) {
+      meshBox(xb - xa, 0.12, 0.52, copMat, (xa + xb) / 2, 3.16, Z0, 0, { uv: 2.0, cast: false });
+    }
+    // gate bars (kept shut) + posts
+    for (let i = 0; i < 13; i++) {
+      meshBox(0.04, 1.6, 0.04, mats.metal, -2.86 + i * 0.46, 0.85, Z0, 0, { uv: 0.4, cast: false });
+    }
+    for (const yy of [0.35, 1.55]) meshBox(6.0, 0.06, 0.06, mats.metal, 0, yy, Z0, 0, { uv: 0.6, cast: false });
+    addColliderRect(-3, 3, Z0 - 0.1, Z0 + 0.1);
+    for (const z of [-3, 3]) meshBox(0.26, 3.3, 0.26, wallMat, z, 1.65, Z0, 0, { uv: 0.9 });
+
+    // checkpoint booth: one small interior nook facing the gate
+    const bx = -8.5, bz = -74.5;
+    meshBox(3.2, 0.12, 2.8, mats.concrete, bx, 0.06, bz, 0, { uv: 1.6, cast: false });
+    meshBox(0.24, 2.5, 2.8, mats.plasterA, bx - 1.5, 1.25, bz, 0, { collide: true, uv: 1.6 });
+    meshBox(0.24, 2.5, 2.8, mats.plasterA, bx + 1.5, 1.25, bz, 0, { collide: true, uv: 1.6 });
+    meshBox(3.2, 0.22, 2.8, mats.concreteDark, bx, 2.62, bz, 0, { uv: 1.8 });
+    meshBox(3.2, 0.9, 0.12, mats.interior, bx, 1.05, bz - 1.34, 0, { uv: 0.8, cast: false });
+    meshBox(1.0, 0.5, 0.1, mats.metalTan, bx, 1.55, bz - 1.4, 0, { uv: 0.6, cast: false });
+
+    // jersey barriers: two staggered lines that break sightlines
+    const barrier = (x, z, w, rot = 0) => {
+      meshBox(w, 0.86, 0.52, mats.concrete, x, 0.43, z, rot, { collide: true, uv: 1.4 });
+      meshBox(w * 0.94, 0.16, 0.42, mats.concreteDark, x, 0.92, z, rot, { uv: 1.2, cast: false });
+    };
+    for (const [x, z, w, r] of [
+      [-16.5, -78.0, 4.6, 0.04], [-11.2, -78.6, 3.4, -0.05], [12.6, -80.0, 4.2, 0.06],
+      [17.4, -80.6, 3.0, 0.0], [-4.0, -87.5, 4.0, 0.03], [4.6, -87.0, 3.6, -0.04],
+    ]) barrier(x, z, w, r);
+
+    // sandbag nests + crates
+    const nest = (x, z) => {
+      for (let i = 0; i < 9; i++) {
+        const a = (i / 9) * Math.PI * 1.65 - 0.2;
+        meshRound(0.6, 0.24, 0.34, 0.09, mats.sandbag,
+          x + Math.cos(a) * 1.15, 0.13 + (i % 3) * 0.23, z + Math.sin(a) * 1.15, -a, { uv: 0.8 });
+      }
+      addCollider(x, z, 2.3, 2.3, 0.1, 1.0);
+      coverPoints.push({ x, z, h: 1.0 });
+    };
+    nest(-22.0, -72.5);
+    nest(21.4, -88.5);
+    nest(2.0, -93.0);
+    for (const [x, z, w, h, d, rot] of [
+      [7.8, -90.4, 1.3, 1.0, 1.0, 0.2], [9.2, -89.6, 1.0, 0.8, 0.9, -0.15],
+      [-15.0, -85.8, 1.4, 1.1, 1.1, 0.1], [-16.4, -84.4, 1.0, 0.7, 1.0, 0.3],
+    ]) meshBox(w, h, d, mats.wood, x, h / 2, z, rot, { collide: true, uv: 1.2 });
+
+    // light poles + a pair of oil drums
+    for (const [x, z] of [[-22.5, -80.0], [22.5, -86.0]]) {
+      meshCyl(0.09, 0.11, 5.4, 6, mats.metal, x, 2.7, z);
+      meshBox(0.5, 0.14, 0.3, mats.metalTan, x, 5.3, z, 0, { uv: 0.6 });
+      lightPool(x, z, 3.2, 0.16);
+    }
+    for (const [x, z] of [[11.2, -73.4], [12.1, -74.2]]) {
+      meshCyl(0.32, 0.32, 0.9, 10, mats.rust, x, 0.45, z);
+      addCollider(x, z, 0.7, 0.7, 0.05, 0.9);
+    }
+
+    // heavy dressing: a burnt car, a box truck and container stacks give the
+    // yard silhouettes to fight around instead of an empty apron
+    carWreck(-19.6, -73.6, 0.55, true);
+    boxTruck(13.2, -90.6, 0.18);
+    const container = (x, z, rot, stack) => {
+      for (let i = 0; i < stack; i++) {
+        meshBox(6.2, 2.55, 2.45, i % 2 ? mats.metalTan : mats.metal, x, 1.3 + i * 2.6, z, rot,
+          { collide: true, uv: 1.6 });
+        meshBox(6.24, 0.12, 2.5, mats.concreteDark, x, 2.6 + i * 2.6, z, rot, { uv: 1.2, cast: false });
+      }
+    };
+    container(-24.2, -89.5, Math.PI / 2, 2);
+    container(22.4, -92.0, 0, 1);
+    // watchtower frame at the north-east corner (visual: the yard reads manned)
+    const tx = 24.6, tz = -93.4;
+    for (const [ox, oz] of [[-1.1, -1.1], [1.1, -1.1], [-1.1, 1.1], [1.1, 1.1]]) {
+      meshCyl(0.08, 0.1, 3.4, 5, mats.rust, tx + ox, 1.7, tz + oz);
+    }
+    meshBox(3.0, 0.14, 3.0, mats.wood, tx, 3.45, tz, 0, { uv: 1.0 });
+    for (const [ox, oz] of [[0, -1.5], [0, 1.5], [-1.5, 0], [1.5, 0]]) {
+      meshBox(ox ? 0.1 : 3.0, 0.9, oz ? 0.1 : 3.0, mats.wood, tx + ox, 3.95, tz + oz, 0, { uv: 0.9 });
+    }
+    meshBox(3.4, 0.12, 3.4, mats.metalTan, tx, 4.5, tz, 0, { uv: 1.0, cast: false });
+    for (let i = 0; i < 6; i++) {
+      meshRound(0.6, 0.24, 0.34, 0.09, mats.sandbag, tx - 1.2 + (i % 3) * 1.2, 3.66, tz + 1.35, 0, { uv: 0.8 });
+    }
+    // sandbag line just inside the gate
+    for (let i = 0; i < 10; i++) {
+      meshRound(0.62, 0.25, 0.34, 0.09, mats.sandbag, -4.6 + (i % 5) * 1.25, 0.13 + Math.floor(i / 5) * 0.23, -68.2, 0, { uv: 0.8 });
+    }
+    addColliderRect(-5.2, 0.8, -68.7, -67.7, 1.0);
+
+    // gates warn: a faded sign on the street side of the gatehouse
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.5), mats.signA);
+    sign.position.set(0, 4.2, -66.4);
+    sign.rotation.y = Math.PI;
+    statics.add(sign);
+  }
+
   function buildSouthYard() {
     const cz = (SOUTH.z0 + SOUTH.z1) / 2;
 
@@ -3430,6 +3566,7 @@ export function createLevel(engine) {
   buildYardMarketStatic();
   buildAlley();
   buildGatehouse();
+  buildNorthYard();
   buildSouthYard();
 
   // ---- fire escapes on the two closest multi-storey fronts
@@ -3645,6 +3782,7 @@ export function createLevel(engine) {
 
   /* ------------------------------------------------------------------ spawns */
   spawnPoints.push(
+    { x: 0, z: -92 }, { x: -12, z: -88 }, { x: 12, z: -87 }, { x: -21.5, z: -78 }, { x: 21.0, z: -80 },
     { x: 0, z: -61 }, { x: -1.6, z: -57.2 }, { x: 4.5, z: -60 },
     { x: -5.5, z: -45.4 }, { x: 6.8, z: -40 }, { x: -6.0, z: -31 },
     { x: 6.4, z: -18 }, { x: -7.4, z: -4 }, { x: 7.2, z: 4 },
@@ -3699,6 +3837,7 @@ export function createLevel(engine) {
     backyard: { x: 21.8, z: -11.0, r: 5.2 },
     market: { x: 20.8, z: -10.7, r: 3.8 },
     yard: { x: 0, z: 70, r: 8.0 },
+    checkpoint: { x: 0, z: -82, r: 8.0 },
     depot: { x: 11.5, z: 68, r: 4.0 },
   };
   // expose the interior combat points through the legacy arrays too
@@ -3770,6 +3909,7 @@ export function createLevel(engine) {
   /* Coarse rectangles for the HUD location tag and the wayfinder. First hit
      wins, so keep the small / specific areas ahead of the wide fallbacks. */
   const REGIONS = [
+    { id: 'checkpoint', name: '北检查站', en: 'CHECKPOINT', x0: -30, x1: 30, z0: -96, z1: -66 },
     { id: 'depot-roof', name: '车库屋顶', en: 'DEPOT ROOF', x0: 6.4, x1: 16.6, z0: 61.7, z1: 74.3, minY: 3.0 },
     { id: 'depot', name: '车库', en: 'DEPOT', x0: 6.4, x1: 16.6, z0: 61.8, z1: 74.2 },
     { id: 'south-yard', name: '南院车场', en: 'SOUTH YARD', x0: -17.2, x1: 17.2, z0: 55.8, z1: 82.2 },
@@ -3793,7 +3933,7 @@ export function createLevel(engine) {
 
   return {
     root, colliders, bulletTargets, spawnPoints, coverPoints, bvhStats,
-    bounds: { x0: -30, x1: 30, z0: -64, z1: 84 },
+    bounds: { x0: -30, x1: 30, z0: -96, z1: 84 },
     cqbZones, objectiveZones, regionAt, regions: REGIONS,
     groundHeight, roofZones: ROOF_ZONES, roofSpawns: ROOF_SPAWNS, roofCovers: ROOF_COVERS,
     navLinks: [{ ax: 15.9, az: -12.0, bx: 17.6, bz: -12.0 }],

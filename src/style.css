@@ -1522,3 +1522,20 @@ html.reduce-motion .mode-brief.is-swap{animation:none !important;}
 .mission-btn:hover{background:rgba(227,178,106,.2);}
 .mission-btn.ghost{background:transparent;border-color:rgba(255,255,255,.18);color:var(--ui-dim);}
 .mission-btn.ghost em{color:var(--ui-ghost);}
+
+/* ---------------- cinematic --------------- */
+#cinema{position:absolute;inset:0;z-index:72;pointer-events:none;}
+.cine-bar{position:absolute;left:0;right:0;height:10vh;background:#000;pointer-events:none;}
+.cine-top{top:0;}
+.cine-bottom{bottom:0;}
+.cine-sub{position:absolute;left:50%;bottom:15vh;transform:translateX(-50%);
+  max-width:min(760px,80vw);text-align:center;padding:10px 18px;
+  background:rgba(4,6,9,.55);border-left:2px solid var(--amber);
+  font-size:14px;line-height:1.75;color:rgba(240,245,247,.94);}
+.cine-sub b{display:block;font-family:var(--mono);font-size:8px;letter-spacing:.28em;
+  color:var(--amber);margin-bottom:5px;}
+.cine-skip{position:absolute;right:34px;bottom:calc(10vh + 16px);pointer-events:auto;
+  padding:6px 12px;background:rgba(6,9,12,.6);border:1px solid rgba(255,255,255,.18);
+  color:var(--ui-dim);font-family:var(--mono);font-size:8px;letter-spacing:.18em;cursor:pointer;}
+.cine-skip:hover{border-color:rgba(227,178,106,.6);color:var(--amber);}
+html.reduce-motion .cine-bar{height:8vh;}

@@ -424,6 +424,14 @@
   </div>
 
 
+  <!-- ============ CINEMA ============ -->
+  <div id="cinema" class="hidden" aria-hidden="true">
+    <div class="cine-bar cine-top"></div>
+    <div class="cine-bar cine-bottom"></div>
+    <div class="cine-sub"><b id="cine-speaker">VEGA</b><span id="cine-text"></span></div>
+    <button id="cine-skip" class="cine-skip" type="button">跳过 SKIP ▸</button>
+  </div>
+
   <!-- ============ SETTINGS ============ -->
   <div id="settings" class="overlay hidden" aria-hidden="true">
     <div class="settings-panel" role="dialog" aria-modal="true" aria-label="设置">
@@ -457,6 +465,12 @@
           <div class="set-row">
             <div class="set-line"><label for="set-master">主音量</label><output id="out-master">80%</output></div>
             <input id="set-master" type="range" min="0" max="1" step="0.05" value="0.8" aria-label="主音量">
+          </div>
+          <div class="set-row switch-row">
+            <div class="set-line"><span class="lbl">战役语音合成</span><em>VOICE TTS</em></div>
+            <button class="switch" id="set-voice" type="button" role="switch" aria-checked="false" aria-label="战役语音合成">
+              <i></i><span class="sw-state">OFF</span>
+            </button>
           </div>
         </section>
 

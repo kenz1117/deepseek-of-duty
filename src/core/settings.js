@@ -18,6 +18,7 @@ export const DEFAULT_SETTINGS = {
   runMode: 'rotation',  // rotation | survival | defend | extract
   wayfinder: true,      // HUD area names + route marker to the apartment / backyard
   primary: 'm4',        // m4 | mk18 — which rifle you spawn with
+  voice: true,          // cinematic TTS (browser speechSynthesis)
 };
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -34,6 +35,7 @@ export function sanitizeSettings(input = {}) {
   if (!['rotation', 'survival', 'defend', 'extract'].includes(s.runMode)) s.runMode = 'rotation';
   s.wayfinder = s.wayfinder !== false;
   s.primary = s.primary === 'mk18' ? 'mk18' : 'm4';
+  s.voice = s.voice !== false;
   return s;
 }
 

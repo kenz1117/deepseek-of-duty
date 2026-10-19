@@ -15,6 +15,8 @@ import { createStreaks } from './systems/streaks.js';
 import { createArtillery } from './systems/artillery.js';
 import { createLeaderboard } from './net/leaderboard.js';
 import { createNavGrid } from './systems/navgrid.js';
+import { createCinema } from './cinema.js';
+import { createVoice } from './voice.js';
 import { createResults, renderDailyList, renderMenuBoard } from './ui/results.js';
 import {
   OPERATIONS, operationById, isUnlocked, loadCampaign, saveCampaign,
@@ -27,6 +29,7 @@ import {
 
 const params = new URLSearchParams(location.search);
 const SHOT_MODE = params.get('shot') === '1';
+const CINE_MODE = params.get('cine') === '1';
 const POSE = params.get('pose') || 'hero';
 const HIDE_HUD = params.get('hidehud') === '1';
 
@@ -91,7 +94,7 @@ const G = {
   stats: null, scoreMult: 1, uavUntil: 0, uavTick: 0,
 };
 
-let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav;
+let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice;
 let slotT = 0;
 let pickups = null, leaderboard = null, results = null, streakSys = null, artillery = null;
 let lastRunPayload = null;
@@ -378,6 +381,8 @@ function applySettings(initial = false) {
   controller.reduceMotion = G.settings.reduceMotion;
   if (audio && audio.ctx && audio.setMasterVolume) audio.setMasterVolume(G.settings.master);
   if (initial && engine) engine.setQuality(G.settings.quality);
+  if (cinema) cinema.setVoice(G.settings.voice !== false);
+  if (voice) voice.setEnabled(G.settings.voice !== false);
   syncQualityPills();
 }
 
@@ -992,6 +997,11 @@ async function boot() {
     fx = createFX(engine.scene, engine.mats);
     audio = createAudio();
     hud = createHUD();
+    voice = createVoice();
+    voice.setEnabled(G.settings.voice !== false);
+    hud.setVoicePlayer((id) => voice.play(id));
+    cinema = createCinema({ engine, viewmodel, hud, voice });
+    cinema.setVoice(G.settings.voice !== false);
     input = createInput(engine.renderer.domElement);
     controller = createController(engine.camera, level.colliders, level.bounds, audio, (x, z, y) => (level.groundHeight ? level.groundHeight(x, z, y) : 0));
 
@@ -1114,6 +1124,10 @@ async function boot() {
       }
     });
     input.on('key', (code) => {
+      if (cinema && cinema.playing && (code === 'Space' || code === 'Escape')) {
+        cinema.skip();
+        return;
+      }
       if (code === 'Escape') {
         if (isBoardModalOpen()) { closeBoardModal(); return; }
         if (prestartEl && !prestartEl.classList.contains('hidden')) { closePrestart(); return; }
@@ -1138,6 +1152,7 @@ async function boot() {
       if (code === 'KeyP') { G.state = 'paused'; pauseEl.classList.remove('hidden'); input.unlock(); }
     });
     engine.renderer.domElement.addEventListener('click', () => {
+      if (cinema && cinema.playing) { cinema.skip(); return; }
       if (G.state === 'playing' && !SHOT_MODE && !input.locked) input.lock();
     });
 
@@ -1203,6 +1218,7 @@ function startGame(lock = true, silent = false) {
   resetGame();
   // the mission is assigned after the reset, which clears the previous run
   G.operation = activeOperation();
+  if (voice) voice.stop();
   if (G.settings && G.settings.primary === 'mk18') applyWeaponSwitch(1);
   menuEl.classList.add('hidden');
   hudEl.classList.remove('hidden');
@@ -1211,10 +1227,23 @@ function startGame(lock = true, silent = false) {
   controller.revive(1.2, 33);
   controller.setLook(-0.03, -0.015);
   if (!silent) audio.uiConfirm();
-  if (lock) input.lock();
   startWave(1);
   if (!SHOT_MODE && !G.tutorial.done) beginTutorial();
   hudEl.classList.toggle('hidden', HIDE_HUD);
+  const wantCine = G.operation && G.operation.intro && cinema && (!SHOT_MODE || CINE_MODE);
+  if (wantCine) {
+    G.state = 'cinema';
+    hudEl.classList.add('hidden');
+    viewmodel.root.visible = false;
+    cinema.play(G.operation.intro, () => {
+      G.state = 'playing';
+      viewmodel.root.visible = true;
+      hudEl.classList.toggle('hidden', HIDE_HUD);
+      if (lock) input.lock();
+    });
+  } else if (lock) {
+    input.lock();
+  }
   if (!SHOT_MODE) {
     const hint = document.getElementById('hint');
     hint.textContent = '';
@@ -1316,8 +1345,22 @@ function startWave(n) {
       G.atmosphere = op.atmosphere;
     }
     const line = op.radio.find((r) => r.at === n || (n === 1 && r.at === 'start'));
-    if (line && hud.radio) hud.radio(line.speaker, line.text, 5600);
-    if (op.bossWave === n) spawnBoss(op);
+    if (line && hud.radio && !(n === 1 && op.intro)) hud.radio(line.speaker, line.text, 5600, line.voice);
+    if (op.bossWave === n) {
+      if (op.bossIntro && cinema && (!SHOT_MODE || CINE_MODE)) {
+        G.state = 'cinema';
+        hudEl.classList.add('hidden');
+        viewmodel.root.visible = false;
+        cinema.play(op.bossIntro, () => {
+          spawnBoss(op);
+          G.state = 'playing';
+          viewmodel.root.visible = true;
+          hudEl.classList.toggle('hidden', HIDE_HUD);
+        });
+      } else {
+        spawnBoss(op);
+      }
+    }
   }
   setupObjective(n);
   if (prevTier && prevTier.id !== G.diff.id && hud.toast) {
@@ -1794,14 +1837,7 @@ function spawnBoss(op) {
   if (hud && hud.radio) hud.radio('VEGA', op.radio.find((r) => r.at === op.bossWave)?.text || '指挥官下车了。', 5600);
 }
 
-function finishOperation() {
-  const op = G.operation;
-  if (!op || G.state === 'mission') return;
-  G.state = 'mission';
-  input.unlock();
-  if (hud && hud.clearRadio) hud.clearRadio();
-  markOperationDone(campaign, op.id);
-  renderOps();
+function showMissionOverlay(op) {
   const s = G.stats || {};
   const acc = s.shots ? Math.round((s.hits / s.shots) * 100) : 0;
   const overlay = document.getElementById('mission');
@@ -1826,8 +1862,31 @@ function finishOperation() {
     nextBtn.style.opacity = next ? '1' : '.4';
     nextBtn.childNodes[0].textContent = next ? `下一任务 · ${next.name}` : '战役完成 · 无后续';
   }
+  G.state = 'mission';
   overlay?.classList.remove('hidden');
   overlay?.setAttribute('aria-hidden', 'false');
+}
+
+function finishOperation() {
+  const op = G.operation;
+  if (!op || G.state === 'mission' || G.state === 'cinema') return;
+  input.unlock();
+  if (voice) voice.stop();
+  if (hud && hud.clearRadio) hud.clearRadio();
+  markOperationDone(campaign, op.id);
+  renderOps();
+  if (op.outro && cinema && (!SHOT_MODE || CINE_MODE)) {
+    G.state = 'cinema';
+    hudEl.classList.add('hidden');
+    viewmodel.root.visible = false;
+    cinema.play(op.outro, () => {
+      hudEl.classList.remove('hidden');
+      viewmodel.root.visible = true;
+      showMissionOverlay(op);
+    });
+    return;
+  }
+  showMissionOverlay(op);
 }
 
 function closeMissionOverlay() {
@@ -1837,6 +1896,8 @@ function closeMissionOverlay() {
 }
 
 function returnToMenu() {
+  if (voice) voice.stop();
+  if (cinema && cinema.playing) cinema.skip();
   closeMissionOverlay();
   closePrestart();
   deathEl.classList.add('hidden');
@@ -2601,6 +2662,13 @@ function loop(now) {
     if (input.endFrame) input.endFrame();
   } else if (G.state === 'paused') {
     engine.update(dt, controller.pos);
+  } else if (G.state === 'cinema') {
+    if (cinema) cinema.update(dt);
+    engine.update(dt, controller.pos);
+    level.update(dt, engine.camera);
+    fx.update(dt);
+    hud.update(dt);
+    if (input.endFrame) input.endFrame();
   }
   // the route marker is a gameplay aid: never leave it floating over menus
   if (G.state !== 'playing' && G.state !== 'dead') hideWaypoint();
@@ -2780,6 +2848,8 @@ window.__game = {
   get leaderboard() { return leaderboard; }, get results() { return results; },
   get daily() { return loadDaily(); },
   get campaign() { return campaign; },
+  get voice() { return voice; },
+  get cinema() { return cinema; },
   selectOperation: (id) => selectOperation(id),
   finishOperation: () => finishOperation(),
   renderOps: () => renderOps(),

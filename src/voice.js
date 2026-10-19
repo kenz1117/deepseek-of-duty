@@ -1,0 +1,80 @@
+/* =========================================================================
+   Recorded voice lines (MiniMax speech-02-hd).
+
+   The files live in public/audio/voice and are generated once; every line has
+   a stable id so the story data only stores `voice: 'op2_1'`. If a file is
+   missing or playback fails, the cinema falls back to browser TTS — the game
+   never goes silent-and-stuck because of an asset.
+   ========================================================================= */
+
+const BASE = '/audio/voice/';
+
+export const VOICE_LINES = {
+  op01_1: { file: 'op01_1.mp3', speaker: 'VEGA' },
+  op01_2: { file: 'op01_2.mp3', speaker: 'VEGA' },
+  op01_3: { file: 'op01_3.mp3', speaker: 'VEGA' },
+  boss_1: { file: 'boss_1.mp3', speaker: 'VEGA' },
+  boss_2: { file: 'boss_2.mp3', speaker: 'VEGA' },
+  boss_3: { file: 'boss_3.mp3', speaker: 'VEGA' },
+  fin_1: { file: 'fin_1.mp3', speaker: 'VEGA' },
+  fin_2: { file: 'fin_2.mp3', speaker: '灰狼' },
+  fin_3: { file: 'fin_3.mp3', speaker: 'VEGA' },
+  op1_1: { file: 'op1_1.mp3', speaker: 'VEGA' },
+  op1_2: { file: 'op1_2.mp3', speaker: 'VEGA' },
+  op1_3: { file: 'op1_3.mp3', speaker: 'VEGA' },
+  op2_1: { file: 'op2_1.mp3', speaker: 'VEGA' },
+  op2_2: { file: 'op2_2.mp3', speaker: 'VEGA' },
+  op3_1: { file: 'op3_1.mp3', speaker: 'VEGA' },
+  op3_2: { file: 'op3_2.mp3', speaker: 'VEGA' },
+  op3_3: { file: 'op3_3.mp3', speaker: 'VEGA' },
+  op4_1: { file: 'op4_1.mp3', speaker: 'VEGA' },
+  op4_2: { file: 'op4_2.mp3', speaker: 'VEGA' },
+  op5_1: { file: 'op5_1.mp3', speaker: 'VEGA' },
+  op5_2: { file: 'op5_2.mp3', speaker: 'VEGA' },
+  op5_3: { file: 'op5_3.mp3', speaker: 'VEGA' },
+  op5_4: { file: 'op5_4.mp3', speaker: 'VEGA' },
+  op6_1: { file: 'op6_1.mp3', speaker: 'VEGA' },
+  op6_2: { file: 'op6_2.mp3', speaker: 'VEGA' },
+  op7_1: { file: 'op7_1.mp3', speaker: 'VEGA' },
+  op7_2: { file: 'op7_2.mp3', speaker: 'VEGA' },
+  op7_3: { file: 'op7_3.mp3', speaker: 'VEGA' },
+};
+
+export function createVoice() {
+  let enabled = true;
+  let el = null;
+
+  function stop() {
+    if (el) {
+      try { el.pause(); } catch (e) { /* ignore */ }
+      el = null;
+    }
+  }
+
+  function play(id) {
+    if (!enabled || !id) return false;
+    const line = VOICE_LINES[id];
+    if (!line) return false;
+    stop();
+    try {
+      el = new Audio(BASE + line.file);
+      el.preload = 'auto';
+      el.volume = 0.9;
+      const p = el.play();
+      if (p && p.catch) p.catch(() => { el = null; });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function setEnabled(v) {
+    enabled = !!v;
+    if (!enabled) stop();
+  }
+
+  return {
+    play, stop, setEnabled,
+    get enabled() { return enabled; },
+  };
+}
