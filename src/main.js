@@ -23,7 +23,7 @@ import { createInteract } from './systems/interact.js';
 import { renderControls } from './ui/controls.js';
 import { CHARACTERS, INTEL, loadCodex, saveCodex, characterUnlocked } from './codex.js';
 import { createIntel } from './systems/intel.js';
-import { createAlly } from './entities/ally.js';
+import { createMoth } from './entities/moth.js';
 import { createResults, renderDailyList, renderMenuBoard } from './ui/results.js';
 import {
   OPERATIONS, operationById, isUnlocked, loadCampaign, saveCampaign,
@@ -1452,7 +1452,7 @@ function startGame(lock = true, silent = false) {
   // the mission is assigned after the reset, which clears the previous run
   G.operation = activeOperation();
   if (G.operation && G.operation.id === 10 && !mothAlly) {
-    mothAlly = createAlly({ scene: engine.scene, mats: engine.mats, x: 39.6, z: -79.2, yaw: 0, variant: 2 });
+    mothAlly = createMoth({ scene: engine.scene, x: 37.6, z: -80.4, yaw: -0.588 });
   }
   if (voice) voice.stop();
   if (G.settings && G.settings.primary === 'mk18') applyWeaponSwitch(1);
