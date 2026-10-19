@@ -27,6 +27,9 @@
         <span class="wave-sep">/</span><span class="wave-total" id="wave-total">∞</span>
         <span class="wave-bar"><i id="wave-bar-fill"></i></span>
       </div>
+      <div class="area-tag" id="area-tag">
+        <i class="area-mark"></i><span class="area-name" id="area-name">街区</span><span class="area-en" id="area-en">STREET</span>
+      </div>
       <div class="atmo hidden" id="atmosphere-tag">
         <i class="atmo-dot"></i><span class="atmo-key">ENV</span><span class="atmo-val" id="atmosphere-value">DUSK</span>
       </div>
@@ -95,8 +98,13 @@
       </div>
       <div id="reload-prompt"><i class="rp-ico"></i><span>RELOAD</span><span class="rp-key">R</span></div>
       <div class="weapon-block">
-        <span class="weapon-tag">PRIMARY <i></i> AR</span>
+        <span class="weapon-tag" id="weapon-tag">PRIMARY <i></i> AR</span>
         <span class="weapon-name" id="weapon-name">M4A1</span>
+      </div>
+      <div class="weapon-slots" id="weapon-slots">
+        <div class="wslot is-active" data-slot="0"><b>1</b><span class="wslot-n">M4A1</span><i class="wslot-a">30/180</i></div>
+        <div class="wslot" data-slot="1"><b>2</b><span class="wslot-n">MK18</span><i class="wslot-a">25/150</i></div>
+        <div class="wslot" data-slot="2"><b>3</b><span class="wslot-n">M870</span><i class="wslot-a">6/30</i></div>
       </div>
       <div class="ammo-row">
         <span class="ammo-mag" id="ammo-mag">30</span>
@@ -123,6 +131,13 @@
     </div>
     <div class="hud-toast" id="hud-toast" aria-live="polite">
       <i class="toast-mark"></i><span id="hud-toast-text"></span>
+    </div>
+
+    <!-- wayfinder: route marker to the apartment door / backyard / roof ramp -->
+    <div class="waypoint hidden" id="waypoint" aria-hidden="true">
+      <i class="wp-mark"></i>
+      <span class="wp-name" id="waypoint-name">后院</span>
+      <b class="wp-dist" id="waypoint-dist">0m</b>
     </div>
   </div>
 
@@ -159,6 +174,17 @@
               <button type="button" data-mode="survival" aria-pressed="false" title="无尽生存：清空每一波敌人">SURVIVAL</button>
               <button type="button" data-mode="defend" aria-pressed="false" title="区域防守：守住目标区 60 秒">DEFEND</button>
               <button type="button" data-mode="extract" aria-pressed="false" title="清场撤离：清空敌人后前往撤离区">EXTRACT</button>
+            </div>
+          </div>
+
+          <div class="mode-select" id="primary-select" role="group" aria-label="起始主武器">
+            <div class="mode-select-head">
+              <span class="ms-title">LOADOUT <em>起始主武器</em></span>
+              <span class="mode-select-current" id="primary-current">M4A1</span>
+            </div>
+            <div class="mode-select-pills" id="primary-pills">
+              <button type="button" data-primary="m4" class="active" aria-pressed="true" title="均衡全自动步枪">M4A1</button>
+              <button type="button" data-primary="mk18" aria-pressed="false" title="更高伤害 / 更快的近战步枪">MK18</button>
             </div>
           </div>
 
@@ -431,6 +457,12 @@
             <div class="set-line"><span class="lbl">减少动态效果</span><em>REDUCE MOTION</em></div>
             <button class="switch" id="set-reduceMotion" type="button" role="switch" aria-checked="false" aria-label="减少动态效果">
               <i></i><span class="sw-state">OFF</span>
+            </button>
+          </div>
+          <div class="set-row switch-row">
+            <div class="set-line"><span class="lbl">寻路提示</span><em>WAYFINDER</em></div>
+            <button class="switch" id="set-wayfinder" type="button" role="switch" aria-checked="true" aria-label="寻路提示：区域名与后院路线标记">
+              <i></i><span class="sw-state">ON</span>
             </button>
           </div>
 

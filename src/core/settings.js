@@ -16,6 +16,8 @@ export const DEFAULT_SETTINGS = {
   reduceMotion: false,  // damp head bob / shake
   quality: 'high',      // low | medium | high | ultra
   runMode: 'rotation',  // rotation | survival | defend | extract
+  wayfinder: true,      // HUD area names + route marker to the apartment / backyard
+  primary: 'm4',        // m4 | mk18 — which rifle you spawn with
 };
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -30,6 +32,8 @@ export function sanitizeSettings(input = {}) {
   s.reduceMotion = !!s.reduceMotion;
   if (!['low', 'medium', 'high', 'ultra'].includes(s.quality)) s.quality = 'high';
   if (!['rotation', 'survival', 'defend', 'extract'].includes(s.runMode)) s.runMode = 'rotation';
+  s.wayfinder = s.wayfinder !== false;
+  s.primary = s.primary === 'mk18' ? 'mk18' : 'm4';
   return s;
 }
 

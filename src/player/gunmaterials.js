@@ -771,6 +771,12 @@ export function makeGunMaterials(envTexture, aniso = 8) {
     roughnessMap: polyMaps.roughnessMap, roughness: 1.0, metalness: 0.05,
     normalScale: new THREE.Vector2(0.9, 0.9), envMapIntensity: 0.55,
   });
+  // M870 placeholder furniture: oiled walnut-ish stock instead of polymer
+  const polymerWood = std({
+    color: 0x8a5a33, map: polyMaps.map, normalMap: polyMaps.normalMap,
+    roughnessMap: polyMaps.roughnessMap, roughness: 1.0, metalness: 0.03,
+    normalScale: new THREE.Vector2(1.2, 1.2), envMapIntensity: 0.45,
+  });
   const rubber = std({
     color: 0x141517, roughness: 1.0, metalness: 0.02, envMapIntensity: 0.35,
     normalMap: polyMaps.normalMap, roughnessMap: polyMaps.roughnessMap,
@@ -855,14 +861,16 @@ export function makeGunMaterials(envTexture, aniso = 8) {
 
   return {
     receiver, receiverMatte, wornSteel, railWear, barrelSteel, blackSteel,
-    polymer, polymerTan, rubber, stockPoly, hoodMatte, glove, glovePad, gloveDark, cuff, sleeve, sling,
+    polymer, polymerTan, polymerWood, rubber, stockPoly, hoodMatte, glove, glovePad, gloveDark, cuff, sleeve, sling,
     glass, reticleMat, stencil,
     atlasMs: atlas.ms,
     atlasSize: atlas.size,
     atlasTiles: atlas.tiles,
     // convenience for setWeapon()
     furnitureFor(variant) {
-      return variant === 'tan' ? polymerTan : polymer;
+      if (variant === 'tan') return polymerTan;
+      if (variant === 'wood') return polymerWood;
+      return polymer;
     },
   };
 }

@@ -452,6 +452,54 @@ export function createViewmodel(engineMats, envTexture) {
   mergedBody.name = 'rifle';
   gun.add(mergedBody);
 
+  /* ------------------------------------------------------------------ M870
+     A separate silhouette so 3 can be a real shotgun: long barrel + tube
+     magazine, walnut stock/forend, sliding pump, bead sight. */
+  const PUMP_REST_Z = -0.30;
+  function buildShotgun() {
+    const body = new THREE.Group();
+    const wood = M.furnitureFor('wood');
+    // receiver + top tang
+    part(body, rbox(0.048, 0.052, 0.20, 0.006), M.receiver, 0, -0.004, -0.06);
+    part(body, rbox(0.04, 0.014, 0.22, 0.004), M.blackSteel, 0, 0.022, -0.06);
+    // barrel (axis along z) + magazine tube + muzzle
+    part(body, cylGeo(0.0115, 0.0115, 0.50, 12), M.blackSteel, 0, 0.021, -0.40, Math.PI / 2);
+    part(body, cylGeo(0.0098, 0.0098, 0.46, 12), M.blackSteel, 0, -0.006, -0.38, Math.PI / 2);
+    part(body, cylGeo(0.0105, 0.0105, 0.055, 12), M.wornSteel, 0, 0.021, -0.665, Math.PI / 2);
+    // barrel band + bead
+    part(body, rbox(0.052, 0.036, 0.02, 0.004), M.blackSteel, 0, 0.006, -0.60);
+    part(body, new THREE.SphereGeometry(0.0055, 8, 6), M.wornSteel, 0, 0.038, -0.655);
+    // walnut buttstock + grip + butt pad
+    part(body, rbox(0.042, 0.078, 0.20, 0.012), wood, 0, -0.030, 0.115, -0.07);
+    part(body, rbox(0.046, 0.086, 0.024, 0.008), M.rubber, 0, -0.046, 0.215, -0.07);
+    part(body, rbox(0.038, 0.072, 0.075, 0.010), wood, 0, -0.062, 0.006, 0.28);
+    // trigger guard + trigger
+    part(body, rbox(0.03, 0.008, 0.07, 0.003), M.blackSteel, 0, -0.092, -0.006);
+    part(body, rbox(0.008, 0.022, 0.012, 0.002), M.wornSteel, 0, -0.080, -0.014, 0.2);
+    // pump slide (animated along z)
+    const pump = new THREE.Group();
+    pump.position.set(0, -0.030, PUMP_REST_Z);
+    part(pump, rbox(0.056, 0.050, 0.18, 0.014), wood);
+    for (let i = 0; i < 5; i++) {
+      part(pump, rbox(0.058, 0.006, 0.008, 0.002), M.rubber, 0, 0.012, -0.06 + i * 0.03);
+    }
+    body.add(pump);
+    // right hand bridges from the AR grip to the shotgun grip
+    const handHost = new THREE.Group();
+    handHost.position.set(0, 0.052, -0.055);
+    buildTriggerHand(handHost);
+    body.add(handHost);
+    body.userData.pump = pump;
+    return body;
+  }
+  const shotgunGroup = new THREE.Group();
+  shotgunGroup.name = 'shotgun';
+  const shotgunBody = buildShotgun();
+  shotgunGroup.add(shotgunBody);
+  shotgunGroup.visible = false;
+  gun.add(shotgunGroup);
+  const pumpGroup = shotgunBody.userData.pump;
+
   stockGroup = mergeStatic(built.stock);
   stockGroup.name = 'stock';
   gun.add(stockGroup);
@@ -535,6 +583,9 @@ export function createViewmodel(engineMats, envTexture) {
     inspectT: 0, inspectDur: INSPECT_DUR,
     flashT: 0,
     fov: BASE_FOV,
+    swap: 0, swapTarget: 0,       // 0 = up, 1 = lowered (weapon swap)
+    shotgun: false, noOptic: false,
+    pumpT: 0, pumpDur: 0.34,
   };
 
   const _p = new THREE.Vector3();
@@ -568,6 +619,7 @@ export function createViewmodel(engineMats, envTexture) {
     puff.s.scale.setScalar(0.05);
     puff.s.material.opacity = 0.2;
 
+    if (state.shotgun) state.pumpT = state.pumpDur;
     const sh = shells.find((x) => x.life <= 0) || shells[0];
     sh.life = 1.0;
     sh.m.visible = true;
@@ -592,6 +644,18 @@ export function createViewmodel(engineMats, envTexture) {
   function setWeapon(variant) {
     const F = M.furnitureFor(variant);
     for (const m of furnitureHosts) m.material = F;
+    const shot = variant === 'wood';
+    state.shotgun = shot;
+    state.noOptic = shot;
+    mergedBody.visible = !shot;
+    if (stockGroup) stockGroup.visible = !shot && state.ads < 0.65;
+    magGroup.visible = !shot;
+    shotgunGroup.visible = shot;
+  }
+
+  /** 0 = weapon up, 1 = lowered (used by the swap transition) */
+  function setSwap(t) {
+    state.swapTarget = Math.max(0, Math.min(1, t));
   }
 
   function setAspect(aspect) {
@@ -709,10 +773,10 @@ export function createViewmodel(engineMats, envTexture) {
     }
 
     // buttstock is behind the eye in ADS → cull it to avoid near-plane artefacts
-    if (stockGroup) stockGroup.visible = state.ads < 0.65;
+    if (stockGroup) stockGroup.visible = !state.shotgun && state.ads < 0.65;
     // holographic reticle only exists once the sight is actually up
     if (reticleMesh) {
-      const show = state.ads >= 0.8;
+      const show = state.ads >= 0.8 && !state.noOptic;
       reticleMesh.visible = show;
       M.reticleMat.opacity = show ? 0.95 * smoothstep(0.8, 0.92, state.ads) : 0;
     }
@@ -728,6 +792,16 @@ export function createViewmodel(engineMats, envTexture) {
       insY = env * 0.022;
     }
 
+    // swap (lower/raise) + pump slide
+    state.swap += (state.swapTarget > state.swap ? 1 : -1) * Math.min(Math.abs(state.swapTarget - state.swap), dt * 5.5);
+    if (state.pumpT > 0) {
+      state.pumpT = Math.max(0, state.pumpT - dt);
+      const u = 1 - state.pumpT / state.pumpDur;
+      if (pumpGroup) pumpGroup.position.z = PUMP_REST_Z + Math.sin(u * Math.PI) * 0.055;
+    } else if (pumpGroup) {
+      pumpGroup.position.z = PUMP_REST_Z;
+    }
+
     // recoil springs (substepped so high K stays stable at low fps)
     const steps = dt > 0.02 ? 2 : 1;
     const sdt = dt / steps;
@@ -741,12 +815,15 @@ export function createViewmodel(engineMats, envTexture) {
     _p.x += bobX + breathX + swayX + spPosX + rlPosX;
     _p.y += bobY + breathY + swayY + spPosY + rlPosY + insY * 0.4 - dead * 0.22;
     _p.z += spPosZ + rlPosZ + dead * 0.05;
+    // swap: drop the weapon out of frame, then bring the new one up
+    _p.y -= 0.30 * state.swap;
+    _p.z += 0.08 * state.swap;
     _p.x += state.recoilPos.x;
     _p.y += state.recoilPos.y;
     _p.z += state.recoilPos.z;
 
     _r.set(
-      THREE.MathUtils.lerp(HIP_ROT.x, ADS_ROT.x, poseAds) + swayY * 1.5 + spRotX + rlRotX + insRotX + state.recoilRot.x - dead * 0.5,
+      THREE.MathUtils.lerp(HIP_ROT.x, ADS_ROT.x, poseAds) + swayY * 1.5 + spRotX + rlRotX + insRotX + state.recoilRot.x - dead * 0.5 + state.swap * 0.9,
       THREE.MathUtils.lerp(HIP_ROT.y, ADS_ROT.y, poseAds) + swayX * 1.5 + spRotY + rlRotY + insRotY + state.recoilRot.y,
       THREE.MathUtils.lerp(HIP_ROT.z, ADS_ROT.z, poseAds) + spRotZ + rlRotZ + insRotZ + state.recoilRot.z + dead * 0.35
     );
@@ -866,7 +943,7 @@ export function createViewmodel(engineMats, envTexture) {
 
   return {
     scene, camera, root, gun,
-    update, fire, startReload, inspect, setWeapon, setAspect,
+    update, fire, startReload, inspect, setWeapon, setSwap, setAspect,
     state,
     get reloading() { return state.reloading; },
     get adsAmount() { return state.ads; },

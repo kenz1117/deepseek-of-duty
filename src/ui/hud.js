@@ -45,7 +45,8 @@ export function createHUD() {
     headshot: $('headshot-tag'), killtag: $('kill-tag'),
     dmgDirs: $('damage-dirs'), dmgFlash: $('damage-flash'), lowhp: $('lowhp'),
     armor: $('armor-pips'), hpFill: $('hp-fill'), hpNum: $('hp-num'),
-    weaponName: $('weapon-name'), ammoMag: $('ammo-mag'), ammoReserve: $('ammo-reserve'),
+    weaponName: $('weapon-name'), weaponTag: $('weapon-tag'), ammoMag: $('ammo-mag'), ammoReserve: $('ammo-reserve'),
+    weaponSlots: $('weapon-slots'),
     fireMode: $('fire-mode'), grenades: $('grenade-count'), magPips: $('mag-pips'),
     reload: $('reload-prompt'), hint: $('hint'),
     compass: $('compass'),
@@ -65,6 +66,7 @@ export function createHUD() {
     uav: $('hud-uav'), uavTime: $('uav-time'),
     reward: $('hud-reward'), rewardLabel: $('hud-reward-label'),
     toast: $('hud-toast'), toastText: $('hud-toast-text'),
+    areaTag: $('area-tag'), areaName: $('area-name'), areaEn: $('area-en'),
   };
 
   const ctxC = el.crosshair.getContext('2d');
@@ -84,6 +86,8 @@ export function createHUD() {
   };
 
   let magPips = [];
+  let areaKey = '';
+  let areaHold = 0;
   let chDpr = 0;
   let compassW = 0, compassH = 56, compassDpr = 0;
   let compassDirty = true;
@@ -221,6 +225,29 @@ export function createHUD() {
     paintMagPips(state.mag);
   }
 
+  /* 1/2/3 slot strip: names + live ammo + active highlight */
+  function setSlots(list) {
+    if (!el.weaponSlots) return;
+    const rows = el.weaponSlots.children;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const d = list[i];
+      if (!d) { row.classList.add('hidden'); continue; }
+      row.classList.remove('hidden');
+      const n = row.querySelector('.wslot-n');
+      const a = row.querySelector('.wslot-a');
+      if (n) n.textContent = d.name;
+      if (a) a.textContent = d.locked ? 'LOCKED' : `${d.mag}/${d.reserve}`;
+      row.classList.toggle('is-active', !!d.active);
+      row.classList.toggle('is-empty', !d.locked && d.mag === 0);
+      row.classList.toggle('is-locked', !!d.locked);
+    }
+  }
+
+  function setWeaponTag(tag) {
+    if (el.weaponTag && tag) el.weaponTag.innerHTML = tag;
+  }
+
   function setWeaponName(name, magSize, mode) {
     el.weaponName.textContent = name;
     state.magSize = Math.max(1, magSize | 0);
@@ -237,6 +264,20 @@ export function createHUD() {
     el.waveBar.style.width = `${clamp01(p) * 100}%`;
   }
   function setObjective(t) { if (t !== undefined && t !== null) el.objective.textContent = String(t); }
+
+  /* location tag: fades in on every region change, then hides itself again */
+  function setArea(name, en) {
+    if (!el.areaTag || !name) return;
+    const key = name + '|' + (en || '');
+    if (key === areaKey) return;
+    areaKey = key;
+    if (el.areaName) el.areaName.textContent = name;
+    if (el.areaEn) el.areaEn.textContent = en || '';
+    el.areaTag.classList.remove('show');
+    void el.areaTag.offsetWidth;
+    el.areaTag.classList.add('show');
+    areaHold = 3.6;
+  }
   function setScore(score, kills) {
     el.score.textContent = String(score);
     if (kills !== undefined) { el.kills.textContent = String(kills); state.kills = kills; }
@@ -381,7 +422,7 @@ export function createHUD() {
     compassDirty = true;
   }
 
-  function toast(text) {
+  function toast(text, ms) {
     if (!el.toast) return;
     const msg = String(text == null ? '' : text).trim();
     if (!msg) {
@@ -392,7 +433,7 @@ export function createHUD() {
     if (el.toastText) el.toastText.textContent = msg;
     el.toast.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { if (el.toast) el.toast.classList.remove('show'); }, 1600);
+    toastTimer = setTimeout(() => { if (el.toast) el.toast.classList.remove('show'); }, ms || 1600);
   }
 
   /* ------------------------------------------------------------ objective mode */
@@ -555,6 +596,7 @@ export function createHUD() {
     setRangeValue('set-master', 'out-master', settings.master, fmtPct);
     setSwitch('set-invertY', !!settings.invertY);
     setSwitch('set-reduceMotion', !!settings.reduceMotion);
+    setSwitch('set-wayfinder', settings.wayfinder !== false);
     setQualityState(settings.quality);
     document.documentElement.classList.toggle('reduce-motion', !!settings.reduceMotion);
   }
@@ -598,6 +640,7 @@ export function createHUD() {
     };
     bindSwitch('set-invertY', 'invertY');
     bindSwitch('set-reduceMotion', 'reduceMotion');
+    bindSwitch('set-wayfinder', 'wayfinder');
 
     // quality reuses the same pill markup as menu/pause; main.js also binds those buttons
     if (el.settings) {
@@ -672,6 +715,7 @@ export function createHUD() {
         invertY: !!next.invertY,
         master: clampNum(next.master, 0, 1, DEFAULT_SETTINGS.master),
         reduceMotion: !!next.reduceMotion,
+        wayfinder: next.wayfinder !== false,
         quality: String(next.quality || DEFAULT_SETTINGS.quality),
       };
     }
@@ -987,6 +1031,11 @@ export function createHUD() {
     state.time += dt;
     frames++;
 
+    if (areaHold > 0) {
+      areaHold -= dt;
+      if (areaHold <= 0 && el.areaTag) el.areaTag.classList.remove('show');
+    }
+
     if (!chDpr) syncCrosshairCanvas();
     if (compassW === 0 || (frames & 15) === 0) syncCompassCanvas();
 
@@ -1058,6 +1107,9 @@ export function createHUD() {
     if (el.uav) el.uav.classList.add('hidden');
     if (el.reward) el.reward.classList.remove('show');
     if (el.toast) { el.toast.classList.remove('show'); if (el.toastText) el.toastText.textContent = ''; }
+    if (el.areaTag) el.areaTag.classList.remove('show');
+    areaKey = '';
+    areaHold = 0;
     clearTimeout(rewardTimer);
     clearTimeout(toastTimer);
     compassDirty = true;
@@ -1065,7 +1117,7 @@ export function createHUD() {
 
   return {
     el, show, update, reset,
-    setHealth, setAmmo, setWeaponName, setWave, setWaveProgress, setObjective,
+    setHealth, setAmmo, setWeaponName, setWeaponTag, setSlots, setWave, setWaveProgress, setObjective,
     setScore, setGrenades, hit, addKillFeed, setDamage, flashDamage,
     setReloadPrompt, setHint, ping, setSpread,
     setHeading(h) { state.heading = h; },
@@ -1074,7 +1126,7 @@ export function createHUD() {
     showUpgrades, hideUpgrades, showTutorial, hideTutorial, setAtmosphere,
     setMode, setModeProgress, setZoneDistance, hideMode,
     bindModeSelect, setModeSelect,
-    setStreak, setStreakReward, setUav, uavPing, toast,
+    setStreak, setStreakReward, setUav, uavPing, toast, setArea,
     get state() { return state; },
   };
 }

@@ -47,13 +47,15 @@ export function createLevel(engine) {
   /* ------------------------------------------------------------------ utils */
   function add(mesh, group = statics) { group.add(mesh); return mesh; }
 
-  function addColliderRect(x0, x1, z0, z1) { const c = { x0, x1, z0, z1 }; colliders.push(c); return c; }
-  function addCollider(cx, cz, w, d, pad = 0) {
-    return addColliderRect(cx - w / 2 - pad, cx + w / 2 + pad, cz - d / 2 - pad, cz + d / 2 + pad);
+  // `top` is the world-space height of the collider so movement, bullets and
+  // line-of-sight can ignore geometry below the agent's feet / eye line.
+  function addColliderRect(x0, x1, z0, z1, top = 10) { const c = { x0, x1, z0, z1, top }; colliders.push(c); return c; }
+  function addCollider(cx, cz, w, d, pad = 0, top = 10) {
+    return addColliderRect(cx - w / 2 - pad, cx + w / 2 + pad, cz - d / 2 - pad, cz + d / 2 + pad, top);
   }
-  function addColliderRot(cx, cz, w, d, rot = 0, pad = 0.05) {
+  function addColliderRot(cx, cz, w, d, rot = 0, pad = 0.05, top = 10) {
     const c = Math.abs(Math.cos(rot)), s = Math.abs(Math.sin(rot));
-    return addCollider(cx, cz, w * c + d * s, w * s + d * c, pad);
+    return addCollider(cx, cz, w * c + d * s, w * s + d * c, pad, top);
   }
 
   const roundedCache = new Map();
@@ -88,7 +90,7 @@ export function createLevel(engine) {
     m.castShadow = opts.cast !== false;
     m.receiveShadow = opts.recv !== false;
     add(m, opts.group || statics);
-    if (opts.collide) addColliderRot(x, z, w, d, rotY, opts.pad ?? 0.04);
+    if (opts.collide) addColliderRot(x, z, w, d, rotY, opts.pad ?? 0.04, y + h / 2);
     return m;
   }
 
@@ -100,7 +102,7 @@ export function createLevel(engine) {
     m.castShadow = opts.cast !== false;
     m.receiveShadow = opts.recv !== false;
     add(m, opts.group || statics);
-    if (opts.collide) addColliderRot(x, z, w, d, rotY, opts.pad ?? 0.04);
+    if (opts.collide) addColliderRot(x, z, w, d, rotY, opts.pad ?? 0.04, y + h / 2);
     return m;
   }
 
@@ -375,7 +377,7 @@ export function createLevel(engine) {
     // world bounds (players)
     addColliderRect(-30, -22, -80, 80);
     addColliderRect(-30, 30, -80, -66);
-    addColliderRect(-30, 30, 54, 80);
+    addColliderRect(-30, 30, 82, 100);   // south backstop sits behind the depot yard wall
   }
 
   function addSkid(pts, width) {
@@ -910,11 +912,32 @@ export function createLevel(engine) {
     spawns: [{ x: 18.9, z: -12.3 }, { x: 22.9, z: -9.6 }],
     covers: [{ x: 19.7, z: -14.35, h: false }, { x: 23.0, z: -14.35, h: false }],
   };
+
+  /* =====================================================================
+     SOUTH YARD: the street opens into a depot yard (Sprint F).
+     Additive geometry only — nothing in the existing block is moved or
+     carved, so the street/backyard/market layout stays byte-identical.
+     ===================================================================== */
+  const SOUTH = { x0: -17.0, x1: 17.0, z0: 56.0, z1: 82.0 };
+  const DEPOT = { x0: 5.0, x1: 15.0, z0: 66.0, z1: 78.0, wallH: 3.6, roofY: 3.72 };
+  const SOUTH_RAMP = { x0: 3.2, x1: 4.9, z0: 66.4, z1: 72.0, rise: 3.72 };
+  ROOF_ZONES.push({
+    x0: DEPOT.x0 - 0.2, x1: DEPOT.x1 + 0.1,
+    z0: DEPOT.z0 - 0.1, z1: DEPOT.z1 + 0.1, y: DEPOT.roofY,
+  });
+  ROOF_SPAWNS.push({ x: 10.0, z: 72.0, y: DEPOT.roofY });
+  ROOF_COVERS.push({ x: 13.4, z: 72.0, y: DEPOT.roofY, h: true });
+
   const DESTRUCTIBLE_DEFS = [
     { id: 'yard-crate-a', x: 26.9, z: -14.4, w: 1.0, h: 1.0, d: 1.0, mat: 'wood', hp: 55 },
     { id: 'yard-crate-b', x: 24.9, z: -6.35, w: 1.1, h: 1.1, d: 1.1, mat: 'wood', hp: 60 },
     { id: 'market-sacks', x: 25.4, z: -6.6, w: 0.95, h: 1.0, d: 1.8, mat: 'sandbag', hp: 120 },
     { id: 'yard-barricade', x: 28.6, z: -14.9, w: 1.4, h: 1.0, d: 0.45, mat: 'metal', hp: 80 },
+    // south depot yard (Sprint G): breakable cover on the approach lanes
+    { id: 'south-crate', x: 2.6, z: 74.8, w: 1.15, h: 1.15, d: 1.15, mat: 'wood', hp: 60 },
+    { id: 'south-sacks', x: -1.8, z: 73.4, w: 1.9, h: 1.0, d: 0.9, mat: 'sandbag', hp: 130 },
+    { id: 'south-barricade', x: -9.6, z: 66.8, w: 1.6, h: 1.0, d: 0.45, mat: 'metal', hp: 85 },
+    { id: 'south-pallets', x: 12.4, z: 80.0, w: 1.2, h: 1.1, d: 1.2, mat: 'wood', hp: 55 },
   ];
   const destructibles = [];
   const debris = [];
@@ -924,9 +947,10 @@ export function createLevel(engine) {
   function groundHeight(x, z, y = 0) {
     let best = 0;
     const ceiling = y + 0.6;
-    if (x >= RAMP.x0 && x <= RAMP.x1 && z >= RAMP.z0 && z <= RAMP.z1) {
-      const t = Math.max(0, Math.min(1, (z - RAMP.z0) / (RAMP.z1 - RAMP.z0)));
-      const h = RAMP.rise * t;
+    for (const r of [RAMP, SOUTH_RAMP]) {
+      if (x < r.x0 || x > r.x1 || z < r.z0 || z > r.z1) continue;
+      const t = Math.max(0, Math.min(1, (z - r.z0) / (r.z1 - r.z0)));
+      const h = r.rise * t;
       if (h <= ceiling) best = Math.max(best, h);
     }
     for (const r of ROOF_ZONES) {
@@ -988,7 +1012,7 @@ export function createLevel(engine) {
       mesh.userData.destructible = def.id;
       root.add(mesh);
       bulletTargets.push(mesh);
-      const collider = addColliderRot(def.x, def.z, def.w, def.d, def.rot || 0, 0.02);
+      const collider = addColliderRot(def.x, def.z, def.w, def.d, def.rot || 0, 0.02, def.h);
       destructibles.push({ id: def.id, mesh, collider, hp: def.hp, maxHp: def.hp, def, destroyed: false });
     }
   }
@@ -2177,6 +2201,367 @@ export function createLevel(engine) {
     barrel(4.0, -67.2, { fire: true, noLight: true });
   }
 
+  /* =====================================================================
+     SOUTH YARD — the street opens into a depot yard at the south end.
+     A second combat space with a different silhouette: open sky, containers,
+     a walkable garage roof reached by an outside ramp, and a truck bay you
+     can fight inside. Everything here is additive; the north block is intact.
+     ===================================================================== */
+  function buildSouthYard() {
+    const cz = (SOUTH.z0 + SOUTH.z1) / 2;
+
+    // ---------- ground: asphalt yard, apron, dirt drift at the walls
+    meshPlane(SOUTH.x1 - SOUTH.x0 + 8, SOUTH.z1 - SOUTH.z0 + 6, mats.asphalt, 0, 0.009, cz, {
+      rx: -Math.PI / 2, uvScale: 3.4, recv: true,
+    });
+    meshBox(4.6, 0.06, 12.8, mats.concrete, DEPOT.x0 - 1.9, 0.032, 68.0, 0, { uv: 2.2, cast: false });
+    addPuddles([[-9.6, 62.0, 1.4, 0.55], [4.2, 74.6, 1.0, 0.5], [13.2, 79.4, 1.2, 0.45], [-14.4, 70.2, 0.8, 0.4]]);
+    addRubble(15.4, 80.4, 1.3, 16);
+    addRubble(-15.8, 58.6, 1.1, 12);
+    addWeeds(-16.4, 71.0, 4);
+    addWeeds(15.9, 64.0, 3);
+
+    // ---------- perimeter walls: east / west / south (gate in the middle)
+    const wallMat = mats.concreteDark;
+    const copMat = mats.concrete;
+    meshBox(0.36, 3.1, SOUTH.z1 - SOUTH.z0, wallMat, SOUTH.x1, 1.55, cz, 0, { collide: true, uv: 2.4 });
+    meshBox(0.36, 3.1, 28, wallMat, SOUTH.x0, 1.55, 68, 0, { collide: true, uv: 2.4 });
+    for (const [xa, xb] of [[SOUTH.x0, -3.0], [3.0, SOUTH.x1]]) {
+      meshBox(xb - xa, 3.1, 0.36, wallMat, (xa + xb) / 2, 1.55, SOUTH.z1, 0, { collide: true, uv: 2.4 });
+    }
+    meshBox(0.52, 0.12, SOUTH.z1 - SOUTH.z0, copMat, SOUTH.x1, 3.16, cz, 0, { uv: 2.0, cast: false });
+    meshBox(0.52, 0.12, 28, copMat, SOUTH.x0, 3.16, 68, 0, { uv: 2.0, cast: false });
+    for (const [xa, xb] of [[SOUTH.x0, -3.0], [3.0, SOUTH.x1]]) {
+      meshBox(xb - xa, 0.12, 0.52, copMat, (xa + xb) / 2, 3.16, SOUTH.z1, 0, { uv: 2.0, cast: false });
+    }
+    // gate: steel bars + open leaves; the opening stays closed to the player
+    for (let i = 0; i < 15; i++) {
+      meshBox(0.04, 1.55, 0.04, mats.metal, -2.86 + i * 0.41, 0.9, SOUTH.z1, 0, { uv: 0.4, cast: false });
+    }
+    for (const yy of [0.35, 1.62]) meshBox(6.0, 0.06, 0.06, mats.metal, 0, yy, SOUTH.z1, 0, { uv: 0.6, cast: false });
+    addColliderRect(-3.0, 3.0, SOUTH.z1 - 0.12, SOUTH.z1 + 0.12);
+    for (const [gz, dir] of [[-3.0, -1], [3.0, 1]]) {
+      const g = new THREE.Group();
+      for (let i = 0; i < 6; i++) {
+        const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.6, 5), mats.metal);
+        bar.position.set(0, 1.0, dir * (0.2 + i * 0.22));
+        g.add(bar);
+      }
+      g.position.set(gz, 0, SOUTH.z1 - 0.06);
+      g.rotation.y = dir * 0.5;
+      statics.add(g);
+    }
+    for (const z of [-3.0, 3.0]) meshBox(0.26, 3.3, 0.26, wallMat, z, 1.65, SOUTH.z1, 0, { uv: 0.9 });
+    // gate lamp + yard board
+    meshBox(0.3, 0.05, 0.05, mats.rust, 0, 3.36, SOUTH.z1 - 0.2, 0, { uv: 0.5, cast: false });
+    meshBox(0.26, 0.14, 0.2, mats.metalTan, 0, 3.28, SOUTH.z1 - 0.35, 0, { uv: 0.6 });
+    lightPool(0, SOUTH.z1 - 1.2, 2.6, 0.18);
+
+    // ---------- depot shell: bay opens north (visible from the street mouth)
+    const d = DEPOT;
+    const dcx = (d.x0 + d.x1) / 2, dcz = (d.z0 + d.z1) / 2;
+    const bayX0 = 6.8, bayX1 = 13.2, bayTop = 2.9;
+    meshBox(d.x1 - d.x0, 0.12, d.z1 - d.z0, mats.concreteDark, dcx, 0.06, dcz, 0, { uv: 2.6, cast: false });
+    // south / east / west walls
+    meshBox(d.x1 - d.x0, d.wallH, 0.3, mats.plasterB, dcx, d.wallH / 2, d.z1 - 0.15, 0, { collide: true, uv: 2.4 });
+    meshBox(0.3, d.wallH, d.z1 - d.z0, mats.plasterB, d.x1 - 0.15, d.wallH / 2, dcz, 0, { collide: true, uv: 2.4 });
+    meshBox(0.3, d.wallH, d.z1 - d.z0, mats.plasterB, d.x0 + 0.15, d.wallH / 2, dcz, 0, { collide: true, uv: 2.4 });
+    // north wall: piers either side of the 6.4 m bay, lintel above the opening
+    for (const [xa, xb] of [[d.x0, bayX0], [bayX1, d.x1]]) {
+      meshBox(xb - xa, d.wallH, 0.3, mats.plasterB, (xa + xb) / 2, d.wallH / 2, d.z0 + 0.15, 0, { collide: true, uv: 2.4 });
+    }
+    meshBox(bayX1 - bayX0, d.wallH - bayTop, 0.34, mats.concreteDark, (bayX0 + bayX1) / 2, (d.wallH + bayTop) / 2, d.z0 + 0.17, 0, { uv: 1.8, cast: false });
+    // rolled-up steel shutter tucked into the lintel
+    meshBox(bayX1 - bayX0 - 0.1, 0.5, 0.22, mats.metal, (bayX0 + bayX1) / 2, bayTop + 0.14, d.z0 + 0.06, 0, { uv: 0.9, cast: false });
+    for (let i = 0; i < 4; i++) {
+      meshBox(bayX1 - bayX0 - 0.3, 0.03, 0.2, mats.metal, (bayX0 + bayX1) / 2, bayTop + 0.02 - i * 0.11, d.z0 + 0.02, 0, { uv: 0.6, cast: false });
+    }
+    // roof slab (top = DEPOT.roofY) + parapet; west edge left open at the ramp
+    meshBox(d.x1 - d.x0 + 0.5, 0.24, d.z1 - d.z0 + 0.5, mats.concrete, dcx, d.wallH - 0.12, dcz, 0, { uv: 2.8 });
+    for (const [w, dep, px, pz] of [
+      [d.x1 - d.x0 + 0.5, 0.14, dcx, d.z0 - 0.18],
+      [d.x1 - d.x0 + 0.5, 0.14, dcx, d.z1 + 0.18],
+      [0.14, d.z1 - d.z0 + 0.5, d.x1 + 0.18, dcz],
+    ]) {
+      meshBox(w, 0.34, dep, mats.concrete, px, DEPOT.roofY + 0.17, pz, 0, { uv: 2.0, cast: false });
+    }
+    for (const [za, zb] of [[d.z0 - 0.25, 66.2], [70.8, d.z1 + 0.25]]) {
+      meshBox(0.14, 0.34, zb - za, mats.concrete, d.x0 - 0.18, DEPOT.roofY + 0.17, (za + zb) / 2, 0, { uv: 1.6, cast: false });
+    }
+    // roof clutter: skylight, AC box, sacks, a broken vent
+    meshBox(1.4, 0.16, 1.4, mats.metalTan, 9.0, DEPOT.roofY + 0.08, 74.0, 0, { uv: 1.0 });
+    meshBox(0.9, 0.7, 0.9, mats.metal, 13.4, DEPOT.roofY + 0.35, 72.0, 0.12, { uv: 0.8 });
+    meshBox(0.7, 0.5, 0.55, mats.burlap, 6.4, DEPOT.roofY + 0.25, 77.2, -0.2, { uv: 0.8 });
+    meshCyl(0.18, 0.18, 0.6, 8, mats.rust, 14.2, DEPOT.roofY + 0.3, 76.4);
+    // depot signage over the bay, facing the yard entrance
+    const baySign = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 0.62), mats.signB);
+    baySign.position.set((bayX0 + bayX1) / 2, bayTop + 0.42, d.z0 - 0.02);
+    baySign.rotation.y = Math.PI;
+    statics.add(baySign);
+
+    // ---------- outside ramp to the roof (no stairs, walk up)
+    const sr = SOUTH_RAMP;
+    const ang = Math.atan2(sr.rise, sr.z1 - sr.z0);
+    const rlen = Math.hypot(sr.rise, sr.z1 - sr.z0);
+    const rmx = (sr.x0 + sr.x1) / 2, rmz = (sr.z0 + sr.z1) / 2;
+    meshBox(1.4, 0.14, rlen, mats.metal, rmx, sr.rise / 2 - 0.07 * Math.cos(ang), rmz, 0, { rx: -ang, uv: 1.0 });
+    for (let k = 0; k < 10; k++) {
+      const z = sr.z0 + 0.5 + k * 0.4;
+      const h = sr.rise * (z - sr.z0) / (sr.z1 - sr.z0);
+      meshBox(1.26, 0.035, 0.07, mats.rust, rmx, h + 0.02, z, 0, { uv: 0.5, cast: false, rx: -ang });
+    }
+    for (const rx of [sr.x0 - 0.03, sr.x1 + 0.03]) {
+      meshBox(0.05, 0.05, rlen, mats.rust, rx, sr.rise / 2 + 0.95, rmz, 0, { rx: -ang, uv: 0.5, cast: false });
+      for (let k = 0; k < 5; k++) {
+        const z = sr.z0 + 0.5 + k * 0.85;
+        const h = sr.rise * (z - sr.z0) / (sr.z1 - sr.z0);
+        meshBox(0.05, 0.95, 0.05, mats.rust, rx, h + 0.48, z, 0, { uv: 0.4, cast: false });
+      }
+    }
+    // landing plate bridges the ramp top onto the roof's west edge
+    meshBox(1.6, 0.12, 1.2, mats.metal, 4.9, DEPOT.roofY - 0.06, sr.z1 - 0.1, 0, { uv: 1.0 });
+    // ramp sign at the base
+    meshBox(0.07, 2.0, 0.07, mats.wood, sr.x0 - 0.5, 1.0, sr.z0 - 0.25, 0, { uv: 0.5, cast: false });
+    const rs = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.55), mats.signC);
+    rs.position.set(sr.x0 - 0.5, 1.75, sr.z0 - 0.21);
+    statics.add(rs);
+
+    // ---------- truck bay interior (entered from the north)
+    boxTruck(10.0, 72.4, 0.02);
+    meshBox(0.8, 0.92, 3.0, mats.wood, d.x1 - 0.68, 0.46, 71.4, 0, { uv: 1.0, collide: true });
+    meshBox(0.84, 0.06, 3.1, mats.metal, d.x1 - 0.68, 0.95, 71.4, 0, { uv: 0.8, cast: false });
+    for (const [cx, czz] of [[6.4, 76.2], [13.6, 76.4], [6.6, 68.6]]) crate(cx, czz, 1.0, 0.2);
+    for (let i = 0; i < 4; i++) {
+      const tyre = new THREE.Mesh(new THREE.TorusGeometry(0.32, 0.12, 8, 14), mats.rubber);
+      tyre.rotation.x = Math.PI / 2; tyre.position.set(14.2 - i * 0.1, 0.16, 76.6 + i * 0.02);
+      statics.add(tyre);
+    }
+    addPuddles([[8.0, 69.6, 0.9, 0.5], [12.8, 76.0, 0.7, 0.4]]);
+    // single warm bulb (one point light for the whole bay)
+    meshCyl(0.012, 0.012, 0.5, 4, mats.rubber, 10.0, 3.0, 72.4, { cast: false });
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), mats.windowLit);
+    bulb.position.set(10.0, 2.72, 72.4);
+    statics.add(bulb);
+    const bayLight = new THREE.PointLight(0xffb070, 5.6, 10.5, 2);
+    bayLight.position.set(10.0, 2.66, 72.4);
+    dynamic.add(bayLight);
+    lightPool(10.0, 72.4, 2.6, 0.2);
+
+    // ---------- water tower: the yard's landmark, visible through the gate
+    const wt = { x: -6.6, z: 62.6 };
+    for (const [dx, dz] of [[-1.7, -1.7], [1.7, -1.7], [-1.7, 1.7], [1.7, 1.7]]) {
+      meshBox(0.28, 6.6, 0.28, mats.metal, wt.x + dx, 3.3, wt.z + dz, 0, { uv: 0.7 });
+      addCollider(wt.x + dx, wt.z + dz, 0.44, 0.44, 0.03);
+    }
+    for (const yy of [2.2, 4.4, 6.2]) {
+      for (const [w, dep, px, pz] of [
+        [3.6, 0.09, wt.x, wt.z - 1.7], [3.6, 0.09, wt.x, wt.z + 1.7],
+        [0.09, 3.6, wt.x - 1.7, wt.z], [0.09, 3.6, wt.x + 1.7, wt.z],
+      ]) {
+        meshBox(w, 0.08, dep, mats.rust, px, yy, pz, 0, { uv: 0.6, cast: false });
+      }
+    }
+    // access platform + railing
+    meshBox(4.2, 0.16, 4.2, mats.metal, wt.x, 6.68, wt.z, 0, { uv: 1.2 });
+    for (let i = 0; i < 5; i++) {
+      const t = -2.0 + i * 1.0;
+      for (const [px, pz] of [[wt.x + t, wt.z - 2.05], [wt.x + t, wt.z + 2.05]]) {
+        meshBox(0.06, 0.95, 0.06, mats.rust, px, 7.2, pz, 0, { uv: 0.4, cast: false });
+      }
+      for (const [px, pz] of [[wt.x - 2.05, wt.z + t], [wt.x + 2.05, wt.z + t]]) {
+        meshBox(0.06, 0.95, 0.06, mats.rust, px, 7.2, pz, 0, { uv: 0.4, cast: false });
+      }
+    }
+    for (const [w, dep, px, pz] of [
+      [4.2, 0.06, wt.x, wt.z - 2.05], [4.2, 0.06, wt.x, wt.z + 2.05],
+      [0.06, 4.2, wt.x - 2.05, wt.z], [0.06, 4.2, wt.x + 2.05, wt.z],
+    ]) {
+      meshBox(w, 0.06, dep, mats.rust, px, 7.7, pz, 0, { uv: 0.6, cast: false });
+    }
+    // tank + hoop ribs + conical cap
+    meshCyl(2.05, 2.05, 2.9, 16, mats.rust, wt.x, 8.55, wt.z, { cast: true });
+    for (const yy of [7.25, 8.1, 8.95, 9.8]) meshCyl(2.09, 2.09, 0.1, 16, mats.metal, wt.x, yy, wt.z, { cast: false });
+    meshCyl(2.2, 1.15, 1.15, 16, mats.metalTan, wt.x, 10.57, wt.z, { cast: true });
+    // ladder up the south leg + down pipe
+    for (const sx of [-0.24, 0.24]) meshBox(0.05, 6.4, 0.05, mats.metal, wt.x + sx, 3.2, wt.z + 2.08, 0, { uv: 0.4, cast: false });
+    for (let i = 0; i < 16; i++) meshBox(0.5, 0.04, 0.04, mats.metal, wt.x, 0.5 + i * 0.4, wt.z + 2.08, 0, { uv: 0.4, cast: false });
+    meshCyl(0.09, 0.09, 6.3, 6, mats.rust, wt.x + 1.88, 3.2, wt.z - 1.88, { cast: false });
+    lightPool(wt.x, wt.z, 3.0, 0.12);
+
+    // ---------- fuel island under a canopy: second landmark + cover
+    const FUEL = { x: 1.0, z: 71.6 };
+    meshBox(4.6, 0.24, 2.6, mats.concrete, FUEL.x, 0.12, FUEL.z, 0, { uv: 2.0, collide: true });
+    for (const [px, pz] of [[-2.0, -1.1], [2.0, -1.1], [-2.0, 1.1], [2.0, 1.1]]) {
+      meshBox(0.18, 3.5, 0.18, mats.metal, FUEL.x + px, 1.75, FUEL.z + pz, 0, { uv: 0.6, collide: true });
+    }
+    meshBox(5.4, 0.2, 3.2, mats.metalTan, FUEL.x, 3.62, FUEL.z, 0, { uv: 2.4 });
+    meshBox(5.4, 0.5, 0.14, mats.signB, FUEL.x, 3.9, FUEL.z - 1.62, 0, { uv: 2.2 });
+    for (const dx of [-1.2, 1.2]) {
+      meshBox(0.9, 1.4, 0.62, mats.metal, FUEL.x + dx, 0.94, FUEL.z, 0, { uv: 1.2, collide: true });
+      meshBox(0.66, 0.44, 0.03, mats.rubber, FUEL.x + dx, 1.36, FUEL.z - 0.32, 0, { uv: 0.5, cast: false });
+      meshBox(0.1, 0.85, 0.1, mats.rust, FUEL.x + dx + 0.52, 0.68, FUEL.z + 0.33, 0, { uv: 0.4, cast: false });
+      meshBox(0.16, 0.16, 0.16, mats.metalTan, FUEL.x + dx, 1.72, FUEL.z - 0.1, 0, { uv: 0.4, cast: false });
+    }
+    for (const dx of [-2.35, 2.35]) meshCyl(0.12, 0.13, 0.85, 8, mats.metalTan, FUEL.x + dx, 0.42, FUEL.z - 1.3);
+    meshCyl(0.24, 0.24, 0.8, 10, mats.rust, FUEL.x + 3.1, 0.4, FUEL.z + 0.9);
+    meshCyl(0.24, 0.24, 0.8, 10, mats.rust, FUEL.x + 3.5, 0.4, FUEL.z + 1.4);
+    addPuddles([[FUEL.x - 1.6, FUEL.z + 1.4, 1.2, 0.5], [FUEL.x + 1.8, FUEL.z + 0.4, 0.9, 0.4]]);
+    lightPool(FUEL.x, FUEL.z, 3.0, 0.16);
+
+    // ---------- yard dressing: containers, wrecks, truck, gate furniture
+    container(-13.6, 76.4, 0.06);
+    container(13.9, 59.6, 0.02);
+    carWreck(-10.4, 63.4, 0.42);
+    carWreck(7.4, 79.6, 2.3);
+    boxTruck(-6.0, 70.6, 0.5);
+    dumpster(14.9, 63.0, -0.16);
+    sandbagWall(1.2, 67.6, Math.PI / 2, 3, 4);
+    crateStack(-8.8, 79.0, 3);
+    crate(3.0, 60.8, 0.9, 0.3);
+    pallet(-13.8, 60.2, 0.2);
+    tireStack(-15.2, 66.4, 3);
+    barrel(-9.6, 61.6, { fire: true });
+    barrel(14.4, 66.4);
+    for (const [jx, jz, jr] of [[-4.9, 80.5, 0.02], [4.9, 80.5, -0.03]]) jerseyBarrier(jx, jz, jr);
+    // light poles (blob pools only — no extra point lights)
+    for (const [px, pz] of [[-13.6, 58.8], [13.4, 79.6]]) {
+      meshCyl(0.07, 0.1, 6.2, 8, mats.metal, px, 3.1, pz);
+      meshBox(0.55, 0.14, 0.55, mats.metalTan, px, 6.2, pz, 0, { uv: 0.6 });
+      meshBox(0.34, 0.05, 0.34, mats.rubber, px, 6.11, pz, 0, { uv: 0.4, cast: false });
+      addCollider(px, pz, 0.3, 0.3, 0.02);
+      lightPool(px, pz, 3.4, 0.15);
+    }
+    // graffiti on the yard walls
+    for (let k = 0; k < 3; k++) {
+      const g = new THREE.Mesh(new THREE.PlaneGeometry(rr(1.4, 2.2), rr(0.9, 1.5)), mats.graffiti);
+      g.position.set(SOUTH.x1 - 0.2, rr(0.9, 2.1), rr(62, 74));
+      g.rotation.y = -Math.PI / 2;
+      statics.add(g);
+    }
+    // ---- entrance frame: the street mouth reads as a depot checkpoint
+    for (const sx of [-1, 1]) {
+      meshBox(0.7, 5.0, 0.7, mats.concreteDark, sx * 9.6, 2.5, SOUTH.z0 + 0.2, 0, { collide: true, uv: 1.4 });
+      meshBox(0.9, 0.2, 0.9, mats.concrete, sx * 9.6, 5.1, SOUTH.z0 + 0.2, 0, { uv: 1.0, cast: false });
+      meshBox(0.72, 0.32, 0.72, mats.metalTan, sx * 9.6, 1.15, SOUTH.z0 + 0.2, 0, { uv: 0.6, cast: false });
+    }
+    meshBox(19.9, 0.42, 0.5, mats.concreteDark, 0, 5.18, SOUTH.z0 + 0.2, 0, { uv: 2.2, cast: false });
+    const yardSign = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 0.72), mats.signB);
+    yardSign.position.set(0, 5.18, SOUTH.z0 - 0.06);
+    yardSign.rotation.y = Math.PI;
+    statics.add(yardSign);
+    // raised barrier arm over the right-hand lane
+    meshBox(0.12, 0.12, 3.6, mats.metalTan, 6.2, 2.35, SOUTH.z0 + 1.5, 0.02, { uv: 0.4, cast: false });
+    meshBox(0.2, 1.0, 0.2, mats.metal, 6.2, 1.0, SOUTH.z0 + 0.6, 0, { uv: 0.5 });
+    // pipe stack along the west wall
+    for (let i = 0; i < 3; i++) {
+      meshCyl(0.24, 0.24, 3.0, 10, mats.rust, -15.3, 0.26 + (i % 2) * 0.48, 71.6 + i * 0.25, { cast: true });
+    }
+    addCollider(-15.3, 71.9, 1.0, 3.2, 0.04);
+
+    // outer perimeter berm beyond the yard wall: closes the horizon at ground
+    // level without stacking untextured blocks into the haze
+    meshBox(124, 2.6, 0.7, mats.concreteDark, 0, 1.3, 90.0, 0, { uv: 3.2, cast: false });
+    meshBox(124, 0.16, 0.9, mats.concrete, 0, 2.68, 90.0, 0, { uv: 3.2, cast: false });
+
+    // ---- backdrop: dress the street block's south ends (they close the yard)
+    function grimeS(x, y, z, w, hh) {
+      const g = new THREE.Mesh(new THREE.PlaneGeometry(w, hh), mats.grime);
+      g.position.set(x, y, z);
+      g.castShadow = false;
+      statics.add(g);
+    }
+    function southWindow(x, y, z, w, h, lit) {
+      // recess: a dark inset box behind the glass reads as depth, not a poster
+      meshBox(w + 0.08, h + 0.08, 0.3, mats.interior, x, y, z - 0.14, 0, { uv: 0.5, cast: false });
+      const glass = new THREE.Mesh(new THREE.PlaneGeometry(w, h), lit ? mats.windowLitDim : mats.windowGlass);
+      glass.position.set(x, y, z + 0.01);
+      statics.add(glass);
+      // jambs / lintel / sill sit proud of the wall
+      for (const dx of [-w / 2 - 0.07, w / 2 + 0.07]) {
+        meshBox(0.1, h + 0.16, 0.12, mats.concrete, x + dx, y, z + 0.05, 0, { uv: 0.55, cast: false });
+      }
+      meshBox(w + 0.26, 0.12, 0.14, mats.concreteDark, x, y + h / 2 + 0.07, z + 0.05, 0, { uv: 0.6, cast: false });
+      meshBox(w + 0.3, 0.14, 0.22, mats.concrete, x, y - h / 2 - 0.08, z + 0.07, 0, { uv: 0.7, cast: false });
+      grimeS(x, y - h / 2 - 0.85, z + 0.02, w + 0.5, 1.0);
+    }
+    function southShutter(x, z, w) {
+      meshBox(w, 2.5, 0.14, mats.shop, x, 1.32, z + 0.05, 0, { uv: 1.4 });
+      for (let i = 0; i < 12; i++) {
+        meshBox(w - 0.06, 0.035, 0.06, mats.metal, x, 0.28 + i * 0.19, z + 0.14, 0, { uv: 0.4, cast: false });
+      }
+      meshBox(w + 0.16, 0.16, 0.18, mats.concreteDark, x, 2.62, z + 0.08, 0, { uv: 0.7, cast: false });
+    }
+    // right block south face (z = 56, x 9.85..24.85, h 22)
+    for (let row = 0; row < 4; row++) {
+      const wy = 5.3 + row * 4.0;
+      for (let col = 0; col < 3; col++) {
+        southWindow(13.0 + col * 3.6, wy, SOUTH.z0, 1.24, 1.55, (row * 3 + col) % 5 === 2);
+      }
+    }
+    southShutter(20.4, SOUTH.z0, 2.9);
+    southShutter(16.2, SOUTH.z0, 2.4);
+    for (const px of [10.5, 24.1]) meshCyl(0.07, 0.07, 20.4, 7, mats.rust, px, 10.2, SOUTH.z0 + 0.14, { cast: false });
+    for (const [ax, ay] of [[18.6, 6.3], [22.6, 10.6], [14.6, 14.4]]) {
+      meshBox(0.86, 0.62, 0.4, mats.metal, ax, ay, SOUTH.z0 + 0.22, 0, { uv: 0.8 });
+      meshBox(0.7, 0.5, 0.02, mats.metalTan, ax, ay, SOUTH.z0 + 0.45, 0, { uv: 0.5, cast: false });
+    }
+    grimeS(17.0, 1.1, SOUTH.z0 + 0.02, 13.0, 2.4);
+    // left block south face (z = 54, x -23.85..-9.85, h 19)
+    for (let row = 0; row < 3; row++) {
+      const wy = 5.6 + row * 4.2;
+      for (let col = 0; col < 3; col++) southWindow(-20.4 + col * 3.6, wy, 54.0, 1.2, 1.5, row === 1 && col === 1);
+    }
+    southShutter(-12.4, 54.0, 2.6);
+    for (const [bx, by] of [[-13.4, 9.6], [-17.8, 12.4]]) {
+      meshBox(0.86, 0.62, 0.4, mats.metal, bx, by, 54.2, 0, { uv: 0.8 });
+    }
+    grimeS(-16.8, 1.4, 54.02, 12.4, 2.8);
+    meshCyl(0.07, 0.07, 17.6, 7, mats.rust, -10.4, 8.8, 54.12, { cast: false });
+    for (let k = 0; k < 2; k++) {
+      const gp = new THREE.Mesh(new THREE.PlaneGeometry(rr(1.6, 2.4), rr(0.9, 1.4)), mats.graffiti);
+      gp.position.set(rr(12, 22), rr(0.8, 1.9), SOUTH.z0 + 0.04);
+      statics.add(gp);
+    }
+
+    // ---------- shipping container (ribs + door bars, merged with the statics)
+    function container(x, z, rot) {
+      const g = new THREE.Group();
+      const w = 2.44, h = 2.6, dep = 6.0;
+      const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, dep), mats.rust);
+      projectBoxUV(body.geometry, 1.6);
+      body.position.y = h / 2 + 0.05;
+      body.castShadow = true; body.receiveShadow = true;
+      g.add(body);
+      for (const sx of [-w / 2 - 0.03, w / 2 + 0.03]) {
+        for (let i = 0; i < 11; i++) {
+          const rib = new THREE.Mesh(new THREE.BoxGeometry(0.06, h - 0.2, 0.14), mats.metal);
+          rib.position.set(sx, h / 2 + 0.05, -dep / 2 + 0.5 + i * 0.5);
+          rib.castShadow = false;
+          g.add(rib);
+        }
+      }
+      const door = new THREE.Mesh(new THREE.BoxGeometry(w - 0.16, h - 0.24, 0.06), mats.metalTan);
+      door.position.set(0, h / 2 + 0.05, dep / 2 + 0.02);
+      g.add(door);
+      for (const dx of [-0.5, 0.5]) {
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(0.07, h - 0.4, 0.07), mats.metal);
+        bar.position.set(dx, h / 2 + 0.05, dep / 2 + 0.07);
+        g.add(bar);
+      }
+      for (const sx of [-w / 2, w / 2]) {
+        for (const sz of [-dep / 2, dep / 2]) {
+          const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, h + 0.1, 0.12), mats.metal);
+          post.position.set(sx, (h + 0.1) / 2, sz);
+          g.add(post);
+        }
+      }
+      g.position.set(x, 0, z);
+      g.rotation.y = rot;
+      statics.add(g);
+      addColliderRot(x, z, w + 0.16, dep + 0.16, rot, 0.06, 2.6);
+    }
+  }
+
   /* ------------------------------------------------------------------ props */
   function barrel(x, z, { fire = false, y = 0, noLight = false } = {}) {
     const g = new THREE.Group();
@@ -2259,7 +2644,7 @@ export function createLevel(engine) {
     }
     g.position.set(x, y, z); g.rotation.y = rot;
     statics.add(g);
-    addColliderRot(x, z, size, size * 0.92, rot, 0.03);
+    addColliderRot(x, z, size, size * 0.92, rot, 0.03, 1.9);
     blob(x, z, size * 0.62, size * 0.58, 0.38, -rot);
     return g;
   }
@@ -2289,7 +2674,7 @@ export function createLevel(engine) {
     g.position.set(cx, 0, cz);
     g.rotation.y = rotY;
     statics.add(g);
-    addColliderRot(cx, cz, cols * 0.62 + 0.1, 0.6, rotY, 0.1);
+    addColliderRot(cx, cz, cols * 0.62 + 0.1, 0.6, rotY, 0.1, 1.05);
     blob(cx, cz, cols * 0.33, 0.42, 0.4, -rotY);
     return g;
   }
@@ -2322,7 +2707,7 @@ export function createLevel(engine) {
     rb.position.set(0.02, 1.12, 0.9); rb.rotation.z = 0.8; g.add(rb);
     g.position.set(x, 0, z); g.rotation.y = rot;
     statics.add(g);
-    addColliderRot(x, z, 0.72, 2.5, rot, 0.05);
+    addColliderRot(x, z, 0.72, 2.5, rot, 0.05, 1.05);
     blob(x, z, 0.52, 1.32, 0.42, -rot);
     return g;
   }
@@ -2445,7 +2830,7 @@ export function createLevel(engine) {
     g.rotation.y = rot;
     g.rotation.z = (rnd() - 0.5) * 0.04;
     statics.add(g);
-    addColliderRot(x, z, 2.05, 4.55, rot, 0.05);
+    addColliderRot(x, z, 2.05, 4.55, rot, 0.05, 1.32);
     blob(x, z, 1.24, 2.36, 0.52, -rot, Math.abs(x) > 6.9 ? 0.176 : 0.012);
     return g;
   }
@@ -2540,7 +2925,7 @@ export function createLevel(engine) {
     }
     g.position.set(x, 0.02, z); g.rotation.y = rot;
     statics.add(g);
-    addColliderRot(x, z, 2.18, 5.2, rot, 0.05);
+    addColliderRot(x, z, 2.18, 5.2, rot, 0.05, 2.7);
     blob(x, z, 1.3, 2.6, 0.52, -rot, Math.abs(x) > 6.9 ? 0.176 : 0.012);
     return g;
   }
@@ -3044,6 +3429,7 @@ export function createLevel(engine) {
   buildYardMarketStatic();
   buildAlley();
   buildGatehouse();
+  buildSouthYard();
 
   // ---- fire escapes on the two closest multi-storey fronts
   function fireEscape(side, z, floors, fh) {
@@ -3236,6 +3622,26 @@ export function createLevel(engine) {
     const ud = (o.material && o.material.userData) || {};
     if (!ud.noBullet) bulletTargets.push(o);
   });
+
+  // Bullet blockers: the merged meshes are FrontSide, so a shot fired from
+  // inside a room would exit through back faces and ignore the wall. The
+  // colliders are the authoritative solid volumes, so mirror every tall one
+  // with an invisible double-sided box (no draw call, raycast only).
+  const blockerMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, visible: false });
+  const blockerGroup = new THREE.Group();
+  blockerGroup.name = 'bullet-blockers';
+  for (const c of colliders) {
+    const top = c.top == null ? 10 : c.top;
+    if (top < 2.0) continue;
+    const w = c.x1 - c.x0, d = c.z1 - c.z0;
+    if (w <= 0.02 || d <= 0.02) continue;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, top, d), blockerMat);
+    m.position.set((c.x0 + c.x1) / 2, top / 2, (c.z0 + c.z1) / 2);
+    m.userData.blocker = true;
+    blockerGroup.add(m);
+  }
+  root.add(blockerGroup);
+  bulletTargets.push(...blockerGroup.children);
   buildYardDestructibles();
 
   /* ------------------------------------------------------------------ spawns */
@@ -3244,15 +3650,24 @@ export function createLevel(engine) {
     { x: -5.5, z: -45.4 }, { x: 6.8, z: -40 }, { x: -6.0, z: -31 },
     { x: 6.4, z: -18 }, { x: -7.4, z: -4 }, { x: 7.2, z: 4 },
     { x: -6.8, z: 14 }, { x: 6.6, z: 24 }, { x: 0, z: -48 },
-    { x: -15.5, z: 3.2 }
+    { x: -15.5, z: 3.2 },
+    // south depot yard: pressure can now arrive from behind the spawn
+    { x: -15.2, z: 80.2 }, { x: 15.2, z: 80.2 }, { x: 0, z: 80.8 },
+    { x: -15.4, z: 60.2 }, { x: 15.4, z: 60.4 }, { x: 13.6, z: 75.8 }
   );
   coverPoints.push(
+    { x: 1.0, z: 73.6, h: true }, { x: -2.0, z: 70.6, h: true },
     { x: -3.3, z: 15.6, h: true }, { x: 4.9, z: -8, h: false },
     { x: -1.8, z: 26.4, h: false }, { x: 2.6, z: 0.6, h: true },
     { x: -5.2, z: -7.0, h: false }, { x: 5.5, z: 17.0, h: false },
     { x: -6.0, z: -21.6, h: false }, { x: 5.4, z: -30.4, h: true },
     { x: -6.9, z: -34.5, h: true }, { x: 6.2, z: -46.5, h: false },
-    { x: -14.2, z: 2.2, h: true }, { x: 0.9, z: -27.2, h: true }
+    { x: -14.2, z: 2.2, h: true }, { x: 0.9, z: -27.2, h: true },
+    // south yard cover: containers, wrecks, truck bay corner, sandbags
+    { x: -14.0, z: 77.6, h: true }, { x: -6.0, z: 71.6, h: true },
+    { x: 2.6, z: 78.4, h: true }, { x: -11.4, z: 64.0, h: false },
+    { x: 5.0, z: 69.2, h: false }, { x: -4.2, z: 60.6, h: true },
+    { x: 15.2, z: 79.2, h: true }, { x: 6.9, z: 68.0, h: false }
   );
 
   /* ---- CQB zones + objective zones (Sprint B) ------------------------------
@@ -3284,6 +3699,8 @@ export function createLevel(engine) {
     extract: { x: -19.2, z: 3.0, r: 3.5 },
     backyard: { x: 21.8, z: -11.0, r: 5.2 },
     market: { x: 20.8, z: -10.7, r: 3.8 },
+    yard: { x: 0, z: 70, r: 8.0 },
+    depot: { x: 11.5, z: 68, r: 4.0 },
   };
   // expose the interior combat points through the legacy arrays too
   for (const z of cqbZones) {
@@ -3350,11 +3767,37 @@ export function createLevel(engine) {
     void camera;
   }
 
+  /* ------------------------------------------------------- named regions */
+  /* Coarse rectangles for the HUD location tag and the wayfinder. First hit
+     wins, so keep the small / specific areas ahead of the wide fallbacks. */
+  const REGIONS = [
+    { id: 'depot-roof', name: '车库屋顶', en: 'DEPOT ROOF', x0: 6.4, x1: 16.6, z0: 61.7, z1: 74.3, minY: 3.0 },
+    { id: 'depot', name: '车库', en: 'DEPOT', x0: 6.4, x1: 16.6, z0: 61.8, z1: 74.2 },
+    { id: 'south-yard', name: '南院车场', en: 'SOUTH YARD', x0: -17.2, x1: 17.2, z0: 55.8, z1: 82.2 },
+    { id: 'roof', name: '市场屋顶', en: 'ROOFTOP', x0: 17.3, x1: 26.1, z0: -14.6, z1: -6.1, minY: 2.4 },
+    { id: 'lane', name: '服务巷', en: 'SERVICE LANE', x0: 27.2, x1: 29.8, z0: -16.1, z1: -6.0 },
+    { id: 'market', name: '后院市场', en: 'YARD MARKET', x0: 17.0, x1: 24.0, z0: -14.6, z1: -6.8 },
+    { id: 'yard', name: '后院', en: 'BACKYARD', x0: 16.9, x1: 27.2, z0: -16.1, z1: -6.0 },
+    { id: 'apartment', name: '临街公寓', en: 'APARTMENT', x0: 9.85, x1: 16.9, z0: -15.0, z1: -7.0 },
+    { id: 'workshop', name: '左巷工坊', en: 'WORKSHOP', x0: -16.6, x1: -9.85, z0: -5.2, z1: 0.2 },
+    { id: 'alley', name: '左巷', en: 'WEST ALLEY', x0: -30, x1: -9.85, z0: -64, z1: 52 },
+  ];
+  const STREET_REGION = { id: 'street', name: '街区', en: 'STREET' };
+  function regionAt(x, z, y = 0) {
+    for (const r of REGIONS) {
+      if (x < r.x0 || x > r.x1 || z < r.z0 || z > r.z1) continue;
+      if (r.minY !== undefined && y < r.minY) continue;
+      return r;
+    }
+    return STREET_REGION;
+  }
+
   return {
     root, colliders, bulletTargets, spawnPoints, coverPoints,
-    bounds: { x0: -30, x1: 30, z0: -64, z1: 52 },
-    cqbZones, objectiveZones,
+    bounds: { x0: -30, x1: 30, z0: -64, z1: 84 },
+    cqbZones, objectiveZones, regionAt, regions: REGIONS,
     groundHeight, roofZones: ROOF_ZONES, roofSpawns: ROOF_SPAWNS, roofCovers: ROOF_COVERS,
+    navLinks: [{ ax: 15.9, az: -12.0, bx: 17.6, bz: -12.0 }],
     destructibles, hitDestructible,
     update, fires,
   };

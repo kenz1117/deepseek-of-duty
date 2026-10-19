@@ -159,6 +159,19 @@ export class Enemy {
     this.fireTimer = 0.8 + Math.random() * 1.2;
     this.strafeDir = Math.random() > 0.5 ? 1 : -1;
     this.strafeTimer = 1 + Math.random() * 2;
+    this.flankSide = Math.random() > 0.5 ? 1 : -1;
+    this.areaTimer = 5 + Math.random() * 4;
+    this.repositionPoint = null;
+    // ground pathfinding + "lost contact" search (Sprint H)
+    this.path = null;
+    this.pathI = 0;
+    this.pathTimer = 0;
+    this.navTarget = { x: 0, z: 0 };
+    this.lastSeen = null;
+    this.lastSeenT = 99;
+    this.searchHold = 0;
+    this.followHeight = null;
+    this.followHeight = null;
     this.repositionTimer = 3 + Math.random() * 3;
     this.repositionT = 0;
     this.warnT = 0;
@@ -487,6 +500,17 @@ export class Enemy {
     this.idleTime = 0;
     this.strafeDir = this.rnd() > 0.5 ? 1 : -1;
     this.strafeTimer = 1 + this.rnd() * 2;
+    this.flankSide = this.rnd() > 0.5 ? 1 : -1;
+    this.areaTimer = 5 + this.rnd() * 4;
+    this.repositionPoint = null;
+    this.path = null;
+    this.pathI = 0;
+    this.pathTimer = 0;
+    this.navTarget.x = 0;
+    this.navTarget.z = 0;
+    this.lastSeen = null;
+    this.lastSeenT = 99;
+    this.searchHold = 0;
     this.repositionTimer = 3 + this.rnd() * 3;
     this.repositionT = 0;
     this.warnT = 0;
@@ -601,8 +625,10 @@ export class Enemy {
     for (let i = 1; i < steps; i++) {
       const t = i / steps;
       const x = a.x + dx * t, z = a.z + dz * t;
+      const yLine = a.y + (b.y - a.y) * t;
       for (const c of this.colliders) {
         if (c === host) continue;
+        if (c.top != null && c.top <= yLine) continue;   // eye line passes over it
         if (x > c.x0 && x < c.x1 && z > c.z0 && z < c.z1) return false;
       }
     }
@@ -613,6 +639,7 @@ export class Enemy {
     const p = this.root.position;
     const r = 0.34;
     for (const c of this.colliders) {
+      if (c.top != null && c.top <= p.y + 0.2) continue;
       if (p.x > c.x0 - r && p.x < c.x1 + r && p.z > c.z0 - r && p.z < c.z1 + r) {
         const dl = Math.abs(p.x - (c.x0 - r));
         const dr = Math.abs((c.x1 + r) - p.x);
@@ -625,8 +652,8 @@ export class Enemy {
         else p.z = c.z1 + r;
       }
     }
-    p.x = clamp(p.x, -20, 20);
-    p.z = clamp(p.z, -63, 50);
+    p.x = clamp(p.x, -28, 28);
+    p.z = clamp(p.z, -63, 83);
   }
 
   /* --------------------------------------------------------------- update */
@@ -652,6 +679,15 @@ export class Enemy {
       this.sightTimer = 0.16 + Math.random() * 0.12;
       this.canSee = this.canSeePlayer(playerPos);
     }
+    // remember the last place the player was visible, so losing line of sight
+    // turns into a search instead of a frozen enemy (Sprint H)
+    if (this.canSee) {
+      this.lastSeenT = 0;
+      if (this.lastSeen) { this.lastSeen.x = playerPos.x; this.lastSeen.z = playerPos.z; }
+      else this.lastSeen = { x: playerPos.x, z: playerPos.z };
+    } else {
+      this.lastSeenT += dt;
+    }
 
     const px0 = this.root.position.x;
     const pz0 = this.root.position.z;
@@ -671,9 +707,38 @@ export class Enemy {
     if (this.state === 'cover') {
       this.coverTimer -= dt;
       if (this.coverTimer <= 0) { this.state = this.canSee ? 'engage' : 'advance'; this.coverPoint = null; }
+    } else if (this.state === 'reposition') {
+      // area switch: walk to a flank spot, then re-engage from a new angle
+      this.repositionT -= dt;
+      if (this.repositionT <= 0) { this.state = this.canSee ? 'engage' : 'advance'; this.repositionPoint = null; }
+    } else if (this.state === 'search') {
+      // lost contact: sweep the last known position, then give up and advance
+      this.searchHold -= dt;
+      if (this.canSee) {
+        this.state = 'engage';
+      } else if (!this.lastSeen || this.lastSeenT > 7 || this.searchHold <= 0) {
+        this.state = 'advance';
+        this.lastSeen = null;
+      }
     } else if (this.state !== 'dead') {
-      if (this.canSee && dist < (def.engageRange || 48)) this.state = 'engage';
-      else this.state = 'advance';
+      this.areaTimer -= dt;
+      const canFlank = this.archetype !== 'shield' && this.baseY <= 0.5 && dist < 46;
+      if (canFlank && this.areaTimer <= 0) {
+        const pt = this.pickFlankPoint(ctx, playerPos);
+        if (pt) {
+          this.repositionPoint = pt;
+          this.state = 'reposition';
+          this.repositionT = 1.7 + Math.random() * 1.3;
+        }
+        this.areaTimer = 6.5 + Math.random() * 5.5;
+      }
+      if (this.state !== 'reposition') {
+        if (this.canSee && dist < (def.engageRange || 48)) this.state = 'engage';
+        else if (this.archetype !== 'shield' && this.lastSeen && this.lastSeenT < 6.5) {
+          this.state = 'search';
+          if (this.searchHold <= 0) this.searchHold = 3.6;
+        } else this.state = 'advance';
+      }
     }
 
     // ---- movement
@@ -685,7 +750,7 @@ export class Enemy {
       if (this.archetype === 'rusher' || (this.archetype === 'rifleman')) {
         this.strafeTimer -= dt;
         if (this.strafeTimer <= 0) { this.strafeTimer = 1.4 + Math.random() * 2.2; this.strafeDir *= -1; }
-        const flare = this.archetype === 'rusher' ? def.flank : 0.55;
+        const flare = this.archetype === 'rusher' ? def.flank : (dist > 20 ? 0.95 : 0.55);
         const sx = sideX * this.strafeDir * flare;
         const sz = sideZ * this.strafeDir * flare;
         _v3.set(dir.x + sx, 0, dir.z + sz).normalize();
@@ -751,12 +816,38 @@ export class Enemy {
         speedTarget = dist > 32 ? 2.4 : 1.15;
         if (dist < 9) { moveX = -dir.x; moveZ = -dir.z; speedTarget = 2.1; }
       }
+    } else if (this.state === 'search') {
+      const ls = this.lastSeen || playerPos;
+      const sx = ls.x - this.root.position.x, sz = ls.z - this.root.position.z;
+      const sd = Math.hypot(sx, sz);
+      if (sd > 1.5) { moveX = sx / sd; moveZ = sz / sd; speedTarget = 2.7; }
+      else speedTarget = 0;
+    } else if (this.state === 'reposition' && this.repositionPoint) {
+      const rx = this.repositionPoint.x - this.root.position.x;
+      const rz = this.repositionPoint.z - this.root.position.z;
+      const rd = Math.hypot(rx, rz);
+      if (rd > 1.0) { moveX = rx / rd; moveZ = rz / rd; speedTarget = 3.6; }
+      else { this.repositionT = Math.min(this.repositionT, 0.12); speedTarget = 0; }
     } else if (this.state === 'cover' && this.coverPoint) {
       const cx = this.coverPoint.x - this.root.position.x;
       const cz = this.coverPoint.z - this.root.position.z;
       const cd = Math.hypot(cx, cz);
       if (cd > 0.7) { moveX = cx / cd; moveZ = cz / cd; speedTarget = 3.4; }
       else speedTarget = 0;
+    }
+
+    // ---- ground pathfinding: steer around walls when the straight line is blocked
+    if (ctx.nav && this.baseY <= 0.5 && !this.pinned
+        && (this.state === 'advance' || this.state === 'search' || this.state === 'reposition')) {
+      const tgt = this.state === 'search' ? (this.lastSeen || playerPos)
+        : this.state === 'reposition' ? (this.repositionPoint || playerPos)
+        : playerPos;
+      const steer = this.followPath(ctx.nav, tgt, dt, this.state === 'reposition' ? 0 : (ctx.playerGroundY || 0));
+      if (steer) {
+        moveX = steer.x;
+        moveZ = steer.z;
+        speedTarget = Math.max(speedTarget, this.state === 'advance' ? def.advanceSpeed * 0.9 : 2.8);
+      }
     }
 
     if (this.pinned) { moveX = 0; moveZ = 0; speedTarget = 0; }
@@ -766,12 +857,36 @@ export class Enemy {
       this.root.position.x += moveX * this.speed * dt;
       this.root.position.z += moveZ * this.speed * dt;
       if (this.bounds) this.clampToBounds();
-      else if (this.baseY <= 0.5) this.resolveCollision();
+      // above deck height the 2D colliders below (walls, trucks) must not pin
+      // the body: roof travel only needs the bounds
+      else if (this.root.position.y < 2.0) this.resolveCollision();
       else {
         const p = this.root.position;
-        p.x = clamp(p.x, -20, 20);
-        p.z = clamp(p.z, -63, 50);
+        p.x = clamp(p.x, -28, 28);
+        p.z = clamp(p.z, -63, 83);
       }
+    }
+    // vertical follow: ramps/roof layers (ground agents only)
+    if (ctx.groundAt && !this.bounds) {
+      // Heading to a roof waypoint: ask for the surface below that deck height
+      // (ramp cells come back as the ramp, deck cells as the deck). Ground
+      // waypoints keep the normal low-ceiling probe so nothing levitates.
+      let gy;
+      const navDrive = this.state === 'advance' || this.state === 'search' || this.state === 'reposition';
+      if (navDrive && this.followHeight != null && this.followHeight > 1.0) {
+        gy = Math.min(ctx.groundAt(this.root.position.x, this.root.position.z, this.followHeight), this.followHeight);
+        // deck-height hold: the lip between the ramp and the deck can be a
+        // few centimetres outside both surfaces, do not drop through it
+        if (gy < this.followHeight - 0.6 && this.root.position.y > this.followHeight - 0.9) {
+          gy = this.root.position.y;
+        }
+      } else {
+        gy = ctx.groundAt(this.root.position.x, this.root.position.z, this.root.position.y + 0.8);
+      }
+      const dy = gy - this.root.position.y;
+      if (dy > 0.9) this.root.position.y += Math.min(dy, dt * 4.5);        // step up a lip
+      else if (dy < -0.9) this.root.position.y -= Math.min(-dy, dt * 8);   // fall, not teleport
+      else this.root.position.y += dy * Math.min(1, dt * 9);
     }
     if (dt > 1e-4) {
       this.velX = clamp((this.root.position.x - px0) / dt, -6, 6);
@@ -780,7 +895,7 @@ export class Enemy {
 
     // ---- facing
     let faceYaw;
-    if (this.state === 'advance' && this.speed > 0.3 && this.archetype !== 'sniper') {
+    if ((this.state === 'advance' || this.state === 'reposition') && this.speed > 0.3 && this.archetype !== 'sniper') {
       faceYaw = Math.atan2(-moveX, -moveZ);
     } else {
       faceYaw = Math.atan2(-dir.x, -dir.z);
@@ -1239,6 +1354,65 @@ export class Enemy {
       if (score < bestScore) { bestScore = score; best = cp; }
     }
     return best;
+  }
+
+  /** A* steering for ground agents; returns a unit direction or null to use
+   *  the state's own straight-line steering (clear line of sight = cheaper). */
+  followPath(nav, tgt, dt, targetY = 0) {
+    const p = this.root.position;
+    this.pathTimer -= dt;
+    const moved = Math.hypot(tgt.x - this.navTarget.x, tgt.z - this.navTarget.z);
+    if (!this.path || this.pathTimer <= 0 || moved > 2.2) {
+      this.navTarget.x = tgt.x;
+      this.navTarget.z = tgt.z;
+      this.pathTimer = 0.85 + Math.random() * 0.55;
+      // straight line shortcut only makes sense on the ground layer
+      if (targetY < 1 && p.y < 1 && nav.lineWalkable(p.x, p.z, tgt.x, tgt.z)) {
+        this.path = null;
+        return null;
+      }
+      this.path = nav.findPath(p.x, p.z, p.y, tgt.x, tgt.z, targetY);
+      this.pathI = 0;
+      if (!this.path || !this.path.length) { this.path = null; this.followHeight = null; return null; }
+    }
+    while (this.pathI < this.path.length) {
+      const wp = this.path[this.pathI];
+      const dx = wp.x - p.x, dz = wp.z - p.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 0.6) { this.pathI++; continue; }
+      this.followHeight = nav.layerHeight ? nav.layerHeight(wp.layer) : null;
+      return { x: dx / d, z: dz / d };
+    }
+    this.followHeight = null;
+    return null;
+  }
+
+  /** Pick a spot that swings the firing angle (cover first, then orbit). */
+  pickFlankPoint(ctx, playerPos) {
+    const p = this.root.position;
+    const side = this.flankSide || 1;
+    const myBearing = Math.atan2(p.x - playerPos.x, p.z - playerPos.z);
+    const cover = (ctx && ctx.coverPoints) || [];
+    let best = null, bestScore = -Infinity;
+    for (const c of cover) {
+      if (c.y != null && c.y > 0.6) continue;        // ground cover only
+      const dx = c.x - playerPos.x, dz = c.z - playerPos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 7 || d > 26) continue;
+      const b = Math.atan2(dx, dz);
+      const rel = Math.abs(wrapPi(b - myBearing));
+      if (rel < 1.1) continue;                        // must actually change the angle
+      const score = rel * 2 - d * 0.05 - Math.hypot(c.x - p.x, c.z - p.z) * 0.04;
+      if (score > bestScore) { bestScore = score; best = c; }
+    }
+    if (best) return { x: best.x, z: best.z };
+    // no usable cover: arc around the player on this enemy's side
+    const r = Math.max(8, Math.min(16, Math.hypot(p.x - playerPos.x, p.z - playerPos.z) * 0.8));
+    const ang = myBearing + side * (1.15 + Math.random() * 0.5);
+    return {
+      x: clamp(playerPos.x + Math.sin(ang) * r, -27, 27),
+      z: clamp(playerPos.z + Math.cos(ang) * r, -62, 82),
+    };
   }
 
   dispose() {

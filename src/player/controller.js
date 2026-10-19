@@ -27,8 +27,10 @@ export function createController(camera, colliders, bounds, audio, groundProvide
   const radius = 0.36;
   const state = { speed: 0, moving: false, sprinting: false, crouching: false, ads: false };
 
-  function collides(x, z) {
+  function collides(x, z, y = pos.y) {
     for (const c of colliders) {
+      // 2D footprint + a height cap: standing on a deck ignores the walls below
+      if (c.top != null && c.top <= y + 0.2) continue;
       const cx = THREE.MathUtils.clamp(x, c.x0, c.x1);
       const cz = THREE.MathUtils.clamp(z, c.z0, c.z1);
       const dx = x - cx, dz = z - cz;

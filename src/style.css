@@ -477,6 +477,22 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:19px
 .rp-key{font-size:7.5px;letter-spacing:.06em;color:rgba(227,178,106,.85);border:1px solid rgba(227,178,106,.45);
   padding:1px 4px;line-height:1;}
 @keyframes reloadBlink{0%,100%{opacity:1;}50%{opacity:.42;}}
+
+/* weapon slots (Sprint K): 1/2/3 with live ammo, active highlighted */
+.weapon-slots{display:flex;flex-direction:column;align-items:flex-end;gap:3px;margin:2px 0 8px;}
+.wslot{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:8px;line-height:1;
+  letter-spacing:.12em;color:rgba(233,238,240,.42);transition:color .16s ease,opacity .16s ease;opacity:.62;}
+.wslot b{display:inline-flex;align-items:center;justify-content:center;width:13px;height:13px;
+  border:1px solid rgba(233,238,240,.18);font-size:7px;font-weight:600;color:rgba(233,238,240,.5);}
+.wslot .wslot-n{min-width:38px;letter-spacing:.2em;}
+.wslot .wslot-a{font-style:normal;color:rgba(233,238,240,.34);}
+.wslot.is-active{opacity:1;color:#f0e6d2;}
+.wslot.is-active b{border-color:var(--amber);color:var(--amber);background:rgba(255,178,87,.08);}
+.wslot.is-active .wslot-a{color:var(--amber);}
+.wslot.is-empty .wslot-a{color:#e35a4b;}
+.wslot.is-locked{opacity:.34;}
+.wslot.is-locked .wslot-a{color:rgba(233,238,240,.4);letter-spacing:.08em;}
+@media (max-width:900px){.weapon-slots{display:none;}}
 .weapon-block{display:flex;flex-direction:column;align-items:flex-end;gap:9px;margin-bottom:7px;}
 .weapon-tag{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:7px;
   line-height:1;letter-spacing:.24em;color:rgba(233,238,240,.5);}
@@ -514,6 +530,28 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:19px
   background:linear-gradient(90deg,transparent,rgba(233,238,240,.4));}
 .hud-hint::after{background:linear-gradient(90deg,rgba(233,238,240,.4),transparent);}
 .hud-hint.show{opacity:1;}
+
+/* ---------------- wayfinder: location tag + route marker ---------------- */
+.area-tag{display:flex;align-items:center;gap:7px;margin-top:7px;font-family:var(--mono);
+  font-size:8.5px;font-weight:600;letter-spacing:.22em;text-transform:uppercase;
+  color:rgba(240,245,246,.92);opacity:0;transform:translateY(3px);
+  transition:opacity .34s ease,transform .34s ease;pointer-events:none;}
+.area-tag.show{opacity:1;transform:none;}
+.area-mark{width:16px;height:1px;background:linear-gradient(90deg,rgba(227,178,106,.95),transparent);}
+.area-en{font-size:7px;font-weight:500;letter-spacing:.16em;color:rgba(233,238,240,.5);}
+
+.waypoint{position:absolute;left:50%;top:50%;z-index:6;display:flex;align-items:center;gap:7px;
+  padding:3px 8px 3px 6px;border:1px solid rgba(227,178,106,.34);background:rgba(4,7,10,.46);
+  transform:translate(-50%,-50%);pointer-events:none;transition:opacity .16s ease;}
+.waypoint.hidden{display:none;}
+.waypoint.is-off{border-color:rgba(227,178,106,.55);background:rgba(4,7,10,.62);}
+.wp-mark{width:8px;height:8px;flex:0 0 8px;border:1px solid rgba(242,201,135,.95);
+  background:rgba(242,201,135,.22);transform:rotate(45deg);box-shadow:0 0 10px rgba(227,178,106,.45);}
+.wp-name{font-family:var(--mono);font-size:8.5px;font-weight:600;letter-spacing:.2em;
+  text-transform:uppercase;color:rgba(242,201,135,.96);white-space:nowrap;}
+.wp-dist{font-family:var(--mono);font-size:8px;font-weight:600;letter-spacing:.08em;
+  color:rgba(233,238,240,.8);}
+html.reduce-motion .area-tag,html.reduce-motion .waypoint{transition:none;}
 
 /* ================================================================
    RESPONSIVE
