@@ -116,8 +116,8 @@ export function createHUD() {
   let modeClearTimer = 0;
   let rewardTimer = 0;
   let toastTimer = 0;
-  const MODE_SELECT_VALUES = ['rotation', 'survival', 'defend', 'extract'];
-  let modeSelectValue = 'rotation';
+  const MODE_SELECT_VALUES = ['campaign', 'survival', 'defend', 'extract'];
+  let modeSelectValue = 'campaign';
   let modeSelectOnChange = null;
   let modeSelectWired = false;
 
@@ -559,7 +559,7 @@ export function createHUD() {
   /* ------------------------------------------------------- deploy mode select */
   function normalizeModeSelect(value) {
     const k = String(value == null ? '' : value).trim().toLowerCase();
-    return MODE_SELECT_VALUES.includes(k) ? k : 'rotation';
+    return MODE_SELECT_VALUES.includes(k) ? k : 'campaign';
   }
 
   function paintModeSelect(mode) {

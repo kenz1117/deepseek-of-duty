@@ -1020,6 +1020,38 @@ Sprint H 的网格只回答“能不能走”，不会回答“值不值得走�
 
 ---
 
-## 33. 最后的话
+## 33. 模式重整：CAMPAIGN 取代 ROTATION（Sprint W）
+
+### 问题
+
+四个模式（ROTATION / SURVIVAL / DEFEND / EXTRACT）和 OPS 战役是两套并行入口：选 ROTATION 再点 OPS 会切模式；选 SURVIVAL 时 OPS 仍能点但运行逻辑混在一起，玩家分不清“我在打剧情还是打玩法”。
+
+### 方案
+
+- **ROTATION → CAMPAIGN（剧情推进）**：菜单第一个模式就是战役入口，按 OP01→OP10 推进，OPS 选任务、结算继续下一关。
+- 其余三个保持独立玩法：SURVIVAL / DEFEND / EXTRACT 不再挂任何战役关卡，目标区按原玩法轮换，战役进度不变。
+- 数据层：`runMode` 默认 `campaign`；旧存档的 `rotation` 自动迁移为 `campaign`。
+- 逻辑层：
+  - `modeForWave` 在 campaign 下返回当前任务的玩法（survival/defend/extract），自由模式返回所选模式。
+  - `activeOperation()` 只在 campaign 下返回任务；自由模式 START 时 `G.operation = null`。
+  - 切到 CAMPAIGN 自动选“第一个未完成的已解锁任务”；完成关卡回到菜单后自动推进到下一关。
+  - 自由模式点 OPS 任务会设置 `runMode='campaign'` 并同步模式药丸，不会出现“SURVIVAL 里打着剧情任务”。
+- UI：模式药丸 CAMPAIGN、当前模式标签、简报/战前教学、OPS 提示全部同步；自由模式下 OPS 列表仍可浏览，但提示“剧情任务只在 CAMPAIGN 模式推进”。
+
+### 验证
+
+- 默认启动：CAMPAIGN + OP01 简报 + OPS 提示 OP01。
+- 切 SURVIVAL：简报“无尽生存”，OPS 提示自由玩法；START 后 `G.operation=null`，`modeForWave(1)=survival`。
+- 在 SURVIVAL 下点 OPS OP02：自动切回 CAMPAIGN，当前模式标签变 CAMPAIGN，简报 OP02。
+- 旧 `runMode:'rotation'` 存档 sanitize 后变成 campaign。
+
+### 仍差
+
+- 排行榜的 campaign 榜与 free 榜是分开的，旧 rotation 榜数据不会迁移。
+- 自由模式没有“地图轮换”说明页，只是沿用原目标区轮换。
+
+---
+
+## 34. 最后的话
 
 3A FPS 的"完美"来自数百人年的资产生产、动作捕捉、扫描材质、烘焙全局光照与主机级管线；WebGL 单页 + 程序化生成能做到的是**方向正确、系统完整、可玩、可持续迭代**。这份工程在 3 轮内把评委分数从 2.4 推到 4.7，并让硬指标的 5 项里 3 项达标（最终轮两项曝光指标也已达标）。它不是 CoD，也不需要假装是。

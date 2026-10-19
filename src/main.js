@@ -252,7 +252,7 @@ function openBoardModal() {
   const modal = document.getElementById('board-modal');
   const modeEl = document.getElementById('board-modal-mode');
   const list = document.getElementById('board-modal-list');
-  if (modeEl) modeEl.textContent = String(mode || 'rotation').toUpperCase();
+  if (modeEl) modeEl.textContent = String(mode || 'campaign').toUpperCase();
   renderBoardModalRows();
   if (list) list.scrollTop = 0;
   modal?.classList.remove('hidden');
@@ -506,12 +506,12 @@ const TUTORIAL_STEPS = [
 ];
 
 const MODE_BRIEFS = {
-  rotation: {
-    label: 'ROTATION', title: '标准轮换', op: 'ROTATION PROTOCOL',
-    desc: '每 3 波进入防守，每 5 波进入撤离；其余为生存波次。目标区会在街区、后院、市场与南院车场之间轮换。',
-    threat: 'HIGH', ao: 'URBAN', contact: '∞',
-    objectives: ['生存波：清空所有敌人', '防守波：在目标区累计守住 60 秒', '撤离波：清空区域后进入撤离区按住 8 秒'],
-    note: '敌军以波次持续增援，没有撤离窗口。保持移动，利用掩体，清空街区。',
+  campaign: {
+    label: 'CAMPAIGN', title: '剧情推进', op: 'CAMPAIGN PROTOCOL',
+    desc: '按 OP01 → OP10 推进战役：每关有独立简报、过场、目标与结局。选择任务后 START 部署，完成后可继续下一关。',
+    threat: 'STORY', ao: 'URBAN', contact: '10 OPS',
+    objectives: ['在 OPS 里选择已解锁的任务', '完成关卡目标并存活', '结算后继续下一任务'],
+    note: '剧情模式会按关卡推进；其他三个模式是独立玩法，不会改变战役进度。',
   },
   survival: {
     label: 'SURVIVAL', title: '无尽生存', op: 'LAST STAND PROTOCOL',
@@ -546,7 +546,7 @@ function activeOperation() {
 /** One source for the mode brief and the pre-mission dialog. */
 function briefFor(mode = G.settings.runMode) {
   const op = activeOperation();
-  if (op && mode === op.mode) {
+  if (op && G.settings.runMode === 'campaign') {
     return {
       label: 'CAMPAIGN',
       title: `${op.code} · ${op.name}`,
@@ -563,7 +563,7 @@ function briefFor(mode = G.settings.runMode) {
       note: '',
     };
   }
-  return MODE_BRIEFS[mode] || MODE_BRIEFS.rotation;
+  return MODE_BRIEFS[mode] || MODE_BRIEFS.campaign;
 }
 
 function updateBriefing(mode = G.settings.runMode) {
@@ -743,19 +743,32 @@ function finishTutorial() {
 
 function modeForWave(n) {
   const pref = G.settings && G.settings.runMode;
-  if (pref && pref !== 'rotation') return pref;
-  if (n % 5 === 0) return 'extract';
-  if (n % 3 === 0) return 'defend';
-  return 'survival';
+  if (pref === 'campaign') return (G.operation && G.operation.mode) || 'survival';
+  return pref || 'survival';
+}
+
+function chooseCampaignOperation() {
+  const next = OPERATIONS.find((o) => isUnlocked(campaign, o.id) && !campaign.done.includes(o.id));
+  if (next) return next;
+  const sel = operationById(campaign.selected);
+  if (sel && isUnlocked(campaign, sel.id)) return sel;
+  return OPERATIONS[OPERATIONS.length - 1];
 }
 
 function onModeSelect(mode) {
-  campaignActive = false;
-  const valid = ['rotation', 'survival', 'defend', 'extract'];
-  G.settings.runMode = valid.includes(mode) ? mode : 'rotation';
+  const valid = ['campaign', 'survival', 'defend', 'extract'];
+  G.settings.runMode = valid.includes(mode) ? mode : 'campaign';
+  campaignActive = G.settings.runMode === 'campaign';
+  if (campaignActive) {
+    const op = chooseCampaignOperation();
+    campaign.selected = op.id;
+    saveCampaign(campaign);
+  }
   saveSettings(G.settings);
   if (hud && hud.setModeSelect) hud.setModeSelect(G.settings.runMode);
   updateBriefing(G.settings.runMode);
+  renderOps();
+  syncOpsTab();
   refreshMenuBoard(true);
   if (audio && audio.ctx) audio.ui();
 }
@@ -870,9 +883,13 @@ function renderOps() {
   }
   if (note) {
     const op = activeOperation();
-    note.textContent = op
-      ? `${op.code} ${op.name} · ${op.mode.toUpperCase()} · ${op.zoneLabel} · 按 START 部署`
-      : '选择一个任务，然后按 START 部署';
+    if (G.settings.runMode !== 'campaign') {
+      note.textContent = '自由玩法中 · 剧情任务只在 CAMPAIGN 模式推进；点击任务会自动切回剧情模式';
+    } else {
+      note.textContent = op
+        ? `${op.code} ${op.name} · ${op.mode.toUpperCase()} · ${op.zoneLabel} · 按 START 部署`
+        : '选择一个任务，然后按 START 部署';
+    }
   }
   if (opsTab === 'archive') renderArchive();
 }
@@ -883,10 +900,10 @@ function selectOperation(id) {
   campaign.selected = id;
   saveCampaign(campaign);
   campaignActive = true;
-  G.settings.runMode = op.mode;
+  G.settings.runMode = 'campaign';
   saveSettings(G.settings);
-  if (hud && hud.setModeSelect) hud.setModeSelect(op.mode);
-  updateBriefing(op.mode);
+  if (hud && hud.setModeSelect) hud.setModeSelect('campaign');
+  updateBriefing('campaign');
   renderOps();
   if (audio && audio.ctx) audio.ui();
 }
@@ -1202,6 +1219,12 @@ async function boot() {
     await nextFrame();
 
     G.settings = loadSettings();
+    if (G.settings.runMode === 'campaign') {
+      campaignActive = true;
+      const op = chooseCampaignOperation();
+      campaign.selected = op.id;
+      saveCampaign(campaign);
+    }
     G.tutorial.done = tutorialDone();
     engine = createEngine(document.getElementById('gl'), G.settings.quality);
     setLoading(0.34, '生成程序化 PBR 材质与大气…');
@@ -1303,9 +1326,9 @@ async function boot() {
       campaign.selected = next.id;
       saveCampaign(campaign);
       campaignActive = true;
-      G.settings.runMode = next.mode;
+      G.settings.runMode = 'campaign';
       saveSettings(G.settings);
-      if (hud && hud.setModeSelect) hud.setModeSelect(next.mode);
+      if (hud && hud.setModeSelect) hud.setModeSelect('campaign');
       startGame(true);
       if (audio && audio.ctx) audio.uiConfirm();
     });
@@ -2282,6 +2305,11 @@ function returnToMenu() {
   G.operation = null;
   input.unlock();
   resetGame();
+  if (campaignActive) {
+    const op = chooseCampaignOperation();
+    if (campaign.selected !== op.id) { campaign.selected = op.id; saveCampaign(campaign); }
+    updateBriefing('campaign');
+  }
   refreshDailyUI();
   refreshMenuBoard(true);
   renderOps();
