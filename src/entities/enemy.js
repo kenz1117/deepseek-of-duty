@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { buildSoldier, applyPose, applyRagdoll } from './soldierParts.js';
+import { behaviorFor, reactionDelay } from '../systems/ai/tuning.js';
+import { separate, avoidBody, pullString, arrival } from '../systems/ai/steering.js';
 
 /* =========================================================================
    Enemy soldier — four archetypes on one rig:
@@ -165,7 +167,6 @@ export class Enemy {
     this.fireTimer = 0.8 + Math.random() * 1.2;
     this.strafeDir = Math.random() > 0.5 ? 1 : -1;
     this.strafeTimer = 1 + Math.random() * 2;
-    this.flankSide = Math.random() > 0.5 ? 1 : -1;
     this.areaTimer = 5 + Math.random() * 4;
     this.repositionPoint = null;
     // ground pathfinding + "lost contact" search (Sprint H)
@@ -190,6 +191,31 @@ export class Enemy {
     this.idleTime = 0;
     this.lastDamage = 0;
 
+    /* ---- AI v2 state (see systems/ai/*) -------------------------------- */
+    this.awareness = 0;          // 0..1 confidence that the player is here
+    this.losTimer = Math.random() * 0.2;
+    this.losCache = false;
+    this.contact = false;        // currently in a visual engagement
+    this.acquireT = 0;           // seconds of continuous contact
+    this.reactionDelay = 0.8;    // tier-driven delay before the first shot
+    this.aimSettle = 0;          // 0..1 accuracy ramp while tracking
+    this.suppression = 0;        // 0..1 incoming-fire pressure
+    this.aiRole = 'hold';        // assigned by the squad director
+    this.aiSide = 1;             // flank direction
+    this.roleT = 0;
+    this.intelT = 0;
+    this.intelDue = 0;
+    this.investigate = null;
+    this.investigateT = 0;
+    this.wantCover = false;
+    this.coverKey = null;
+    this.coverCd = 0;
+    this.coverPhase = 'move';    // move | hide | peek
+    this.coverPhaseT = 0;
+    this.coverPeek = false;
+    this.coverNoSightT = 0;
+    this.flankT = 0;
+
     this.aimBlend = 1;
     this.weaponLevel = 0;
     this.walkAmp = 0;
@@ -205,6 +231,9 @@ export class Enemy {
     this.baseY = 0;
     this.bounds = null;
     this.pinned = false;
+    // world clamps: the level grew north (HQ) and east (dock); the old fixed
+    // box cut those areas off and squeezed soldiers onto a single wall line
+    this.worldBounds = { x0: -28, x1: 28, z0: -63, z1: 83 };
 
     // ragdoll / corpse
     this.ragdoll = null;
@@ -239,7 +268,9 @@ export class Enemy {
     this.damageMult = tier ? tier.damage : 1;
     this.firstShotMult = tier ? tier.firstShot : 1;
     this.burstMult = tier ? tier.burst : 1;
-    this.fireTimer = (this.def.firstShot + Math.random() * 0.4) * this.firstShotMult;
+    // the first shot is gated by perception.reactionDelay now; this timer only
+    // staggers the trigger so a squad does not open up on the same frame
+    this.fireTimer = 0.18 + Math.random() * 0.45;
   }
 
   /**
@@ -267,7 +298,7 @@ export class Enemy {
     this.warnT = 0;
     this.warnActive = false;
     this.repositionT = 0;
-    this.fireTimer = this.def.firstShot * this.firstShotMult;
+    this.fireTimer = 0.18 + Math.random() * 0.5;
     this.canSee = false;
     this.sightTimer = this.rnd() * 0.3;
     this.coverPoint = null;
@@ -278,6 +309,7 @@ export class Enemy {
     this.aimPitch = 0;
     this.lastDamage = 0;
     this.weaponFlashT = 0;
+    this.resetAiState();
 
     this.rebuildVisual();
 
@@ -318,6 +350,18 @@ export class Enemy {
   clearBounds() {
     this.bounds = null;
     this.pinned = false;
+    return this;
+  }
+
+  /** Playable rectangle for world clamping (level.bounds), inset by the body. */
+  setWorldBounds(b) {
+    if (!b) return this;
+    this.worldBounds = {
+      x0: Number.isFinite(b.x0) ? b.x0 : this.worldBounds.x0,
+      x1: Number.isFinite(b.x1) ? b.x1 : this.worldBounds.x1,
+      z0: Number.isFinite(b.z0) ? b.z0 : this.worldBounds.z0,
+      z1: Number.isFinite(b.z1) ? b.z1 : this.worldBounds.z1,
+    };
     return this;
   }
 
@@ -514,7 +558,7 @@ export class Enemy {
     this.state = 'advance';
     this.deathT = 0;
     this.burstLeft = 0;
-    this.fireTimer = (this.def.firstShot + Math.random() * 0.6) * this.firstShotMult;
+    this.fireTimer = 0.18 + Math.random() * 0.5;
     this.crouch = 0.10;
     this.flinch = 0;
     this.recoil = 0;
@@ -537,7 +581,6 @@ export class Enemy {
     this.idleTime = 0;
     this.strafeDir = this.rnd() > 0.5 ? 1 : -1;
     this.strafeTimer = 1 + this.rnd() * 2;
-    this.flankSide = this.rnd() > 0.5 ? 1 : -1;
     this.areaTimer = 5 + this.rnd() * 4;
     this.repositionPoint = null;
     this.path = null;
@@ -552,6 +595,7 @@ export class Enemy {
     this.repositionT = 0;
     this.warnT = 0;
     this.warnActive = false;
+    this.resetAiState();
     this.deathFall = 1;
     this.deathSide = 1;
     this.deathTwist = 0;
@@ -566,6 +610,36 @@ export class Enemy {
 
   get eyePos() {
     return _v1.set(this.root.position.x, EYE_Y + this.root.position.y, this.root.position.z);
+  }
+
+  /** AI v2 state reset — called by spawn()/setArchetype() so a recycled
+   *  instance does not inherit awareness, a cover claim or a role. */
+  resetAiState() {
+    this.awareness = 0;
+    this.losTimer = this.rnd() * 0.2;
+    this.losCache = false;
+    this.contact = false;
+    this.acquireT = 0;
+    this.reactionDelay = 0.8;
+    this.aimSettle = 0;
+    this.suppression = 0;
+    this.aiRole = 'hold';
+    this.aiSide = this.rnd() > 0.5 ? 1 : -1;
+    this.roleT = 0;
+    this.intelT = 0;
+    this.intelDue = 0;
+    this.investigate = null;
+    this.investigateT = 0;
+    this.wantCover = false;
+    this.coverKey = null;
+    this.coverCd = 0;
+    this.coverPhase = 'move';
+    this.coverPhaseT = 0;
+    this.coverPeek = false;
+    this.coverNoSightT = 0;
+    this.flankT = 0;
+    this.coverPoint = null;
+    this.coverTimer = 0;
   }
 
   /* ---------------------------------------------------------------- damage */
@@ -610,7 +684,24 @@ export class Enemy {
       this.die(point, normal);
       return true;
     }
-    if (this.state === 'advance') this.state = 'engage';
+
+    // Being hit is information: acquire the shooter, shake the aim, and
+    // remember to look for cover — but only some soldiers break off.
+    const B = behaviorFor(this.diff);
+    this.awareness = Math.min(1, Math.max(this.awareness, 0.9));
+    this.suppression = Math.min(1, this.suppression + (part === 'shield' ? 0.04 : 0.14));
+    this.aimSettle = Math.max(0, this.aimSettle * 0.45);
+    if (point) this.investigate = { x: point.x, z: point.z };
+    if (!this.contact) {
+      this.contact = true;
+      this.acquireT = 0;
+      this.reactionDelay = reactionDelay(B, this.archetype) * 0.5;
+    }
+    this.wantCover = this.def.useCover && Math.random() < B.cover;
+    if (this.state === 'advance' || this.state === 'idle') {
+      this.state = this.canSee ? 'engage' : 'search';
+      if (this.state === 'search' && this.searchHold <= 0) this.searchHold = 3.5;
+    }
     return false;
   }
 
@@ -639,31 +730,49 @@ export class Enemy {
   /* --------------------------------------------------------------- vision */
   setOccluders(list) { this.occluders = Array.isArray(list) ? list : []; }
 
-  canSeePlayer(playerPos) {
-    const a = this.eyePos.clone();
-    const b = playerPos.clone();
-    const dx = b.x - a.x, dz = b.z - a.z;
-    const steps = Math.max(2, Math.floor(Math.hypot(dx, dz) / 1.2));
+  /**
+   * 2D collider line-of-sight test between this soldier's eye and the player.
+   * `dist` is the planar distance perception already computed: passing it keeps
+   * this function allocation-free and lets it bail out on range.
+   */
+  canSeePlayer(playerPos, dist) {
+    const p = this.root.position;
+    const ax = p.x, az = p.z, ay = EYE_Y + p.y;
+    const bx = playerPos.x, bz = playerPos.z;
+    const by = playerPos.y != null ? playerPos.y : CHEST_Y;
+    const dx = bx - ax, dz = bz - az;
+    const planar = dist != null ? dist : Math.hypot(dx, dz);
+    if (planar > 130) return false;
+    const steps = Math.max(2, Math.min(56, Math.floor(planar / 1.15)));
+
     // an elevated shooter ignores the footprint of the building it stands on
     // (colliders are 2D, so its own roof would otherwise block every shot)
     const elevated = this.baseY > 0.5;
-    const px = this.root.position.x, pz = this.root.position.z;
-    const host = elevated ? this.colliders.find((c) => px > c.x0 && px < c.x1 && pz > c.z0 && pz < c.z1) : null;
+    let host = null;
+    if (elevated) {
+      for (let k = 0; k < this.colliders.length; k++) {
+        const c = this.colliders[k];
+        if (ax > c.x0 && ax < c.x1 && az > c.z0 && az < c.z1) { host = c; break; }
+      }
+    }
     // 3D roof decks: an elevated shooter cannot see through a deck into the room below
-    if (elevated && a.y > b.y + 0.2) {
+    if (elevated && ay > by + 0.2) {
       for (const o of this.occluders) {
-        if (!(a.y > o.y && b.y < o.y - 0.05)) continue;
-        const t = (o.y - a.y) / (b.y - a.y);
+        if (!(ay > o.y && by < o.y - 0.05)) continue;
+        const t = (o.y - ay) / (by - ay);
         if (t <= 0 || t >= 1) continue;
-        const x = a.x + dx * t, z = a.z + dz * t;
+        const x = ax + dx * t, z = az + dz * t;
         if (x > o.x0 && x < o.x1 && z > o.z0 && z < o.z1) return false;
       }
     }
+    const cols = this.colliders;
+    const nCols = cols.length;
     for (let i = 1; i < steps; i++) {
       const t = i / steps;
-      const x = a.x + dx * t, z = a.z + dz * t;
-      const yLine = a.y + (b.y - a.y) * t;
-      for (const c of this.colliders) {
+      const x = ax + dx * t, z = az + dz * t;
+      const yLine = ay + (by - ay) * t;
+      for (let k = 0; k < nCols; k++) {
+        const c = cols[k];
         if (c === host) continue;
         if (c.top != null && c.top <= yLine) continue;   // eye line passes over it
         if (x > c.x0 && x < c.x1 && z > c.z0 && z < c.z1) return false;
@@ -689,14 +798,17 @@ export class Enemy {
         else p.z = c.z1 + r;
       }
     }
-    p.x = clamp(p.x, -28, 28);
-    p.z = clamp(p.z, -63, 83);
+    const wb = this.worldBounds;
+    p.x = clamp(p.x, wb.x0 + 0.4, wb.x1 - 0.4);
+    p.z = clamp(p.z, wb.z0 + 0.4, wb.z1 - 0.4);
   }
 
   /* --------------------------------------------------------------- update */
   update(dt, ctx) {
     const playerPos = ctx.playerPos;
     const def = this.def;
+    const B = behaviorFor(this.diff);
+    const ai = ctx.ai || null;
     this.animT += dt;
 
     if (!this.alive) {
@@ -709,182 +821,261 @@ export class Enemy {
     this.lastDamage = Math.max(0, this.lastDamage - dt);
     this.weaponFlashT = Math.max(0, this.weaponFlashT - dt);
     this.weaponFlash.material.opacity = this.weaponFlashT > 0 ? 1 : 0;
+    this.coverCd = Math.max(0, this.coverCd - dt);
 
-    // ---- perception (throttled)
-    this.sightTimer -= dt;
-    if (this.sightTimer <= 0) {
-      this.sightTimer = 0.16 + Math.random() * 0.12;
-      this.canSee = this.canSeePlayer(playerPos);
-    }
-    // remember the last place the player was visible, so losing line of sight
-    // turns into a search instead of a frozen enemy (Sprint H)
-    if (this.canSee) {
-      this.lastSeenT = 0;
-      if (this.lastSeen) { this.lastSeen.x = playerPos.x; this.lastSeen.z = playerPos.z; }
-      else this.lastSeen = { x: playerPos.x, z: playerPos.z };
+    // ---- perception: vision cone, awareness, hearing, suppression decay
+    if (ai && ai.perception) {
+      ai.perception.sense(this, ctx, dt);
     } else {
-      this.lastSeenT += dt;
-    }
-
-    const px0 = this.root.position.x;
-    const pz0 = this.root.position.z;
-    const toPlayer = _v2.set(playerPos.x - this.root.position.x, 0, playerPos.z - this.root.position.z);
-    const dist = toPlayer.length();
-    const dir = toPlayer.clone().normalize();
-
-    // ---- state selection
-    if (def.useCover && this.hp < def.coverHp && this.lastDamage > 0 && this.state !== 'cover') {
-      const cp = this.nearestCover(ctx.coverPoints, playerPos);
-      if (cp) {
-        this.coverPoint = cp;
-        this.state = 'cover';
-        this.coverTimer = 2.2 + Math.random() * 2.0;
+      // defensive fallback for direct callers outside main.js: binary sight
+      this.sightTimer -= dt;
+      if (this.sightTimer <= 0) {
+        this.sightTimer = 0.16 + Math.random() * 0.12;
+        this.canSee = this.canSeePlayer(playerPos);
+      }
+      if (this.canSee) {
+        this.lastSeenT = 0;
+        if (this.lastSeen) { this.lastSeen.x = playerPos.x; this.lastSeen.z = playerPos.z; }
+        else this.lastSeen = { x: playerPos.x, z: playerPos.z };
+        this.awareness = 1;
+      } else {
+        this.lastSeenT += dt;
+        this.awareness = Math.max(0, this.awareness - dt * 0.7);
       }
     }
+    if (this.investigate) this.investigateT += dt;
+
+    // ---- aim settle: accuracy ramps while tracking, collapses when hit
+    const settle = Math.max(0.18, B.settle
+      * (this.archetype === 'sniper' ? 1.3 : this.archetype === 'rusher' ? 0.8 : 1));
+    if (this.canSee) this.aimSettle = Math.min(1, this.aimSettle + dt / settle);
+    else this.aimSettle = Math.max(0, this.aimSettle - dt * 1.7);
+
+    const p = this.root.position;
+    const px0 = p.x;
+    const pz0 = p.z;
+    const tox = playerPos.x - p.x;
+    const toz = playerPos.z - p.z;
+    const dist = Math.hypot(tox, toz);
+    const inv = dist > 1e-4 ? 1 / dist : 0;
+    const dirX = tox * inv, dirZ = toz * inv;
+    const sideX = -dirZ, sideZ = dirX;
+
+    const boss = !!this.isBoss;
+    const aware = boss || this.awareness > 0.45;
+    const confident = boss || this.awareness > 0.7;
+    const role = boss ? 'assault' : (this.aiRole || 'hold');
+
+    this.strafeTimer -= dt;
+    if (this.strafeTimer <= 0) {
+      this.strafeTimer = 0.9 + Math.random() * 1.7;
+      this.strafeDir *= -1;
+    }
+
+    // ---- cover: break for it when hurt or pinned, then peek/hide in place
+    if (this.state !== 'cover' && def.useCover && this.coverCd <= 0
+        && this.awareness > 0.5 && (this.wantCover || this.suppression > 0.55)) {
+      const pt = ai && ai.director ? ai.director.requestCover(this, playerPos) : null;
+      if (pt) {
+        this.coverPoint = pt;
+        this.state = 'cover';
+        this.coverTimer = 10;          // travel budget; reset to hold time on arrival
+        this.coverPhase = 'move';
+        this.coverPhaseT = 0;
+        this.coverPeek = false;
+        this.coverNoSightT = 0;
+      } else {
+        this.coverCd = 1.6 + Math.random();
+      }
+      this.wantCover = false;
+    }
+
+    // ---- state selection
     if (this.state === 'cover') {
       this.coverTimer -= dt;
-      if (this.coverTimer <= 0) { this.state = this.canSee ? 'engage' : 'advance'; this.coverPoint = null; }
-    } else if (this.state === 'reposition') {
-      // area switch: walk to a flank spot, then re-engage from a new angle
-      this.repositionT -= dt;
-      if (this.repositionT <= 0) { this.state = this.canSee ? 'engage' : 'advance'; this.repositionPoint = null; }
+      if (this.coverTimer <= 0) this.leaveCover(ai);
     } else if (this.state === 'search') {
-      // lost contact: sweep the last known position, then give up and advance
       this.searchHold -= dt;
-      if (this.canSee) {
-        this.state = 'engage';
-      } else if (!this.lastSeen || this.lastSeenT > 7 || this.searchHold <= 0) {
+      if (this.canSee && confident) this.state = 'engage';
+      else if (!this.lastSeen || this.lastSeenT > 8 || this.searchHold <= 0) {
         this.state = 'advance';
         this.lastSeen = null;
       }
-    } else if (this.state !== 'dead') {
-      this.areaTimer -= dt;
-      const canFlank = this.archetype !== 'shield' && this.baseY <= 0.5 && dist < 46;
-      if (canFlank && this.areaTimer <= 0) {
-        const pt = this.pickFlankPoint(ctx, playerPos);
-        if (pt) {
-          this.repositionPoint = pt;
-          this.state = 'reposition';
-          this.repositionT = 1.7 + Math.random() * 1.3;
-        }
-        this.areaTimer = 6.5 + Math.random() * 5.5;
-      }
-      if (this.state !== 'reposition') {
-        if (this.canSee && dist < (def.engageRange || 48)) this.state = 'engage';
-        else if (this.archetype !== 'shield' && this.lastSeen && this.lastSeenT < 6.5) {
-          this.state = 'search';
-          if (this.searchHold <= 0) this.searchHold = 3.6;
-        } else this.state = 'advance';
-      }
+    } else if (this.state === 'reposition') {
+      this.repositionT -= dt;
+      if (this.repositionT <= 0) this.state = this.canSee ? 'engage' : 'advance';
+    } else if (!aware) {
+      this.state = this.investigate && this.investigateT < 24 ? 'search' : 'idle';
+      if (this.state === 'search' && this.searchHold <= 0) this.searchHold = 4 + Math.random() * 3;
+    } else if (this.canSee && confident && dist < (def.engageRange || 48)) {
+      this.state = 'engage';
+    } else if (this.lastSeen && this.lastSeenT < 5.5) {
+      this.state = 'search';
+      if (this.searchHold <= 0) this.searchHold = 3.4 + Math.random() * 1.6;
+    } else {
+      this.state = 'advance';
     }
 
-    // ---- movement
-    let moveX = 0, moveZ = 0;
-    let speedTarget = 0;
-    const sideX = -dir.z, sideZ = dir.x;
+    // ---- movement intent
+    let moveX = 0, moveZ = 0, speedTarget = 0;
+    let faceMove = false;
 
-    if (this.state === 'advance') {
-      if (this.archetype === 'rusher' || (this.archetype === 'rifleman')) {
-        this.strafeTimer -= dt;
-        if (this.strafeTimer <= 0) { this.strafeTimer = 1.4 + Math.random() * 2.2; this.strafeDir *= -1; }
-        const flare = this.archetype === 'rusher' ? def.flank : (dist > 20 ? 0.95 : 0.55);
-        const sx = sideX * this.strafeDir * flare;
-        const sz = sideZ * this.strafeDir * flare;
-        _v3.set(dir.x + sx, 0, dir.z + sz).normalize();
-        moveX = _v3.x; moveZ = _v3.z;
-        speedTarget = def.advanceSpeed;
-      } else if (this.archetype === 'sniper') {
-        // approach until inside firing band
-        const push = dist > def.wantDist + 18 ? 1 : 0.25;
-        _v3.set(dir.x * push + sideX * this.strafeDir * 0.15, 0,
-          dir.z * push + sideZ * this.strafeDir * 0.15).normalize();
-        moveX = _v3.x; moveZ = _v3.z;
-        speedTarget = def.advanceSpeed;
+    if (this.state === 'idle') {
+      speedTarget = 0;
+    } else if (this.state === 'cover') {
+      const cp = this.coverPoint;
+      if (cp) {
+        const cx = cp.x - p.x, cz = cp.z - p.z;
+        const cd = Math.hypot(cx, cz);
+        if (cd > 0.75) {
+          moveX = cx / cd; moveZ = cz / cd;
+          speedTarget = 3.4 * arrival(cd, 2.2);
+          faceMove = true;
+        } else {
+          speedTarget = 0;
+          if (this.coverPhase === 'move') {
+            // arrived: switch from travel to peek/hide and start the hold clock
+            this.coverPhase = 'hide';
+            this.coverPeek = false;
+            this.coverPhaseT = 0.5 + Math.random() * 0.6;
+            this.coverTimer = 3.2 + Math.random() * 2.2;
+          }
+          this.coverPhaseT -= dt;
+          if (this.coverPhaseT <= 0) {
+            if (this.coverPhase === 'peek') {
+              this.coverPhase = 'hide';
+              this.coverPeek = false;
+              this.coverPhaseT = 0.9 + Math.random() * 1.0;
+            } else {
+              this.coverPhase = 'peek';
+              this.coverPeek = true;
+              this.coverPhaseT = 1.0 + Math.random() * 0.9;
+            }
+          }
+          if (this.coverPhase === 'peek') {
+            this.coverNoSightT = this.canSee ? 0 : this.coverNoSightT + dt;
+            if (this.coverNoSightT > 2.4) this.leaveCover(ai);
+          }
+        }
+      } else this.leaveCover(ai);
+    } else if (this.state === 'search') {
+      const ls = this.lastSeen || this.investigate || playerPos;
+      const sx = ls.x - p.x, sz = ls.z - p.z;
+      const sd = Math.hypot(sx, sz);
+      if (sd > 1.4) {
+        moveX = sx / sd; moveZ = sz / sd;
+        speedTarget = this.awareness > 0.7 ? 3.0 : 2.4;
+        faceMove = true;
+      } else speedTarget = 0;
+    } else if (this.state === 'advance') {
+      const tgt = this.investigate || (this.lastSeen && this.lastSeenT < 6 ? this.lastSeen : null) || playerPos;
+      const tx = tgt.x - p.x, tz = tgt.z - p.z;
+      const td = Math.hypot(tx, tz) || 1;
+      const standoff = role === 'suppress' ? 26 : role === 'hold' ? 20 : role === 'flank' ? 17 : 8;
+      if (td > standoff) {
+        moveX = tx / td; moveZ = tz / td;
+        speedTarget = def.advanceSpeed * (this.awareness > 0.7 ? 1 : 0.82);
+        faceMove = true;
       } else {
-        // shield: straight, slow pressure
-        moveX = dir.x; moveZ = dir.z;
-        speedTarget = def.advanceSpeed;
+        moveX = sideX * this.strafeDir * 0.5;
+        moveZ = sideZ * this.strafeDir * 0.5;
+        speedTarget = 1.1;
+        faceMove = true;
       }
     } else if (this.state === 'engage') {
       if (this.archetype === 'rusher') {
-        this.strafeTimer -= dt;
-        if (this.strafeTimer <= 0) { this.strafeTimer = 0.9 + Math.random() * 1.2; this.strafeDir *= -1; }
-        // charge, then circle at knife range
         const push = dist > 3.2 ? 1 : 0;
-        const circle = dist > 3.2 ? 0.35 : 1.0;
-        _v3.set(dir.x * push + sideX * this.strafeDir * circle, 0,
-          dir.z * push + sideZ * this.strafeDir * circle).normalize();
-        moveX = _v3.x; moveZ = _v3.z;
+        const circle = dist > 3.2 ? 0.3 : 1.0;
+        moveX = dirX * push + sideX * this.strafeDir * circle;
+        moveZ = dirZ * push + sideZ * this.strafeDir * circle;
         speedTarget = dist > 3.2 ? def.engageSpeed : 3.0;
       } else if (this.archetype === 'sniper') {
         this.repositionT = Math.max(0, this.repositionT - dt);
-        this.strafeTimer -= dt;
-        if (this.strafeTimer <= 0) { this.strafeTimer = 1.8 + Math.random() * 1.6; this.strafeDir *= -1; }
         if (this.repositionT > 0) {
-          // relocate after a shot: fast lateral move
-          moveX = sideX * this.strafeDir; moveZ = sideZ * this.strafeDir;
-          speedTarget = 3.2;
+          moveX = sideX * this.strafeDir;
+          moveZ = sideZ * this.strafeDir;
+          speedTarget = 3.0;
+          faceMove = true;
         } else {
           const push = dist > def.wantDist + 10 ? 1 : dist < def.wantDist - 10 ? -1 : 0;
-          _v3.set(dir.x * push + sideX * this.strafeDir * 0.25, 0,
-            dir.z * push + sideZ * this.strafeDir * 0.25).normalize();
-          moveX = _v3.x; moveZ = _v3.z;
-          speedTarget = push !== 0 ? def.engageSpeed : 0.7;
+          moveX = dirX * push + sideX * this.strafeDir * 0.2;
+          moveZ = dirZ * push + sideZ * this.strafeDir * 0.2;
+          speedTarget = push !== 0 ? def.engageSpeed : 0.6;
         }
-      } else if (this.archetype === 'shield') {
-        this.strafeTimer -= dt;
-        if (this.strafeTimer <= 0) { this.strafeTimer = 2.0 + Math.random() * 2.0; this.strafeDir *= -1; }
+      } else if (this.archetype === 'shield' && !boss) {
         if (dist > def.wantDist) {
-          moveX = dir.x; moveZ = dir.z;
+          moveX = dirX; moveZ = dirZ;
           speedTarget = def.engageSpeed;
         } else {
-          moveX = sideX * this.strafeDir * 0.5; moveZ = sideZ * this.strafeDir * 0.5;
+          moveX = sideX * this.strafeDir * 0.5;
+          moveZ = sideZ * this.strafeDir * 0.5;
           speedTarget = 0.6;
         }
+      } else if (role === 'suppress') {
+        const push = dist > 30 ? 1 : dist < 13 ? -1 : 0;
+        moveX = dirX * push + sideX * this.strafeDir * 0.45;
+        moveZ = dirZ * push + sideZ * this.strafeDir * 0.45;
+        speedTarget = push !== 0 ? 2.4 : 0.8;
+      } else if (role === 'flank') {
+        const radial = dist > 21 ? 0.85 : dist < 11 ? -0.75 : 0;
+        moveX = dirX * radial + sideX * this.aiSide * 0.95;
+        moveZ = dirZ * radial + sideZ * this.aiSide * 0.95;
+        speedTarget = 2.9;
+      } else if (role === 'assault' || boss) {
+        const close = def.engageSpeed + (boss ? 0.4 : 0.9);
+        if (dist > 9) {
+          moveX = dirX + sideX * this.strafeDir * 0.3;
+          moveZ = dirZ + sideZ * this.strafeDir * 0.3;
+          speedTarget = close;
+        } else {
+          moveX = sideX * this.strafeDir * 0.9 - dirX * 0.25;
+          moveZ = sideZ * this.strafeDir * 0.9 - dirZ * 0.25;
+          speedTarget = 1.8;
+        }
       } else {
-        this.repositionTimer -= dt;
-        this.strafeTimer -= dt;
-        if (this.strafeTimer <= 0) { this.strafeTimer = 1.0 + Math.random() * 1.6; this.strafeDir *= -1; }
         const want = def.wantDist;
         const push = dist > want + 6 ? 1 : dist < want - 6 ? -1 : 0;
-        _v3.set(dir.x * push + sideX * this.strafeDir * 0.7, 0,
-          dir.z * push + sideZ * this.strafeDir * 0.7).normalize();
-        moveX = _v3.x * 0.66; moveZ = _v3.z * 0.66;
-        speedTarget = dist > 32 ? 2.4 : 1.15;
-        if (dist < 9) { moveX = -dir.x; moveZ = -dir.z; speedTarget = 2.1; }
+        moveX = dirX * push + sideX * this.strafeDir * 0.65;
+        moveZ = dirZ * push + sideZ * this.strafeDir * 0.65;
+        speedTarget = push !== 0 ? 2.2 : 1.05;
+        if (dist < 7) {
+          moveX = -dirX + sideX * this.strafeDir * 0.4;
+          moveZ = -dirZ + sideZ * this.strafeDir * 0.4;
+          speedTarget = 2.1;
+        }
       }
-    } else if (this.state === 'search') {
-      const ls = this.lastSeen || playerPos;
-      const sx = ls.x - this.root.position.x, sz = ls.z - this.root.position.z;
-      const sd = Math.hypot(sx, sz);
-      if (sd > 1.5) { moveX = sx / sd; moveZ = sz / sd; speedTarget = 2.7; }
-      else speedTarget = 0;
-    } else if (this.state === 'reposition' && this.repositionPoint) {
-      const rx = this.repositionPoint.x - this.root.position.x;
-      const rz = this.repositionPoint.z - this.root.position.z;
-      const rd = Math.hypot(rx, rz);
-      if (rd > 1.0) { moveX = rx / rd; moveZ = rz / rd; speedTarget = 3.6; }
-      else { this.repositionT = Math.min(this.repositionT, 0.12); speedTarget = 0; }
-    } else if (this.state === 'cover' && this.coverPoint) {
-      const cx = this.coverPoint.x - this.root.position.x;
-      const cz = this.coverPoint.z - this.root.position.z;
-      const cd = Math.hypot(cx, cz);
-      if (cd > 0.7) { moveX = cx / cd; moveZ = cz / cd; speedTarget = 3.4; }
-      else speedTarget = 0;
     }
 
     // ---- ground pathfinding: steer around walls when the straight line is blocked
     if (ctx.nav && this.baseY <= 0.5 && !this.pinned
-        && (this.state === 'advance' || this.state === 'search' || this.state === 'reposition')) {
-      const tgt = this.state === 'search' ? (this.lastSeen || playerPos)
-        : this.state === 'reposition' ? (this.repositionPoint || playerPos)
-        : playerPos;
-      const steer = this.followPath(ctx.nav, tgt, dt, this.state === 'reposition' ? 0 : (ctx.playerGroundY || 0));
-      if (steer) {
-        moveX = steer.x;
-        moveZ = steer.z;
-        speedTarget = Math.max(speedTarget, this.state === 'advance' ? def.advanceSpeed * 0.9 : 2.8);
+        && (this.state === 'advance' || this.state === 'search' || this.state === 'cover')) {
+      const tgt = this.state === 'search' ? (this.lastSeen || this.investigate || playerPos)
+        : this.state === 'cover' ? this.coverPoint
+          : (this.investigate && this.investigateT < 24 ? this.investigate
+            : (this.lastSeen && this.lastSeenT < 6 ? this.lastSeen : playerPos));
+      if (tgt) {
+        const steer = this.followPath(ctx.nav, tgt, dt, 0);
+        if (steer) {
+          moveX = steer.x;
+          moveZ = steer.z;
+          speedTarget = Math.max(speedTarget, this.state === 'advance' ? def.advanceSpeed * 0.9 : 2.6);
+        }
       }
+    }
+
+    // ---- local avoidance: no two soldiers in the same square metre, and never
+    //      standing inside the player. Idle soldiers still shuffle apart, which
+    //      stops a spawn cluster from reading as one body.
+    if (!this.pinned) {
+      const mv = this._mv || (this._mv = { x: 0, z: 0 });
+      mv.x = moveX; mv.z = moveZ;
+      const before = Math.hypot(mv.x, mv.z);
+      if (ai && ai.neighbors) separate(this, ai.neighbors, mv, 1.0);
+      if (dist > 0.25 && this.archetype !== 'sniper' && this.state !== 'idle') avoidBody(this, playerPos, mv, 1.05);
+      if (this.state === 'idle' && before < 0.01 && Math.hypot(mv.x, mv.z) > 0.05) {
+        speedTarget = Math.max(speedTarget, 1.0);
+      }
+      moveX = mv.x; moveZ = mv.z;
     }
 
     if (this.pinned) { moveX = 0; moveZ = 0; speedTarget = 0; }
@@ -898,22 +1089,18 @@ export class Enemy {
       // the body: roof travel only needs the bounds
       else if (this.root.position.y < 2.0) this.resolveCollision();
       else {
-        const p = this.root.position;
-        p.x = clamp(p.x, -28, 28);
-        p.z = clamp(p.z, -63, 83);
+        const bp = this.root.position;
+        const wb = this.worldBounds;
+        bp.x = clamp(bp.x, wb.x0 + 0.4, wb.x1 - 0.4);
+        bp.z = clamp(bp.z, wb.z0 + 0.4, wb.z1 - 0.4);
       }
     }
     // vertical follow: ramps/roof layers (ground agents only)
     if (ctx.groundAt && !this.bounds) {
-      // Heading to a roof waypoint: ask for the surface below that deck height
-      // (ramp cells come back as the ramp, deck cells as the deck). Ground
-      // waypoints keep the normal low-ceiling probe so nothing levitates.
       let gy;
       const navDrive = this.state === 'advance' || this.state === 'search' || this.state === 'reposition';
       if (navDrive && this.followHeight != null && this.followHeight > 1.0) {
         gy = Math.min(ctx.groundAt(this.root.position.x, this.root.position.z, this.followHeight), this.followHeight);
-        // deck-height hold: the lip between the ramp and the deck can be a
-        // few centimetres outside both surfaces, do not drop through it
         if (gy < this.followHeight - 0.6 && this.root.position.y > this.followHeight - 0.9) {
           gy = this.root.position.y;
         }
@@ -921,8 +1108,8 @@ export class Enemy {
         gy = ctx.groundAt(this.root.position.x, this.root.position.z, this.root.position.y + 0.8);
       }
       const dy = gy - this.root.position.y;
-      if (dy > 0.9) this.root.position.y += Math.min(dy, dt * 4.5);        // step up a lip
-      else if (dy < -0.9) this.root.position.y -= Math.min(-dy, dt * 8);   // fall, not teleport
+      if (dy > 0.9) this.root.position.y += Math.min(dy, dt * 4.5);
+      else if (dy < -0.9) this.root.position.y -= Math.min(-dy, dt * 8);
       else this.root.position.y += dy * Math.min(1, dt * 9);
     }
     if (dt > 1e-4) {
@@ -930,21 +1117,22 @@ export class Enemy {
       this.velZ = clamp((this.root.position.z - pz0) / dt, -6, 6);
     }
 
-    // ---- facing
-    let faceYaw;
-    if ((this.state === 'advance' || this.state === 'reposition') && this.speed > 0.3 && this.archetype !== 'sniper') {
-      faceYaw = Math.atan2(-moveX, -moveZ);
-    } else {
-      faceYaw = Math.atan2(-dir.x, -dir.z);
-    }
-    const dy = wrapPi(faceYaw - this.root.rotation.y);
+    // ---- facing: face travel while repositioning, face the player in a fight.
+    // An unaware soldier must NOT rotate to track you — that was the old
+    // omniscient tell, and it also let them spot you without ever looking.
+    let faceYaw = Math.atan2(-dirX, -dirZ);
+    if (faceMove && this.speed > 0.3) faceYaw = Math.atan2(-moveX, -moveZ);
+    else if (!aware) faceYaw = this.root.rotation.y;
+    const setYaw = Math.atan2(-dirX, -dirZ);
+    const dyaw = wrapPi(faceYaw - this.root.rotation.y);
     const turnRate = this.archetype === 'shield' ? 2.6 : this.state === 'engage' ? 7 : 4.5;
-    this.root.rotation.y += dy * Math.min(1, dt * turnRate);
+    this.root.rotation.y += dyaw * Math.min(1, dt * turnRate);
 
     // ---- aim / look
-    const targetYaw = Math.atan2(-dir.x, -dir.z);
-    const lookErr = wrapPi(targetYaw - this.root.rotation.y);
-    const headTarget = clamp(lookErr * 0.8, -0.95, 0.95);
+    const lookErr = wrapPi(setYaw - this.root.rotation.y);
+    const headTarget = this.state === 'idle'
+      ? Math.sin(this.animT * 0.9) * 0.45
+      : clamp(lookErr * 0.8, -0.95, 0.95);
     this.headYawS += (headTarget - this.headYawS) * Math.min(1, dt * 5.5);
     const playerEye = playerPos.y != null ? playerPos.y : CHEST_Y;
     const pitchTarget = Math.atan2(playerEye - (this.root.position.y + EYE_Y), Math.max(0.8, dist));
@@ -953,7 +1141,9 @@ export class Enemy {
 
     // ---- blends
     let crouchTarget = 0;
-    if (this.state === 'cover') crouchTarget = 1;
+    if (this.state === 'cover') crouchTarget = this.coverPeek ? 0.12 : 1;
+    else if (this.state === 'idle') crouchTarget = 0.05;
+    else if (this.suppression > 0.6) crouchTarget = 0.3;
     else if (this.state === 'engage') {
       if (this.archetype === 'shield') crouchTarget = def.crouchEngage;
       else if (this.archetype === 'sniper') crouchTarget = this.repositionT > 0 ? 0.12 : def.crouchEngage;
@@ -965,7 +1155,8 @@ export class Enemy {
     this.walkAmp += (swingTarget - this.walkAmp) * Math.min(1, dt * 7);
     this.walkT += dt * (moving ? (2.4 + this.speed * 2.2) : 0.85);
 
-    const wantAim = (this.state === 'engage' || this.state === 'cover') && this.canSee ? 1 : 0;
+    const shootingStance = this.state === 'engage' || (this.state === 'cover' && this.coverPeek);
+    const wantAim = shootingStance && this.canSee ? 1 : (aware ? 0.55 : 0);
     this.aimBlend += (wantAim - this.aimBlend) * Math.min(1, dt * 5.5);
 
     const levelTarget = this.burstLeft > 0 || this.warnActive ? 1 : 0;
@@ -981,10 +1172,33 @@ export class Enemy {
     if (this.archetype === 'sniper') this.updateSniperWarning(playerPos);
   }
 
+  /** True when this soldier may pull the trigger: contact acquired, reaction
+   *  delay elapsed, aim settled enough, and not hiding behind cover. */
+  fireReady(dist) {
+    if (!this.alive || !this.canSee || !this.contact) return false;
+    if (this.acquireT < this.reactionDelay) return false;
+    if (this.aimSettle < 0.25) return false;
+    // inside cover only the peek phase may shoot; while still running to cover
+    // a soldier can snap off a shot on the move (with a movement penalty)
+    if (this.state === 'cover' && !this.coverPeek && this.coverPhase !== 'move') return false;
+    if (this.state !== 'engage' && this.state !== 'cover') return false;
+    if (dist > (this.def.fireRange || 48)) return false;
+    return true;
+  }
+
+  leaveCover(ai) {
+    if (ai && ai.director && ai.director.releaseCover) ai.director.releaseCover(this);
+    this.coverPoint = null;
+    this.coverPeek = false;
+    this.coverPhase = 'move';
+    this.coverCd = 5 + Math.random() * 3;
+    this.state = this.canSee ? 'engage' : 'advance';
+  }
+
   /* -------------------------------------------------------------- firing */
   updateBurstFire(dt, ctx, dist, playerPos) {
     const def = this.def;
-    if (this.state === 'engage' && this.canSee && ctx.playerAlive && dist < def.fireRange) {
+    if (this.fireReady(dist) && ctx.playerAlive) {
       this.fireTimer -= dt;
       if (this.burstLeft > 0) {
         if (this.fireTimer <= 0) {
@@ -1009,8 +1223,7 @@ export class Enemy {
 
   updateRusherFire(dt, ctx, dist, playerPos) {
     this.fireTimer -= dt;
-    if (this.state !== 'engage' || !this.canSee || !ctx.playerAlive) return;
-    if (dist > this.def.fireRange) return;
+    if (!ctx.playerAlive || !this.fireReady(dist)) return;
     if (this.fireTimer <= 0) {
       this.shoot(ctx, dist, playerPos);
       this.fireTimer = this.def.fireInterval * (0.8 + Math.random() * 0.5);
@@ -1019,7 +1232,7 @@ export class Enemy {
 
   updateSniperFire(dt, ctx, dist, playerPos) {
     this.fireTimer -= dt;
-    const canFire = this.state === 'engage' && this.canSee && ctx.playerAlive && dist < this.def.fireRange;
+    const canFire = ctx.playerAlive && this.fireReady(dist);
     if (this.warnT > 0) {
       this.warnT -= dt;
       if (!canFire) {
@@ -1041,7 +1254,7 @@ export class Enemy {
 
   updateSniperWarning(playerPos) {
     if (!this.laser) return;
-    const active = this.warnActive && this.canSee && this.alive;
+    const active = this.warnActive && this.canSee && this.alive && this.state === 'engage';
     this.laser.visible = active;
     if (this.glint) this.glint.visible = active;
     if (!active) return;
@@ -1318,9 +1531,16 @@ export class Enemy {
     this.weaponMuzzle.getWorldPosition(muzzle);
 
     const playerSpeed = ctx.playerSpeed || 0;
+    // Accuracy is no longer a flat dice roll: a soldier that just rounded the
+    // corner (or is eating suppressive fire) is measurably less accurate than
+    // one that has been tracking you for a second.
+    const settleMul = 0.55 + 0.45 * this.aimSettle;
+    const suppressMul = 1 - 0.4 * this.suppression;
     const hitChance = clamp(
-      def.hitBase * this.accuracyMult - dist * def.hitFalloff - playerSpeed * def.hitSpeedFalloff,
-      0.06, 0.95
+      def.hitBase * this.accuracyMult * settleMul * suppressMul
+        - dist * def.hitFalloff - playerSpeed * def.hitSpeedFalloff
+        - Math.min(0.16, this.speed * 0.03),
+      0.05, 0.95
     );
     const hit = Math.random() < hitChance;
     const pan = ctx.panFor ? ctx.panFor(this.root.position) : 0;
@@ -1387,18 +1607,6 @@ export class Enemy {
     if (ctx.onEnemyFire) ctx.onEnemyFire(this.root.position, this);
   }
 
-  nearestCover(coverPoints, playerPos) {
-    let best = null, bestScore = Infinity;
-    for (const cp of coverPoints) {
-      const d = Math.hypot(cp.x - this.root.position.x, cp.z - this.root.position.z);
-      if (d > 14) continue;
-      const toPlayer = Math.hypot(cp.x - playerPos.x, cp.z - playerPos.z);
-      const score = d * 0.6 - toPlayer * 0.25 + Math.random() * 2;
-      if (score < bestScore) { bestScore = score; best = cp; }
-    }
-    return best;
-  }
-
   /** A* steering for ground agents; returns a unit direction or null to use
    *  the state's own straight-line steering (clear line of sight = cheaper). */
   followPath(nav, tgt, dt, targetY = 0) {
@@ -1417,6 +1625,8 @@ export class Enemy {
       this.path = nav.findPath(p.x, p.z, p.y, tgt.x, tgt.z, targetY);
       this.pathI = 0;
       if (!this.path || !this.path.length) { this.path = null; this.followHeight = null; return null; }
+      // string-pull the grid staircase into a readable diagonal
+      if (targetY < 1 && p.y < 1) this.pathI = pullString(nav, this.path, 0, p.x, p.z, 4);
     }
     while (this.pathI < this.path.length) {
       const wp = this.path[this.pathI];
@@ -1428,34 +1638,6 @@ export class Enemy {
     }
     this.followHeight = null;
     return null;
-  }
-
-  /** Pick a spot that swings the firing angle (cover first, then orbit). */
-  pickFlankPoint(ctx, playerPos) {
-    const p = this.root.position;
-    const side = this.flankSide || 1;
-    const myBearing = Math.atan2(p.x - playerPos.x, p.z - playerPos.z);
-    const cover = (ctx && ctx.coverPoints) || [];
-    let best = null, bestScore = -Infinity;
-    for (const c of cover) {
-      if (c.y != null && c.y > 0.6) continue;        // ground cover only
-      const dx = c.x - playerPos.x, dz = c.z - playerPos.z;
-      const d = Math.hypot(dx, dz);
-      if (d < 7 || d > 26) continue;
-      const b = Math.atan2(dx, dz);
-      const rel = Math.abs(wrapPi(b - myBearing));
-      if (rel < 1.1) continue;                        // must actually change the angle
-      const score = rel * 2 - d * 0.05 - Math.hypot(c.x - p.x, c.z - p.z) * 0.04;
-      if (score > bestScore) { bestScore = score; best = c; }
-    }
-    if (best) return { x: best.x, z: best.z };
-    // no usable cover: arc around the player on this enemy's side
-    const r = Math.max(8, Math.min(16, Math.hypot(p.x - playerPos.x, p.z - playerPos.z) * 0.8));
-    const ang = myBearing + side * (1.15 + Math.random() * 0.5);
-    return {
-      x: clamp(playerPos.x + Math.sin(ang) * r, -27, 27),
-      z: clamp(playerPos.z + Math.cos(ang) * r, -62, 82),
-    };
   }
 
   dispose() {

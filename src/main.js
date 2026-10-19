@@ -15,6 +15,8 @@ import { createStreaks } from './systems/streaks.js';
 import { createArtillery } from './systems/artillery.js';
 import { createLeaderboard } from './net/leaderboard.js';
 import { createNavGrid } from './systems/navgrid.js';
+import { Perception } from './systems/ai/perception.js';
+import { AIDirector } from './systems/ai/director.js';
 import { createCinema } from './cinema.js';
 import { createVoice } from './voice.js';
 import { createVideoIntro } from './videointro.js';
@@ -104,6 +106,7 @@ const G = {
 };
 
 let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap, interact, intelSys;
+let perception = null, aiDirector = null;
 let codex = { intel: [] };
 let mothAlly = null;
 let mothGltf = null, mothLoad = null;
@@ -1690,6 +1693,8 @@ function pipsFor(armor) { return Math.ceil(armor / 20); }
 function startWave(n) {
   const prevTier = G.diff;
   G.diff = diffForWave(n);
+  // live stragglers (defend reinforcements) pick up the new behaviour tier too
+  for (const e of enemies) if (e.alive && e.setDifficulty) e.setDifficulty(G.diff);
   firingSlots.max = G.diff.maxFiring;
   firingSlots.at.length = 0;
   G.wave = n;
@@ -1923,8 +1928,11 @@ function spawnEnemy(pos) {
   if (!sp) sp = ringSpawn() || { x: pos.x, z: pos.z, y: pos.y || 0 };
   else if (!sealed && sp.y <= 1 && !spawnReachesPlayer(sp)) sp = ringSpawn() || sp;
   const yaw = Math.atan2(-(playerPos.x - sp.x), -(playerPos.z - sp.z));
-  if (e.setArchetype) e.setArchetype(pos.type || 'rifleman');
+  // a shotgun rusher stranded on a platform cannot charge; keep him a rifleman
+  const type = ((pos.y || 0) > 0.6 && pos.type === 'rusher') ? 'rifleman' : (pos.type || 'rifleman');
+  if (e.setArchetype) e.setArchetype(type);
   if (e.clearBounds) e.clearBounds();
+  if (e.setWorldBounds && level.bounds) e.setWorldBounds(level.bounds);
   e.spawn(sp.x, sp.z, yaw, sp.y || 0);
   if (e.setDifficulty) e.setDifficulty(G.diff);
   if (e.setOccluders && level.roofZones) e.setOccluders(level.roofZones);
@@ -2186,6 +2194,11 @@ function fireShot() {
   if (nav) {
     nav.markThreat(_endFirst.x, _endFirst.z, 2.6, 1.3);
     nav.markThreat((engine.camera.position.x + _endFirst.x) / 2, (engine.camera.position.z + _endFirst.z) / 2, 2.2, 0.8);
+  }
+  // AI v2: the shot is a noise event, and rounds cracking past suppress
+  if (perception) {
+    perception.noise(engine.camera.position.x, engine.camera.position.z, 42, 1, 0.55);
+    perception.applySuppression(enemies, _endFirst.x, _endFirst.z, 3.4, 0.55);
   }
   fx.tracer(mz, _endFirst, { color: 0xffce8f, width: 0.028, life: 0.055 });
   if (G.mag === 0 && G.reserve > 0) setTimeout(() => { if (G.state === 'playing') reload(); }, 160);
@@ -2888,6 +2901,16 @@ function setupEnemyCtx() {
   enemyCtx.nav = nav;
   enemyCtx.groundAt = (x, z, y) => level.groundHeight(x, z, y);
   enemyCtx.playerGroundY = 0;
+  // AI v2: shared perception + squad director (needs the nav grid + colliders)
+  if (nav && level) {
+    perception = new Perception();
+    aiDirector = new AIDirector(nav, level);
+    enemyCtx.ai = {
+      perception,
+      director: aiDirector,
+      neighbors: enemies,
+    };
+  }
   enemyCtx.panFor = (pos) => {
     const cam = engine.camera;
     const dx = pos.x - cam.position.x, dz = pos.z - cam.position.z;
@@ -2897,6 +2920,8 @@ function setupEnemyCtx() {
   };
   enemyCtx.onEnemyFire = (pos) => {
     hud.ping(pos, engine.camera, 1.4);
+    // friendly gunfire is a cue for the rest of the squad
+    if (perception) perception.noise(pos.x, pos.z, 22, 0.35, 0.35);
   };
 }
 
@@ -3144,6 +3169,15 @@ function updateGame(dt) {
     updateTutorial(dt);
     updateBeacon(dt);
 
+    // AI v2: sprinting boots are a noise event; crouch-walking is silent
+    if (perception && controller.state.sprinting && controller.state.speed > 4.0) {
+      G.footstepNoise = (G.footstepNoise || 0) - dt;
+      if (G.footstepNoise <= 0) {
+        G.footstepNoise = 0.42;
+        perception.noise(controller.pos.x, controller.pos.z, 17, 0.6, 0.3);
+      }
+    }
+
     // UAV reward: ping live hostiles on the compass strip
     if (G.uavUntil > G.time) {
       G.uavTick -= dt;
@@ -3166,6 +3200,9 @@ function updateGame(dt) {
   enemyCtx.playerGroundY = controller.pos.y;
   enemyCtx.playerAlive = alive;
   enemyCtx.playerSpeed = controller.state.speed;
+  // AI v2: tick the shared senses, then hand out squad roles once per 0.3 s
+  if (perception) perception.update(dt);
+  if (aiDirector && nav) aiDirector.tick(dt, enemies, controller.pos, G.diff);
   for (const e of enemies) {
     if (!e.root.visible) continue;
     if (G.freezeEnemies && SHOT_MODE) {
@@ -3295,6 +3332,26 @@ window.__game = {
   get audio() { return audio; },
   get mothAlly() { return mothAlly; },
   get mothInfo() { return mothAlly && mothAlly.info; },
+  get ai() { return { perception, director: aiDirector }; },
+  aiStats: () => {
+    const live = enemies.filter((e) => e.root.visible);
+    return {
+      roles: aiDirector ? aiDirector.roleCounts() : null,
+      director: aiDirector ? { ...aiDirector.stats } : null,
+      perception: perception ? perception.stats() : null,
+      enemies: live.map((e) => ({
+        a: e.archetype, role: e.aiRole, state: e.state,
+        awareness: +(e.awareness || 0).toFixed(2),
+        see: !!e.canSee,
+        settled: +(e.aimSettle || 0).toFixed(2),
+        suppress: +(e.suppression || 0).toFixed(2),
+        acquire: +(e.acquireT || 0).toFixed(2),
+        react: +(e.reactionDelay || 0).toFixed(2),
+        cover: e.coverPhase,
+        hp: Math.round(e.hp),
+      })),
+    };
+  },
   selectOperation: (id) => selectOperation(id),
   finishOperation: () => finishOperation(),
   renderOps: () => renderOps(),
