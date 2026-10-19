@@ -38,6 +38,10 @@ export const VOICE_LINES = {
   op7_1: { file: 'op7_1.mp3', speaker: 'VEGA' },
   op7_2: { file: 'op7_2.mp3', speaker: 'VEGA' },
   op7_3: { file: 'op7_3.mp3', speaker: 'VEGA' },
+  op8_1: { file: 'op8_1.mp3', speaker: 'VEGA' },
+  op8_2: { file: 'op8_2.mp3', speaker: 'VEGA' },
+  op9_1: { file: 'op9_1.mp3', speaker: 'VEGA' },
+  op9_2: { file: 'op9_2.mp3', speaker: 'VEGA' },
 };
 
 export function createVoice() {

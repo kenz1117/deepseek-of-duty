@@ -1835,13 +1835,13 @@ function spawnBoss(op) {
   const e = enemies[enemies.length - 1];
   if (!e || !e.alive) return;
   e.isBoss = true;
-  e.maxHp = 560;
-  e.hp = 560;
-  e.root.scale.setScalar(1.16);
+  e.maxHp = op.bossHp || 560;
+  e.hp = e.maxHp;
+  e.root.scale.setScalar(op.bossScale || 1.16);
   G.boss = e;
   if (hud) {
-    hud.toast('指挥官 · 重甲护卫', 2600);
-    hud.setObjective('击杀敌方指挥官');
+    hud.toast(`${op.bossName || '指挥官'} · 重甲`, 2600);
+    hud.setObjective(`击杀 ${op.bossName || '敌方指挥官'}`);
   }
   if (hud && hud.radio) hud.radio('VEGA', op.radio.find((r) => r.at === op.bossWave)?.text || '指挥官下车了。', 5600);
 }

@@ -2308,6 +2308,50 @@ export function createLevel(engine) {
     // heavy dressing: a burnt car, a box truck and container stacks give the
     // yard silhouettes to fight around instead of an empty apron
     carWreck(-19.6, -73.6, 0.55, true);
+
+    // ---- art pass: chicane cover, a T-wall, tire/pipe stacks
+    for (const [x, z, w, r] of [
+      [-1.2, -83.2, 3.8, 0.06], [3.4, -84.0, 3.0, -0.04],
+      [-9.8, -92.0, 4.4, 0.03], [10.6, -76.4, 3.2, 0.0],
+    ]) barrier(x, z, w, r);
+    // concrete T-wall: blocks the straight line from gate to back wall
+    meshBox(5.2, 2.2, 0.36, mats.concrete, -6.0, 1.1, -89.4, 0.02, { collide: true, uv: 1.6 });
+    meshBox(0.36, 2.2, 2.6, mats.concrete, -8.4, 1.1, -88.2, 0.02, { collide: true, uv: 1.6 });
+    meshBox(5.4, 0.18, 0.5, mats.concreteDark, -6.0, 2.24, -89.4, 0.02, { uv: 1.4, cast: false });
+    // tire stacks + a pipe bundle
+    for (const [tx, tz, n] of [[17.4, -76.8, 3], [18.3, -77.6, 2], [-12.4, -82.8, 2]]) {
+      for (let i = 0; i < n; i++) {
+        meshCyl(0.56, 0.56, 0.24, 12, mats.interior, tx, 0.14 + i * 0.26, tz);
+      }
+      addCollider(tx, tz, 1.2, 1.2, 0.1, 1.0);
+    }
+    for (let i = 0; i < 5; i++) {
+      meshCyl(0.18, 0.18, 2.6, 8, mats.rust, -23.2 + i * 0.38, 0.2, -77.4, { rz: Math.PI / 2 });
+    }
+
+    // ---- lighting: two more masts + a working fire that anchors the yard
+    for (const [x, z, rot] of [[-2.6, -71.4, 0.2], [-21.8, -93.0, -0.3]]) {
+      meshCyl(0.1, 0.12, 6.0, 6, mats.metal, x, 3.0, z);
+      meshBox(0.7, 0.22, 0.42, mats.metalTan, x, 6.0, z, rot, { uv: 0.7 });
+      meshBox(0.5, 0.1, 0.3, mats.windowLit, x, 5.86, z + 0.12, rot, { uv: 0.5, cast: false });
+      lightPool(x, z + 0.6, 3.6, 0.2, 0xffb066);
+    }
+    addFire(7.8, 0.85, -82.4);
+    // warm pools over the fighting lane so the yard is not a black hole
+    for (const [lx, lz, lr, lo] of [[0.5, -84.0, 4.6, 0.3], [-10.5, -78.0, 3.8, 0.24], [16.5, -88.0, 3.6, 0.24]]) {
+      lightPool(lx, lz, lr, lo, 0xffb066);
+    }
+    addFire(-24.0, 0.6, -108.0, { light: false });   // distant smoke column
+    addFire(17.5, 0.6, -112.0, { light: false });    // second column over the skyline
+
+    // ---- boom barrier across the inner gate (striped arm on a pivot post)
+    meshCyl(0.12, 0.14, 1.1, 8, mats.metal, 4.6, 0.55, -68.9);
+    for (let i = 0; i < 8; i++) {
+      meshBox(0.72, 0.14, 0.14, i % 2 ? mats.concrete : mats.rust,
+        -1.1 + i * 0.72, 0.95, -68.9, -0.12, { uv: 0.5, cast: false });
+    }
+    meshBox(5.8, 0.05, 0.05, mats.metal, 1.7, 0.86, -68.9, -0.12, { uv: 0.5, cast: false });
+
     boxTruck(13.2, -90.6, 0.18);
     const container = (x, z, rot, stack) => {
       for (let i = 0; i < stack; i++) {
