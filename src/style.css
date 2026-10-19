@@ -1564,6 +1564,7 @@ html.reduce-motion .cine-bar{height:8vh;}
 .pc-head{grid-column:1/-1;margin:16px 0 5px;}
 .pc-head:first-child{margin-top:0;}
 .pc-head-label{font-family:var(--mono);font-size:7px;letter-spacing:.22em;color:var(--amber);}
+#controls{z-index:95;background:rgba(3,5,8,.78);backdrop-filter:blur(14px) saturate(.6);}
 .controls-panel{width:min(760px,94vw);max-height:86vh;overflow:auto;padding:26px 30px 22px;
   background:linear-gradient(180deg,#0f1215,#0a0c0f);border:1px solid rgba(255,255,255,.13);
   box-shadow:0 30px 90px rgba(0,0,0,.7);}

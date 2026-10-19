@@ -23,6 +23,7 @@ import { createInteract } from './systems/interact.js';
 import { renderControls } from './ui/controls.js';
 import { CHARACTERS, INTEL, loadCodex, saveCodex, characterUnlocked } from './codex.js';
 import { createIntel } from './systems/intel.js';
+import { createAlly } from './entities/ally.js';
 import { createResults, renderDailyList, renderMenuBoard } from './ui/results.js';
 import {
   OPERATIONS, operationById, isUnlocked, loadCampaign, saveCampaign,
@@ -103,6 +104,7 @@ const G = {
 
 let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap, interact, intelSys;
 let codex = { intel: [] };
+let mothAlly = null;
 let opsTab = 'missions';
 let slotT = 0;
 let pickups = null, leaderboard = null, results = null, streakSys = null, artillery = null;
@@ -1449,6 +1451,9 @@ function startGame(lock = true, silent = false) {
   resetGame();
   // the mission is assigned after the reset, which clears the previous run
   G.operation = activeOperation();
+  if (G.operation && G.operation.id === 10 && !mothAlly) {
+    mothAlly = createAlly({ scene: engine.scene, mats: engine.mats, x: 39.6, z: -79.2, yaw: 0, variant: 2 });
+  }
   if (voice) voice.stop();
   if (G.settings && G.settings.primary === 'mk18') applyWeaponSwitch(1);
   menuEl.classList.add('hidden');
@@ -1485,6 +1490,7 @@ function startGame(lock = true, silent = false) {
 }
 
 function resetGame() {
+  if (mothAlly) { mothAlly.remove(); mothAlly = null; }
   const perks = dailyPerks();
   G.maxHp = 100;
   G.maxArmor = 60 + perks.armor;
@@ -3105,6 +3111,7 @@ function updateGame(dt) {
   // interaction prompt (E)
   if (interact) interact.update(dt, controller.pos);
   if (intelSys) intelSys.update(dt, G.time);
+  if (mothAlly) mothAlly.update(dt);
 
   // hud
   hud.setHeading(controller.headingDeg);
@@ -3163,6 +3170,7 @@ window.__game = {
   get videoIntro() { return videoIntro; },
   get minimap() { return minimap; },
   get audio() { return audio; },
+  get mothAlly() { return mothAlly; },
   selectOperation: (id) => selectOperation(id),
   finishOperation: () => finishOperation(),
   renderOps: () => renderOps(),

@@ -891,6 +891,10 @@ export function createLevel(engine) {
      (x >= 17) so the 2D colliders of the block never create air walls.
      ===================================================================== */
   const RAMP = { x0: 24.6, x1: 25.9, z0: -15.4, z1: -8.6, rise: 3.2 };
+  // interior stair up to the north HQ mezzanine (same 3.2 m layer as the roofs)
+  const HQ_STAIR = { x0: 12.45, x1: 13.95, z0: -74.4, z1: -71.0, rise: 3.2 };
+  // east dock loading ramp up to the 1.2 m platform
+  const DOCK_RAMP = { x0: 43.2, x1: 44.4, z0: -83.2, z1: -86.5, rise: 1.2 };
   const ROOF_ZONES = [
     { x0: 17.75, x1: 23.4, z0: -13.4, z1: -7.9, y: 3.2 },  // market roof deck (west edge reaches the catwalk)
     { x0: 22.7, x1: 26.0, z0: -8.6, z1: -7.9, y: 3.2 },    // ramp top landing (0.7 m overlap with the deck)
@@ -949,8 +953,9 @@ export function createLevel(engine) {
   function groundHeight(x, z, y = 0) {
     let best = 0;
     const ceiling = y + 0.6;
-    for (const r of [RAMP, SOUTH_RAMP]) {
-      if (x < r.x0 || x > r.x1 || z < r.z0 || z > r.z1) continue;
+    for (const r of [RAMP, SOUTH_RAMP, HQ_STAIR, DOCK_RAMP]) {
+      const rz0 = Math.min(r.z0, r.z1), rz1 = Math.max(r.z0, r.z1);
+      if (x < r.x0 || x > r.x1 || z < rz0 || z > rz1) continue;
       const t = Math.max(0, Math.min(1, (z - r.z0) / (r.z1 - r.z0)));
       const h = r.rise * t;
       if (h <= ceiling) best = Math.max(best, h);
@@ -2120,13 +2125,17 @@ export function createLevel(engine) {
     function buildNorthHq() {
       const x0 = 6.15, x1 = 14.85, z0 = -74.9, z1 = -65.1;
       const cx = (x0 + x1) / 2;
-      const fY = 0.16, cY = 3.42;
+      const fY = 0.16, cY = 3.2;          // ground-floor ceiling
+      const upY = 6.4;                    // mezzanine ceiling
       const wallMat = mats.plasterC;
 
       roomFloor(x0, x1, z0, z1, fY, mats.concrete, 2.4);
-      // ceiling slab + solid upper mass (visual only; ground walls do the blocking)
-      meshBox(x1 - x0, 0.24, z1 - z0, mats.concreteDark, cx, cY, (z0 + z1) / 2, 0, { uv: 2.4, cast: false });
-      meshBox(x1 - x0 + 0.3, 11.4, z1 - z0 + 0.3, mats.plasterB, cx, cY + 5.8, (z0 + z1) / 2, 0, { uv: 3.0 });
+      // mezzanine slab over the office half (visual; walk height comes from
+      // ROOF_ZONES at 3.2) + upper ceiling and the solid mass above it
+      meshBox(x1 - x0 - 0.3, 0.2, 5.9, mats.concreteDark, cx, cY, -68.15, 0, { uv: 2.4, cast: false });
+      meshBox(x1 - x0 - 0.3, 0.04, 5.9, mats.wood, cx, cY + 0.12, -68.15, 0, { uv: 1.8, cast: false });
+      meshBox(x1 - x0, 0.24, z1 - z0, mats.concreteDark, cx, upY, (z0 + z1) / 2, 0, { uv: 2.4, cast: false });
+      meshBox(x1 - x0 + 0.3, 8.4, z1 - z0 + 0.3, mats.plasterB, cx, upY + 4.3, (z0 + z1) / 2, 0, { uv: 3.0 });
 
       // outer walls with openings
       wallWithHoles('z', -75.12, -74.88, x0, x1, fY, cY, [
@@ -2140,6 +2149,17 @@ export function createLevel(engine) {
       addColliderRect(14.7, 15.0, z0, z1, cY);
       addColliderRect(6.0, 6.3, -74.9, -70.7, cY);
       addColliderRect(6.0, 6.3, -69.1, -65.1, cY);
+
+      // upper storey shell: same footprint, windows over the yard and street
+      wallWithHoles('z', -75.12, -74.88, x0, x1, cY, upY, [
+        { a0: 7.15, a1: 8.65, y0: 3.7, y1: 4.9 },
+        { a0: 11.15, a1: 12.65, y0: 3.7, y1: 4.9 },
+      ], wallMat, { uv: 2.2, collide: false });
+      wallWithHoles('z', -65.12, -64.88, x0, x1, cY, upY, [
+        { a0: 10.9, a1: 12.5, y0: 4.2, y1: 5.4 },
+      ], wallMat, { uv: 2.2, collide: false });
+      wallWithHoles('x', 6.0, 6.3, z0, z1, cY, upY, [], wallMat, { uv: 2.2, collide: false });
+      wallWithHoles('x', 14.7, 15.0, z0, z1, cY, upY, [], wallMat, { uv: 2.2, collide: false });
 
       // partition: ops room | commander office, with a 1.5 m door
       wallWithHoles('z', -70.2, -69.9, x0, x1, fY, cY, [
@@ -2177,8 +2197,9 @@ export function createLevel(engine) {
       });
 
       // ---- ops room (north half)
-      meshBox(0.8, 2.2, 1.5, mats.metal, 13.95, 1.1, -72.6, 0, { collide: true, uv: 1.2 });   // radio rack
-      meshBox(0.1, 1.4, 1.5, mats.interior, 13.5, 1.5, -72.6, 0, { uv: 0.8, cast: false });
+      // radio wall panel (the old floor rack sat in the stair footprint)
+      meshBox(0.1, 1.5, 2.0, mats.metal, 6.36, 1.45, -72.6, 0, { uv: 1.0, cast: false });
+      meshBox(0.04, 1.2, 1.7, mats.interior, 6.43, 1.5, -72.6, 0, { uv: 0.8, cast: false });
       meshBox(2.6, 0.08, 1.0, mats.wood, 7.9, 1.0, -72.3, 0, { uv: 1.0 });
       for (const [lx, lz] of [[6.9, -72.3], [8.9, -72.3]]) meshBox(0.1, 0.92, 0.9, mats.metal, lx, 0.5, lz, 0, { uv: 0.6 });
       addCollider(7.9, -72.3, 2.7, 1.1, 0.05, 1.0);
@@ -2238,8 +2259,8 @@ export function createLevel(engine) {
         meshBox(w - 0.06, h - 0.06, 0.02, mats.windowGlass, x, y, z + 0.04, rot, { uv: 0.5, cast: false });
         meshBox(0.1, 0.1, 0.12, mats.metal, x, y - h / 2 - 0.05, z, rot, { uv: 0.4, cast: false });
       };
-      monitor(13.34, 1.55, -72.6, -Math.PI / 2, 0.7, 0.42);
-      monitor(13.34, 1.55, -71.7, -Math.PI / 2, 0.7, 0.42);
+      monitor(6.46, 1.5, -72.3, Math.PI / 2, 0.7, 0.42);
+      monitor(6.46, 1.5, -73.0, Math.PI / 2, 0.7, 0.42);
       meshBox(1.8, 1.05, 0.05, mats.signA, 6.36, 1.95, -72.4, Math.PI / 2, { uv: 0.8, cast: false });
       meshBox(0.9, 0.65, 0.05, mats.signB, 6.36, 1.9, -71.2, Math.PI / 2, { uv: 0.7, cast: false });
       for (let i = 0; i < 5; i++) {
@@ -2261,6 +2282,87 @@ export function createLevel(engine) {
 
       // red emergency strip over the breach door
       meshBox(0.9, 0.08, 0.08, mats.windowLit, 10.4, 2.92, -74.8, 0, { uv: 0.5, cast: false });
+
+      // ---- ground-floor detail pass: lockers, cables, stencils, beams
+      for (let i = 0; i < 3; i++) {
+        meshBox(0.55, 1.8, 0.5, mats.metal, 6.62, 0.9, -66.4 - i * 0.62, 0, { collide: true, uv: 0.7 });
+        meshBox(0.5, 0.04, 0.04, mats.rust, 6.62, 1.45, -66.4 - i * 0.62, 0, { uv: 0.4, cast: false });
+      }
+      meshBox(0.9, 0.55, 0.6, mats.wood, 6.9, 0.28, -74.2, 0, { collide: true, uv: 0.8 });
+      meshBox(0.7, 0.45, 0.5, mats.wood, 7.7, 0.23, -74.3, 0.2, { collide: true, uv: 0.7 });
+      for (const [cx2, cz2] of [[13.6, -73.9], [14.2, -73.5]]) {
+        meshCyl(0.22, 0.22, 0.12, 10, mats.rubber, cx2, 0.08, cz2, { cast: false });
+        meshCyl(0.14, 0.14, 0.1, 10, mats.rust, cx2, 0.16, cz2, { cast: false });
+      }
+      // cable runs along the ceiling and down the wall
+      meshCyl(0.035, 0.035, 7.6, 5, mats.rubber, 10.6, 6.18, -69.9, { rz: Math.PI / 2, cast: false });
+      meshCyl(0.03, 0.03, 3.0, 5, mats.rubber, 14.55, 4.7, -72.2, { cast: false });
+      for (let i = 0; i < 4; i++) meshBox(0.06, 0.9, 0.06, mats.rust, 6.4, 6.1, -73.9 + i * 1.3, 0, { uv: 0.4, cast: false });
+      // beams over the double-height ops room
+      for (const bz of [-73.4, -71.8]) meshBox(8.4, 0.16, 0.2, mats.metal, 10.5, 6.22, bz, 0, { uv: 1.2, cast: false });
+      // fluorescent strips high in the void
+      for (const [fx, fz] of [[8.4, -73.0], [12.0, -72.8]]) {
+        meshBox(1.6, 0.06, 0.2, mats.windowLit, fx, 6.2, fz, 0, { uv: 0.6, cast: false });
+      }
+      // stencils + hazard stripes at the breach
+      meshBox(1.4, 0.5, 0.04, mats.signB, 8.2, 1.4, -74.94, 0, { uv: 0.6, cast: false });
+      for (let i = 0; i < 7; i++) {
+        meshBox(0.22, 0.02, 0.5, i % 2 ? mats.signA : mats.rubber, 9.6 + i * 0.28, fY + 0.02, -74.55, 0, { uv: 0.4, cast: false });
+      }
+
+      /* ---- mezzanine: stair, railing, upper storey furniture ----
+         The stair is a groundHeight ramp (HQ_STAIR); the deck joins the 3.2 m
+         nav layer via ROOF_ZONES so both the player and AI can use it. */
+      const stair = HQ_STAIR;
+      const steps = 16;
+      const dz = (stair.z1 - stair.z0) / steps;
+      for (let i = 0; i < steps; i++) {
+        const h = stair.rise * (i + 1) / steps;
+        const z = stair.z0 + (i + 0.5) * dz;
+        meshBox(stair.x1 - stair.x0, h, dz + 0.012, mats.metal, (stair.x0 + stair.x1) / 2, h / 2, z, 0, { uv: 0.7 });
+        meshBox(stair.x1 - stair.x0 + 0.04, 0.03, dz + 0.02, mats.rust, (stair.x0 + stair.x1) / 2, h + 0.015, z, 0, { uv: 0.5, cast: false });
+      }
+      for (const sx of [stair.x0 - 0.04, stair.x1 + 0.04]) {
+        for (let i = 1; i < steps; i += 2) {
+          const h = stair.rise * i / steps;
+          const z = stair.z0 + i * dz;
+          meshBox(0.05, 1.0, 0.05, mats.rust, sx, h + 0.5, z, 0, { uv: 0.5, cast: false });
+        }
+        meshBox(0.05, 0.05, Math.hypot(stair.rise, stair.z1 - stair.z0), mats.rust, sx,
+          stair.rise / 2 + 0.92, (stair.z0 + stair.z1) / 2, 0,
+          { uv: 0.5, cast: false, rx: -Math.atan2(stair.rise, stair.z1 - stair.z0) });
+      }
+      // landing lip
+      meshBox(stair.x1 - stair.x0, 0.06, 0.4, mats.metal, (stair.x0 + stair.x1) / 2, stair.rise - 0.02, stair.z1 + 0.18, 0, { uv: 0.6 });
+
+      // mezzanine railing along the open edge (visual only; nav bounds the deck)
+      for (let i = 0; i < 8; i++) {
+        const rx = x0 + 0.3 + i * 0.86;
+        if (rx > stair.x0 - 0.2) break;
+        meshBox(0.05, 1.05, 0.05, mats.rust, rx, cY + 0.52, -71.08, 0, { uv: 0.5, cast: false });
+      }
+      meshBox(stair.x0 - x0 - 0.3, 0.05, 0.05, mats.rust, (x0 + 0.3 + stair.x0 - 0.2) / 2, cY + 1.04, -71.08, 0, { uv: 0.5, cast: false });
+      meshBox(0.05, 0.05, 5.6, mats.rust, stair.x0 - 0.02, cY + 1.04, -68.4, 0, { uv: 0.5, cast: false });
+
+      // upper storey: comms desk, map board, cabinets, crates (visual only —
+      // 2D colliders cannot be floor-specific, so the deck stays walk-through)
+      meshBox(2.0, 0.82, 0.9, mats.wood, 8.6, cY + 0.57, -66.4, 0, { uv: 1.2 });
+      meshBox(2.06, 0.06, 0.95, mats.metal, 8.6, cY + 1.0, -66.4, 0, { uv: 0.8, cast: false });
+      monitor(8.6, cY + 1.28, -66.55, 0, 0.62, 0.38);
+      meshBox(0.7, 1.2, 0.6, mats.metal, 13.9, cY + 0.6, -69.2, 0, { uv: 0.9 });
+      meshBox(0.7, 1.2, 0.6, mats.metal, 13.9, cY + 0.6, -68.5, 0, { uv: 0.9 });
+      meshBox(1.6, 1.0, 0.06, mats.signA, 10.4, cY + 1.55, -65.24, 0, { uv: 0.8, cast: false });
+      meshBox(0.9, 0.7, 0.9, mats.wood, 7.2, cY + 0.35, -69.8, 0.2, { uv: 0.9 });
+      meshBox(1.4, 0.04, 2.4, mats.burlap, 10.4, cY + 0.13, -67.4, 0, { uv: 1.0, cast: false });
+      interiorLamp(9.0, upY - 0.35, -67.0, 3.4);
+      interiorLamp(12.6, upY - 0.35, -67.2, 3.0);
+      lightPool(10.4, -67.2, 2.2, 0.16);
+
+      // open the 3.2 m nav layer over the deck; stair portals are generated
+      // automatically where HQ_STAIR's ground height meets the layer
+      ROOF_ZONES.push({ x0: 6.3, x1: 14.7, z0: -71.2, z1: -65.2, y: 3.2 });
+      ROOF_SPAWNS.push({ x: 11.6, z: -67.0, y: 3.2 });
+      ROOF_COVERS.push({ x: 13.9, z: -68.9, y: 3.2, h: true });
 
       // spawn/cover for the interior fight
       spawnPoints.push({ x: 7.2, z: -73.3 }, { x: 13.4, z: -69.4 }, { x: 7.3, z: -66.1 });
@@ -2587,7 +2689,7 @@ export function createLevel(engine) {
     meshBox(4.2, 0.5, 0.5, mats.concreteDark, 45.4, 3.7, -83.6, 0, { uv: 1.0 });
 
     // containers + truck + pallets
-    for (const [x, z, rot, stack] of [[34.0, -88.8, 0, 1], [42.6, -88.0, Math.PI / 2, 2]]) {
+    for (const [x, z, rot, stack] of [[34.0, -88.8, 0, 1], [35.6, -91.4, Math.PI / 2, 2]]) {
       for (let i = 0; i < stack; i++) {
         meshBox(6.0, 2.5, 2.4, i % 2 ? mats.metalTan : mats.metal, x, 1.28 + i * 2.55, z, rot,
           { collide: true, uv: 1.6 });
@@ -2613,6 +2715,52 @@ export function createLevel(engine) {
       meshBox(0.5, 0.1, 0.3, mats.windowLit, x, 5.86, z + 0.12, 0, { uv: 0.5, cast: false });
       lightPool(x, z + 0.7, 3.6, 0.22, 0xffb066);
     }
+
+    /* ---- raised loading platform + gantry crane ---- */
+    const px0 = 41.6, px1 = 45.8, pz0 = -92, pz1 = -86.3, py = 1.2;
+    meshBox(px1 - px0, 0.26, pz1 - pz0, mats.concrete, (px0 + px1) / 2, py - 0.13, (pz0 + pz1) / 2, 0, { uv: 2.0 });
+    meshBox(px1 - px0, 0.04, pz1 - pz0, mats.concreteDark, (px0 + px1) / 2, py + 0.01, (pz0 + pz1) / 2, 0, { uv: 1.4, cast: false });
+    for (let i = 0; i < 14; i++) {
+      meshBox(0.18, 0.03, 0.9, mats.metalTan, px0 + 0.3 + i * 0.28, py + 0.03, pz1 - 0.55, 0, { uv: 0.4, cast: false });
+    }
+    // ramp steps
+    const steps = 12, rdz = (DOCK_RAMP.z1 - DOCK_RAMP.z0) / steps;
+    for (let i = 0; i < steps; i++) {
+      const h = DOCK_RAMP.rise * (i + 1) / steps;
+      const z = DOCK_RAMP.z0 + (i + 0.5) * rdz;
+      meshBox(DOCK_RAMP.x1 - DOCK_RAMP.x0, h, rdz + 0.01, mats.metal, (DOCK_RAMP.x0 + DOCK_RAMP.x1) / 2, h / 2, z, 0, { uv: 0.7 });
+    }
+    for (const sx of [DOCK_RAMP.x0 - 0.04, DOCK_RAMP.x1 + 0.04]) {
+      meshBox(0.05, 0.05, Math.hypot(DOCK_RAMP.rise, DOCK_RAMP.z1 - DOCK_RAMP.z0), mats.rust, sx,
+        DOCK_RAMP.rise / 2 + 0.95, (DOCK_RAMP.z0 + DOCK_RAMP.z1) / 2, 0,
+        { uv: 0.5, cast: false, rx: -Math.atan2(DOCK_RAMP.rise, DOCK_RAMP.z1 - DOCK_RAMP.z0) });
+      for (let i = 1; i < steps; i += 2) meshBox(0.05, 1.0, 0.05, mats.rust, sx, DOCK_RAMP.rise * i / steps + 0.5, DOCK_RAMP.z0 + i * rdz, 0, { uv: 0.5, cast: false });
+    }
+    // platform railing (visual)
+    for (const [rx, rz, rw, rd] of [[px0 + 0.15, (pz0 + pz1) / 2, 0.05, pz1 - pz0], [(px0 + px1) / 2, pz0 + 0.15, px1 - px0, 0.05]]) {
+      meshBox(rw, 0.05, rd, mats.rust, rx, py + 1.05, rz, 0, { uv: 0.5, cast: false });
+    }
+    for (let i = 0; i < 8; i++) meshBox(0.05, 1.05, 0.05, mats.rust, px0 + 0.15, py + 0.52, pz0 + 0.3 + i * 0.85, 0, { uv: 0.5, cast: false });
+
+    // gantry: two legs + beam + trolley (visual; legs collide)
+    for (const gx of [33.4, 45.0]) {
+      meshBox(0.45, 6.4, 0.45, mats.metal, gx, 3.2, -89.2, 0, { collide: true, uv: 1.0 });
+      meshBox(0.7, 0.3, 0.7, mats.concreteDark, gx, 0.15, -89.2, 0, { uv: 0.6 });
+      meshBox(0.15, 2.2, 0.15, mats.rust, gx, 5.4, -88.4, 0, { uv: 0.4, cast: false });
+    }
+    meshBox(12.0, 0.55, 0.6, mats.metal, 39.2, 6.35, -89.2, 0, { uv: 1.2 });
+    meshBox(0.8, 0.7, 0.9, mats.rust, 38.4, 5.75, -89.2, 0, { uv: 0.7 });
+    meshCyl(0.03, 0.03, 1.8, 5, mats.rust, 38.4, 4.7, -89.2, { cast: false });
+    meshBox(0.5, 0.45, 0.5, mats.metalTan, 38.4, 3.8, -89.2, 0, { uv: 0.5 });
+    // crates + control cabinet on the platform
+    for (const [bx, bz] of [[42.6, -90.9], [44.2, -91.3], [42.8, -87.4]]) crate(bx, bz, 0.9, 0.2, py);
+    meshBox(0.8, 1.2, 0.5, mats.metal, 44.9, py + 0.6, -87.0, 0, { uv: 0.9 });
+    lightPool(43.6, -88.8, 2.4, 0.18);
+
+    // walkable 1.2 m platform layer + ramp portals
+    ROOF_ZONES.push({ x0: px0, x1: px1, z0: pz0, z1: pz1, y: py });
+    ROOF_SPAWNS.push({ x: 43.8, z: -89.6, y: py });
+    ROOF_COVERS.push({ x: 42.6, z: -90.4, y: py, h: true });
 
     // spawns / covers / region
     spawnPoints.push({ x: 33.0, z: -85.0 }, { x: 42.0, z: -87.0 }, { x: 38.0, z: -73.2 }, { x: 44.0, z: -80.0 });
