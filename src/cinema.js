@@ -59,6 +59,26 @@ export const SCENES = {
     ],
   },
 
+  /* OP 09 — Karim, inside the north HQ office. */
+  karim_intro: {
+    duration: 8.4,
+    fadeIn: 0.5,
+    fadeOut: 0.7,
+    actors: [
+      { variant: 2, archetype: 'shield', x: 12.1, z: -68.6, yaw: Math.PI, pose: 'aim', scale: 1.22 },
+      { variant: 0, archetype: 'rifleman', x: 8.0, z: -73.0, yaw: 0, pose: 'aim' },
+    ],
+    camera: [
+      { t: 0, pos: [10.5, 2.5, -73.8], look: [12.0, 1.75, -68.4] },
+      { t: 4.2, pos: [10.4, 1.95, -71.4], look: [12.1, 1.7, -68.5] },
+      { t: 8.4, pos: [10.9, 1.8, -70.4], look: [12.2, 1.65, -68.6] },
+    ],
+    lines: [
+      { t: 0.4, speaker: '卡里姆', voice: 'karim_1', text: '灰狼。你进了我的楼，就别想再出去。' },
+      { t: 4.6, speaker: 'VEGA', voice: 'op9_2', text: '卡里姆出来了——这次是真的。' },
+    ],
+  },
+
   /* OP 05/07/09 — the armoured boss steps off the APC. */
 
   boss_reveal: {

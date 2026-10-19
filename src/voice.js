@@ -53,6 +53,11 @@ export const VOICE_LINES = {
   dispatch_1: { file: 'dispatch_1.mp3', speaker: 'DISPATCH' },
   dispatch_2: { file: 'dispatch_2.mp3', speaker: 'DISPATCH' },
   dispatch_3: { file: 'dispatch_3.mp3', speaker: 'DISPATCH' },
+  karim_1: { file: 'karim_1.mp3', speaker: '卡里姆' },
+  karim_2: { file: 'karim_2.mp3', speaker: '卡里姆' },
+  moth_1: { file: 'moth_1.mp3', speaker: 'MOTH' },
+  moth_2: { file: 'moth_2.mp3', speaker: 'MOTH' },
+  moth_3: { file: 'moth_3.mp3', speaker: 'MOTH' },
 };
 
 export function createVoice() {

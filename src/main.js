@@ -21,6 +21,8 @@ import { createVideoIntro } from './videointro.js';
 import { createMinimap } from './ui/minimap.js';
 import { createInteract } from './systems/interact.js';
 import { renderControls } from './ui/controls.js';
+import { CHARACTERS, INTEL, loadCodex, saveCodex, characterUnlocked } from './codex.js';
+import { createIntel } from './systems/intel.js';
 import { createResults, renderDailyList, renderMenuBoard } from './ui/results.js';
 import {
   OPERATIONS, operationById, isUnlocked, loadCampaign, saveCampaign,
@@ -99,7 +101,9 @@ const G = {
   stats: null, scoreMult: 1, uavUntil: 0, uavTick: 0,
 };
 
-let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap, interact;
+let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap, interact, intelSys;
+let codex = { intel: [] };
+let opsTab = 'missions';
 let slotT = 0;
 let pickups = null, leaderboard = null, results = null, streakSys = null, artillery = null;
 let lastRunPayload = null;
@@ -697,6 +701,79 @@ function operationsDone() {
   return campaign.done.filter((n) => n > 0).length;
 }
 
+function renderArchive() {
+  const done = campaign.done || [];
+  const chars = document.getElementById('arc-characters');
+  if (chars) {
+    chars.textContent = '';
+    for (const c of CHARACTERS) {
+      const un = characterUnlocked(c, campaign);
+      const row = document.createElement('div');
+      row.className = 'arc-row' + (un ? '' : ' locked');
+      const name = document.createElement('span');
+      name.className = 'arc-name';
+      name.textContent = un ? c.name : 'CLASSIFIED';
+      const text = document.createElement('span');
+      text.className = 'arc-text';
+      text.textContent = un ? `${c.role} · ${c.text}` : '完成对应任务后解锁';
+      row.append(name, text);
+      chars.appendChild(row);
+    }
+  }
+  const intelEl = document.getElementById('arc-intel');
+  if (intelEl) {
+    intelEl.textContent = '';
+    for (const it of INTEL) {
+      const got = codex.intel.includes(it.id);
+      const row = document.createElement('div');
+      row.className = 'arc-row' + (got ? '' : ' locked');
+      const name = document.createElement('span');
+      name.className = 'arc-name';
+      name.textContent = got ? it.title : '未收集';
+      const text = document.createElement('span');
+      text.className = 'arc-text';
+      text.textContent = got ? `${it.area} · ${it.text}` : `${it.area} · 靠近后按 E 收集`;
+      row.append(name, text);
+      intelEl.appendChild(row);
+    }
+    const count = document.getElementById('arc-intel-count');
+    if (count) count.textContent = `${codex.intel.length}/${INTEL.length}`;
+  }
+  const log = document.getElementById('arc-log');
+  if (log) {
+    log.textContent = '';
+    for (const op of OPERATIONS) {
+      if (!done.includes(op.id)) continue;
+      const row = document.createElement('div');
+      row.className = 'arc-row';
+      const name = document.createElement('span');
+      name.className = 'arc-name';
+      name.textContent = op.code;
+      const text = document.createElement('span');
+      text.className = 'arc-text';
+      text.textContent = `${op.name} · ${op.debrief}`;
+      row.append(name, text);
+      log.appendChild(row);
+    }
+    if (!done.filter((n) => n > 0).length) {
+      const row = document.createElement('div');
+      row.className = 'arc-row locked';
+      row.textContent = '暂无任务记录';
+      log.appendChild(row);
+    }
+  }
+}
+
+function syncOpsTab() {
+  const missions = document.getElementById('ops-missions');
+  const archive = document.getElementById('ops-archive');
+  const buttons = document.querySelectorAll('[data-ops-tab]');
+  for (const b of buttons) b.classList.toggle('is-on', b.dataset.opsTab === opsTab);
+  if (missions) missions.classList.toggle('hidden', opsTab !== 'missions');
+  if (archive) archive.classList.toggle('hidden', opsTab !== 'archive');
+  if (opsTab === 'archive') renderArchive();
+}
+
 function renderOps() {
   const list = document.getElementById('ops-list');
   const prog = document.getElementById('menu-ops-progress');
@@ -733,6 +810,7 @@ function renderOps() {
       ? `${op.code} ${op.name} · ${op.mode.toUpperCase()} · ${op.zoneLabel} · 按 START 部署`
       : '选择一个任务，然后按 START 部署';
   }
+  if (opsTab === 'archive') renderArchive();
 }
 
 function selectOperation(id) {
@@ -1015,6 +1093,23 @@ async function boot() {
     cinema.setVoice(G.settings.voice !== false);
     input = createInput(engine.renderer.domElement);
     interact = createInteract({ hud, input, onUse: () => { G.tut.interacts++; } });
+    codex = loadCodex();
+    if (engine && level) {
+      intelSys = createIntel({ scene: engine.scene, mats: engine.mats });
+      for (const t of intelSys.targetList()) {
+        interact.add({
+          x: t.x, z: t.z, r: t.r, label: t.label,
+          onUse: () => {
+            const def = intelSys.collect(t.id);
+            if (!def) return;
+            if (!codex.intel.includes(def.id)) codex.intel.push(def.id);
+            saveCodex(codex);
+            hud.toast(`情报已归档 · ${def.title}`, 2400);
+            renderArchive();
+          },
+        });
+      }
+    }
     for (const door of (level.breachDoors || [])) {
       interact.add({
         x: door.x, z: door.z, r: 2.4, label: '按住 E 破门', hold: 1.6,
@@ -1059,6 +1154,10 @@ async function boot() {
     if (hud.bindModeSelect) hud.bindModeSelect(G.settings.runMode, onModeSelect);
     bindPrimarySelect();
     renderOps();
+    document.querySelectorAll('[data-ops-tab]').forEach((b) => {
+      b.addEventListener('click', () => { opsTab = b.dataset.opsTab || 'missions'; syncOpsTab(); if (audio && audio.ctx) audio.ui(); });
+    });
+    syncOpsTab();
     document.getElementById('mission-next')?.addEventListener('click', () => {
       const cur = operationById(campaign.selected);
       const next = OPERATIONS.find((o) => o.id === cur.id + 1);
@@ -1284,8 +1383,9 @@ function startGame(lock = true, silent = false) {
   hudEl.classList.remove('hidden');
   viewmodel.root.visible = true;
   G.state = 'playing';
-  controller.revive(1.2, 33);
-  controller.setLook(-0.03, -0.015);
+  const st = G.operation && G.operation.start;
+  controller.revive(st ? st.x : 1.2, st ? st.z : 33);
+  controller.setLook(st ? (st.yaw || 0) : -0.03, -0.015);
   if (!silent) audio.uiConfirm();
   startWave(1);
   if (!SHOT_MODE && !G.tutorial.done) beginTutorial();
@@ -1440,7 +1540,12 @@ function startWave(n) {
   G.waveRemaining = total;
   G.spawnQueue = [];
   const playerPos = controller.pos;
-  const allowedSpawns = level.spawnPoints.filter(isSpawnAllowed);
+  let allowedSpawns = level.spawnPoints.filter(isSpawnAllowed);
+  const sr = G.operation && G.operation.spawnRect;
+  if (sr) {
+    const inside = allowedSpawns.filter((p) => p.x >= sr.x0 && p.x <= sr.x1 && p.z >= sr.z0 && p.z <= sr.z1);
+    if (inside.length >= 2) allowedSpawns = inside;
+  }
   const pool = (allowedSpawns.length ? allowedSpawns : level.spawnPoints).slice();
   const objZone = G.objective ? G.objective.zone : null;
   for (let i = 0; i < total; i++) {
@@ -1886,8 +1991,9 @@ function tryFire(dt) {
 function spawnBoss(op) {
   if (!level || !controller) return;
   const p = controller.pos;
-  const zx = p.x + (Math.random() < 0.5 ? -6 : 6);
-  const zz = p.z - 16;
+  const bs = op.bossSpawn;
+  const zx = bs ? bs.x : p.x + (Math.random() < 0.5 ? -6 : 6);
+  const zz = bs ? bs.z : p.z - 16;
   spawnEnemy({ x: zx, z: zz, type: 'shield' });
   const e = enemies[enemies.length - 1];
   if (!e || !e.alive) return;
@@ -2881,6 +2987,7 @@ function updateGame(dt) {
 
   // interaction prompt (E)
   if (interact) interact.update(dt, controller.pos);
+  if (intelSys) intelSys.update(dt, G.time);
 
   // hud
   hud.setHeading(controller.headingDeg);

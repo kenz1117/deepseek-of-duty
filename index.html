@@ -277,9 +277,20 @@
               <ul id="menu-daily-list"></ul>
             </div>
             <div class="deck-panel" id="deck-ops" role="tabpanel" hidden>
-              <div class="md-head"><span>OPERATIONS <em>战役</em></span><b id="menu-ops-progress">0/5</b></div>
-              <div class="ops-list" id="ops-list"></div>
-              <div class="ops-note" id="ops-note">选择一个任务，然后按 START 部署</div>
+              <div class="md-head"><span>OPERATIONS <em>战役</em></span><b id="menu-ops-progress">0/10</b></div>
+              <div class="ops-subtabs">
+                <button type="button" data-ops-tab="missions" class="is-on">OPERATIONS<em>任务</em></button>
+                <button type="button" data-ops-tab="archive">ARCHIVE<em>档案</em></button>
+              </div>
+              <div id="ops-missions">
+                <div class="ops-list" id="ops-list"></div>
+                <div class="ops-note" id="ops-note">选择一个任务，然后按 START 部署</div>
+              </div>
+              <div id="ops-archive" class="hidden">
+                <div class="arc-block"><h5>CHARACTERS <em>人物</em></h5><div id="arc-characters"></div></div>
+                <div class="arc-block"><h5>INTEL <em>情报</em><b id="arc-intel-count">0/6</b></h5><div id="arc-intel"></div></div>
+                <div class="arc-block"><h5>LOG <em>任务记录</em></h5><div id="arc-log"></div></div>
+              </div>
             </div>
           </div>
         </section>
