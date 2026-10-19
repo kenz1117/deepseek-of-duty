@@ -18,8 +18,10 @@ recordings/
 deploy/*.tar.gz
 deploy/*.png
 
-# 站外文章草稿（属于其他项目）
+# 站外文章草稿（公众号连载，属于站外内容）
 article-*.html
+article-*.md
+series-plan.md
 
 # 封面原图（README 使用压缩后的 docs/cover.jpg）
 dod.png
