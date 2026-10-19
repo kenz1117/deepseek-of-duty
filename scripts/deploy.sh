@@ -21,24 +21,26 @@ ok()   { printf '\033[1;32m✓ %s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 T0=$(date +%s)
 
-step "0/6 预检"
+step "0/7 预检"
 command -v npm >/dev/null || fail "本地没有 npm"
-ssh -o BatchMode=yes -o ConnectTimeout=8 "$SERVER" 'echo ok' >/dev/null 2>&1 || fail "无法 SSH 到 $SERVER"
+command -v rsync >/dev/null || fail "本地没有 rsync"
+ssh -o BatchMode=yes -o ConnectTimeout=8 "$SERVER" 'command -v rsync >/dev/null' || fail "服务器没有 rsync"
 ok "SSH 连通: $SERVER"
 
-step "1/6 本地构建"
+step "1/7 本地构建"
 npm run build >/dev/null
 [ -f dist/index.html ] || fail "构建产物缺失"
 ok "vite build 完成（dist/）"
 
-step "2/6 打包构建产物"
-# macOS/BSD mktemp 要求 X 在模板末尾；tar 不在乎扩展名，上传到服务器时固定命名为 dist.tar.gz
-TARBALL=$(mktemp /tmp/dod-dist.XXXXXXXX)
-trap 'rm -f "$TARBALL"' EXIT
-tar --exclude='.DS_Store' -czf "$TARBALL" -C dist .
-ok "$(du -h "$TARBALL" | cut -f1) → $TARBALL"
+step "2/7 增量同步构建产物（音视频未变化自动跳过）"
+ssh "$SERVER" "mkdir -p $APP_DIR/staging"
+# -c 校验和模式：vite 每次构建会刷新 public 资源的 mtime，只有内容真正变化的文件才传输
+RS_OUT=$(rsync -azc --delete --stats dist/ "$SERVER:$APP_DIR/staging/dist/" 2>&1) || fail "rsync 失败: $RS_OUT"
+FILES=$(printf '%s' "$RS_OUT" | grep -E 'Number of (regular )?files transferred' | grep -oE '[0-9]+' | head -1)
+BYTES=$(printf '%s' "$RS_OUT" | grep -E 'Total transferred file size' | grep -oE '[0-9,]+' | head -1 | tr -d ',')
+ok "传输 ${FILES:-0} 个文件（$(awk -v b="${BYTES:-0}" 'BEGIN{printf "%.1fMB", b/1048576}')），未变化的音视频不再重复上传"
 
-step "3/6 推送 GitHub"
+step "3/7 推送 GitHub"
 if [ "${SKIP_GIT:-0}" = "1" ]; then
     echo "SKIP_GIT=1，跳过"
 else
@@ -60,16 +62,15 @@ else
     ok "已推送 origin/$BRANCH"
 fi
 
-step "4/7 上传构建产物与部署脚本"
+step "4/7 上传部署脚本与服务端"
 ssh "$SERVER" "mkdir -p $APP_DIR/build /opt/dod-leaderboard/data"
-scp -q "$TARBALL" "$SERVER:$APP_DIR/build/dist.tar.gz"
 scp -q deploy/Dockerfile deploy/nginx-container.conf "$SERVER:$APP_DIR/build/"
 scp -q scripts/server-deploy.sh "$SERVER:$APP_DIR/build/"
 scp -q server/leaderboard.mjs "$SERVER:/opt/dod-leaderboard/"
 ok "已上传 → $SERVER:$APP_DIR/build/ 与 /opt/dod-leaderboard/"
 
 step "5/7 服务器原子部署（失败自动回滚）"
-ssh "$SERVER" "bash $APP_DIR/build/server-deploy.sh $APP_DIR/build/dist.tar.gz"
+ssh "$SERVER" "bash $APP_DIR/build/server-deploy.sh $APP_DIR/staging/dist"
 
 step "6/7 排行榜服务更新"
 ssh "$SERVER" '

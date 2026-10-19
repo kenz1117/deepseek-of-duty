@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# 服务器端原子部署脚本（由 scripts/deploy.sh 或 GitHub Actions 上传构建产物后调用）
-# 用法: server-deploy.sh <dist-tarball-path>
-# 流程: 解压 → 构建带时间戳镜像 → 切换容器 → 健康检查 → 失败自动回滚旧镜像
+# 服务器端原子部署脚本（由 scripts/deploy.sh 或手动调用）
+# 用法: server-deploy.sh <dist-dir>
+# dist 目录由本地 rsync 增量同步到 $APP_DIR/staging/dist（音视频未变化自动跳过传输）
+# 流程: 复制 → 构建带时间戳镜像 → 切换容器 → 健康检查 → 失败自动回滚 → 清理备份/缓存
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/dod-web}"
@@ -14,19 +15,19 @@ HEALTH_RETRIES=15
 TS=$(date +%Y%m%d-%H%M%S)
 BUILD_DIR="$APP_DIR/build"
 RELEASE_DIR="$APP_DIR/releases/$TS"
-TARBALL="$1"
+DIST_DIR="${1:-}"
 
 log()  { printf '\n\033[1;36m[server] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[1;32m[server] ✓ %s\033[0m\n' "$*"; }
 fail() { printf '\033[1;31m[server] ✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
-[ -n "${TARBALL:-}" ] && [ -f "$TARBALL" ] || fail "用法: server-deploy.sh <dist-tarball-path>"
+[ -n "$DIST_DIR" ] && [ -d "$DIST_DIR" ] || fail "用法: server-deploy.sh <dist-dir>"
+[ -f "$DIST_DIR/index.html" ] || fail "$DIST_DIR 里没有 index.html"
 [ -f "$BUILD_DIR/Dockerfile" ] || fail "缺少 $BUILD_DIR/Dockerfile（先上传 deploy/Dockerfile 与 nginx-container.conf）"
 
-log "解压构建产物 → $RELEASE_DIR"
+log "复制构建产物 → $RELEASE_DIR/dist"
 mkdir -p "$RELEASE_DIR/dist"
-tar -xzf "$TARBALL" -C "$RELEASE_DIR/dist"
-[ -f "$RELEASE_DIR/dist/index.html" ] || fail "tarball 里没有 index.html"
+cp -a "$DIST_DIR"/. "$RELEASE_DIR/dist/"
 cp "$BUILD_DIR/Dockerfile" "$BUILD_DIR/nginx-container.conf" "$RELEASE_DIR/"
 
 # 记住当前线上镜像，用于失败回滚
