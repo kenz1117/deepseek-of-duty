@@ -264,6 +264,19 @@ HUD 左上新增 166 px 的战术小地图，默认开启，**M** 切换（状�
 - 目标区画成琥珀色圆环（完成后变绿）；目标在视野外时，圆点会被钳在地图边缘指方向。
 - 玩家是青色箭头 + 视野扇形；下方显示当前区域名（街区 / 北检查站 / 南院车场…）。
 
+## 🔊 音频修复（Sprint R.1）
+
+**为什么之前听不到配音**：MiniMax 的 TTS 接口返回的 `data.audio` 是 **hex 字符串**，不是 base64。第一版按 base64 解码，落盘的 32 个 `.mp3` 全是坏文件（`ffprobe` 报 Header missing），浏览器 `<audio>` 直接 `MEDIA_ERR_SRC_NOT_SUPPORTED`。所以「有文件、有 200、`play()` 返回 true」都是假象。
+
+修复：
+
+- 全部 32 条台词按 **hex** 重新解码生成；`ffprobe` 校验 32/32 可播放（32 kHz 单声道 MP3，2.5 MB）。
+- `audio` 增加 `resume()`；`startGame` 入口统一 `init → resume → setMasterVolume`，并用一次性的 `pointerdown / keydown` 解锁 WebAudio（键盘开始游戏也能出声）。
+- 修掉 `initAudioAmbience()` 把主音量硬编码成 0.58、覆盖玩家设置的问题。
+- 语音音量跟随主音量（`voice.setVolume(master)`）。
+
+**自检**：控制台执行 `__game.audio.debug`，应看到 `{ state: 'running', master: 0.58 }`；战役 OP01 开场约 1 秒后应听到 VEGA。仍然静音的话先看标签页是否被静音/系统音量，再看 `ctx.state` 是否 `suspended`。
+
 ## 🎯 战术循环（战地拾取 / 连杀奖励 / 每日挑战 / 排行榜）
 
 一局之内现在有完整的「击杀 → 补给 → 奖励 → 结算 → 留名」闭环：

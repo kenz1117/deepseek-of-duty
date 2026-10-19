@@ -384,7 +384,7 @@ function applySettings(initial = false) {
   if (audio && audio.ctx && audio.setMasterVolume) audio.setMasterVolume(G.settings.master);
   if (initial && engine) engine.setQuality(G.settings.quality);
   if (cinema) cinema.setVoice(G.settings.voice !== false);
-  if (voice) voice.setEnabled(G.settings.voice !== false);
+  if (voice) { voice.setEnabled(G.settings.voice !== false); if (voice.setVolume) voice.setVolume(G.settings.master); }
   syncQualityPills();
 }
 
@@ -1007,6 +1007,9 @@ async function boot() {
     minimap = createMinimap({ level });
     cinema.setVoice(G.settings.voice !== false);
     input = createInput(engine.renderer.domElement);
+    const unlockAudio = () => { if (audio) { audio.init(); if (audio.resume) audio.resume(); } };
+    window.addEventListener('pointerdown', unlockAudio, { once: true });
+    window.addEventListener('keydown', unlockAudio, { once: true });
     controller = createController(engine.camera, level.colliders, level.bounds, audio, (x, z, y) => (level.groundHeight ? level.groundHeight(x, z, y) : 0));
 
     /* ---- Sprint D: pickups, killstreaks, artillery, online board, results */
@@ -1202,7 +1205,7 @@ function onResize() {
 function initAudioAmbience() {
   if (!audio.ctx) return;
   audio.ambient();
-  audio.setMasterVolume(0.58);
+  audio.setMasterVolume(G.settings.master);
 }
 
 /* ------------------------------------------------------------------ game state */
@@ -1226,6 +1229,12 @@ function bindPrimarySelect() {
 
 function startGame(lock = true, silent = false) {
   closePrestart();
+  // any entry path (button, keyboard, debug) must have a running context
+  if (audio) {
+    audio.init();
+    if (audio.resume) audio.resume();
+    audio.setMasterVolume(G.settings.master);
+  }
   // a keyboard-activated START must never leave the board modal over the game
   closeBoardModal();
   if (results) results.hide();
@@ -2881,6 +2890,7 @@ window.__game = {
   get cinema() { return cinema; },
   get videoIntro() { return videoIntro; },
   get minimap() { return minimap; },
+  get audio() { return audio; },
   selectOperation: (id) => selectOperation(id),
   finishOperation: () => finishOperation(),
   renderOps: () => renderOps(),

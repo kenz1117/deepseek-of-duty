@@ -785,6 +785,37 @@ Sprint H 的网格只回答“能不能走”，不会回答“值不值得走�
 
 ---
 
-## 26. 最后的话
+## 26. 音频修复（Sprint R.1）
+
+### 现象
+
+用户反馈本地完全听不到声音，尤其配音。
+
+### 根因
+
+- MiniMax `t2a_v2` 返回的 `data.audio` 是 **hex 字符串**。第一版按 base64 解码，写出的 32 个 mp3 全部是坏文件：`ffprobe` 报 `Header missing`，Chrome 播放返回 `MEDIA_ERR_SRC_NOT_SUPPORTED (4)`。
+- 之前的验证只看「HTTP 200 + play() 返回 true」，没有验证解码后的音频能否被浏览器识别——这是验证方法的错误。
+
+### 修复
+
+- 32 条台词按 hex 重新解码生成，`ffprobe` 校验 32/32 有效（32 kHz / mono / 8-9 s，共 2.5 MB）。
+- `audio.resume()` + `startGame` 统一初始化；首帧 `pointerdown/keydown` 一次性解锁 AudioContext。
+- `initAudioAmbience()` 不再硬编码 0.58 主音量，改为读取玩家设置。
+- 语音音量跟随主音量；`voice.setVolume()` 接入设置变更。
+
+### 验证
+
+- dev 与 preview 环境：`__game.audio.debug.state === 'running'`，`master = 0.58`。
+- `/audio/voice/op01_1.mp3` 200、139,956 bytes；`<audio>` 播放 `currentTime=1.15s / duration=8.57s`，无 error。
+- 战役 OP01 过场：拦截 `voice.play` 记录到 `op01_1`，字幕同步显示。
+- 截图 harness 增加 `UNMUTE=1 / AUTOPLAY=1`，以后音频回归测试不再被 `--mute-audio` 掩盖。
+
+### 仍差
+
+- 没有自动音频回归（无法在 CI 里“听”，只能验状态与时长）；音量平衡仍靠耳朵。
+
+---
+
+## 27. 最后的话
 
 3A FPS 的"完美"来自数百人年的资产生产、动作捕捉、扫描材质、烘焙全局光照与主机级管线；WebGL 单页 + 程序化生成能做到的是**方向正确、系统完整、可玩、可持续迭代**。这份工程在 3 轮内把评委分数从 2.4 推到 4.7，并让硬指标的 5 项里 3 项达标（最终轮两项曝光指标也已达标）。它不是 CoD，也不需要假装是。

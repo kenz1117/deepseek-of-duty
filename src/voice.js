@@ -47,6 +47,7 @@ export const VOICE_LINES = {
 export function createVoice() {
   let enabled = true;
   let el = null;
+  let volume = 0.9;
 
   function stop() {
     if (el) {
@@ -63,7 +64,7 @@ export function createVoice() {
     try {
       el = new Audio(BASE + line.file);
       el.preload = 'auto';
-      el.volume = 0.9;
+      el.volume = volume;
       const p = el.play();
       if (p && p.catch) p.catch(() => { el = null; });
       return true;
@@ -77,8 +78,10 @@ export function createVoice() {
     if (!enabled) stop();
   }
 
+  function setVolume(v) { volume = Math.max(0, Math.min(1, Number(v) || 0)); if (el) el.volume = volume; }
+
   return {
-    play, stop, setEnabled,
+    play, stop, setEnabled, setVolume,
     get enabled() { return enabled; },
   };
 }

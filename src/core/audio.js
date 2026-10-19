@@ -54,6 +54,13 @@ export function createAudio() {
     if (ctx.state === 'suspended') ctx.resume();
   }
 
+  function resume() {
+    if (ctx && ctx.state === 'suspended') {
+      const p = ctx.resume();
+      if (p && p.catch) p.catch(() => {});
+    }
+  }
+
   function now() { return ctx ? ctx.currentTime : 0; }
 
   function chain(pan = 0, send = 0.2, gain = 1) {
@@ -304,9 +311,18 @@ export function createAudio() {
   function setMasterVolume(v) { if (master) master.gain.value = v; }
 
   return {
-    init, gunshot, enemyShot, whiz, reload, shell, impact, ricochet,
+    init, resume, gunshot, enemyShot, whiz, reload, shell, impact, ricochet,
     explosion, footstep, hitmarker, ui, uiConfirm, death, hurt, killConfirm,
     ambient, stopAmbient, setLowHealth, setMasterVolume,
     get ctx() { return ctx; },
+    get debug() {
+      return {
+        started,
+        state: ctx ? ctx.state : null,
+        time: ctx ? +ctx.currentTime.toFixed(3) : 0,
+        master: master ? +master.gain.value.toFixed(3) : null,
+        ambient: ambientOn,
+      };
+    },
   };
 }
