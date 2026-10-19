@@ -17,6 +17,7 @@ import { createLeaderboard } from './net/leaderboard.js';
 import { createNavGrid } from './systems/navgrid.js';
 import { createCinema } from './cinema.js';
 import { createVoice } from './voice.js';
+import { createVideoIntro } from './videointro.js';
 import { createResults, renderDailyList, renderMenuBoard } from './ui/results.js';
 import {
   OPERATIONS, operationById, isUnlocked, loadCampaign, saveCampaign,
@@ -94,7 +95,7 @@ const G = {
   stats: null, scoreMult: 1, uavUntil: 0, uavTick: 0,
 };
 
-let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice;
+let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro;
 let slotT = 0;
 let pickups = null, leaderboard = null, results = null, streakSys = null, artillery = null;
 let lastRunPayload = null;
@@ -1001,6 +1002,7 @@ async function boot() {
     voice.setEnabled(G.settings.voice !== false);
     hud.setVoicePlayer((id) => voice.play(id));
     cinema = createCinema({ engine, viewmodel, hud, voice });
+    videoIntro = createVideoIntro();
     cinema.setVoice(G.settings.voice !== false);
     input = createInput(engine.renderer.domElement);
     controller = createController(engine.camera, level.colliders, level.bounds, audio, (x, z, y) => (level.groundHeight ? level.groundHeight(x, z, y) : 0));
@@ -1124,6 +1126,10 @@ async function boot() {
       }
     });
     input.on('key', (code) => {
+      if (videoIntro && videoIntro.playing && (code === 'Space' || code === 'Escape')) {
+        videoIntro.skip();
+        return;
+      }
       if (cinema && cinema.playing && (code === 'Space' || code === 'Escape')) {
         cinema.skip();
         return;
@@ -1152,6 +1158,7 @@ async function boot() {
       if (code === 'KeyP') { G.state = 'paused'; pauseEl.classList.remove('hidden'); input.unlock(); }
     });
     engine.renderer.domElement.addEventListener('click', () => {
+      if (videoIntro && videoIntro.playing) { videoIntro.skip(); return; }
       if (cinema && cinema.playing) { cinema.skip(); return; }
       if (G.state === 'playing' && !SHOT_MODE && !input.locked) input.lock();
     });
@@ -1235,12 +1242,14 @@ function startGame(lock = true, silent = false) {
     G.state = 'cinema';
     hudEl.classList.add('hidden');
     viewmodel.root.visible = false;
-    cinema.play(G.operation.intro, () => {
+    const playScene = () => cinema.play(G.operation.intro, () => {
       G.state = 'playing';
       viewmodel.root.visible = true;
       hudEl.classList.toggle('hidden', HIDE_HUD);
       if (lock) input.lock();
     });
+    if (videoIntro) videoIntro.play('/media/opening.mp4', playScene);
+    else playScene();
   } else if (lock) {
     input.lock();
   }
@@ -1879,11 +1888,13 @@ function finishOperation() {
     G.state = 'cinema';
     hudEl.classList.add('hidden');
     viewmodel.root.visible = false;
-    cinema.play(op.outro, () => {
+    const playEnding = () => cinema.play(op.outro, () => {
       hudEl.classList.remove('hidden');
       viewmodel.root.visible = true;
       showMissionOverlay(op);
     });
+    if (videoIntro) videoIntro.play('/media/ending.mp4', playEnding);
+    else playEnding();
     return;
   }
   showMissionOverlay(op);
@@ -1897,6 +1908,7 @@ function closeMissionOverlay() {
 
 function returnToMenu() {
   if (voice) voice.stop();
+  if (videoIntro) videoIntro.finish();
   if (cinema && cinema.playing) cinema.skip();
   closeMissionOverlay();
   closePrestart();
@@ -2850,6 +2862,7 @@ window.__game = {
   get campaign() { return campaign; },
   get voice() { return voice; },
   get cinema() { return cinema; },
+  get videoIntro() { return videoIntro; },
   selectOperation: (id) => selectOperation(id),
   finishOperation: () => finishOperation(),
   renderOps: () => renderOps(),
