@@ -16,6 +16,10 @@ import { createArtillery } from './systems/artillery.js';
 import { createLeaderboard } from './net/leaderboard.js';
 import { createNavGrid } from './systems/navgrid.js';
 import { createResults, renderDailyList, renderMenuBoard } from './ui/results.js';
+import {
+  OPERATIONS, operationById, isUnlocked, loadCampaign, saveCampaign,
+  completeOperation as markOperationDone,
+} from './story.js';
 
 /* =========================================================================
    DEEPSEEK OF DUTY — browser vertical slice.
@@ -57,6 +61,9 @@ const DEG_TO_KICK = 0.50;
 const ADS_RECOIL = 0.60;
 const MOVE_SPREAD = 0.60;   // was 1.4 => 2.4x spread while moving, now 1.6x
 
+const campaign = loadCampaign();
+let campaignActive = false;
+
 const G = {
   state: 'loading',
   hp: 100, maxHp: 100, armor: 60, maxArmor: 60,
@@ -79,7 +86,7 @@ const G = {
   upgradeCards: [], upgradeShown: false,
   tutorial: { active: false, step: 0, t: 0, stepT: 0, done: false, lastX: 0, lastZ: 0 },
   shotsFired: 0, regenRate: 26, atmosphere: 'dusk',
-  mode: 'survival', objective: null,
+  mode: 'survival', objective: null, operation: null, boss: null,
   // Sprint D: run counters, streak rewards, UAV window, score multiplier
   stats: null, scoreMult: 1, uavUntil: 0, uavTick: 0,
 };
@@ -509,8 +516,35 @@ const MODE_BRIEFS = {
 /* The mode brief under the mode pills is always visible (the deck no longer has
    a BRIEFING tab), so it is the single source of truth for the mode copy; the
    pre-mission training dialog mirrors it below. */
+function activeOperation() {
+  return campaignActive ? operationById(campaign.selected) : null;
+}
+
+/** One source for the mode brief and the pre-mission dialog. */
+function briefFor(mode = G.settings.runMode) {
+  const op = activeOperation();
+  if (op && mode === op.mode) {
+    return {
+      label: 'CAMPAIGN',
+      title: `${op.code} · ${op.name}`,
+      op: op.en,
+      desc: op.brief,
+      threat: op.threat,
+      ao: op.zoneLabel,
+      contact: `${op.waves} WAVES`,
+      objectives: [
+        op.mode === 'survival' ? `清空 ${op.waves} 波敌人` : '完成区域目标',
+        `区域：${op.zoneLabel}`,
+        op.bossWave ? '击杀敌方指挥官' : '活着完成任务',
+      ],
+      note: '',
+    };
+  }
+  return MODE_BRIEFS[mode] || MODE_BRIEFS.rotation;
+}
+
 function updateBriefing(mode = G.settings.runMode) {
-  const b = MODE_BRIEFS[mode] || MODE_BRIEFS.rotation;
+  const b = briefFor(mode);
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
   const read = (id) => { const el = document.getElementById(id); return el ? el.textContent : ''; };
   const before = [read('mode-desc-label'), read('mode-desc-title'), read('mode-desc-text')].join('\u0001');
@@ -533,7 +567,7 @@ function updateBriefing(mode = G.settings.runMode) {
 }
 
 function fillPrestart(mode = G.settings.runMode) {
-  const b = MODE_BRIEFS[mode] || MODE_BRIEFS.rotation;
+  const b = briefFor(mode);
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
   set('prestart-mode', b.label);
   set('prestart-kicker', 'OPERATION BLACKOUT / ' + b.op);
@@ -634,12 +668,70 @@ function modeForWave(n) {
 }
 
 function onModeSelect(mode) {
+  campaignActive = false;
   const valid = ['rotation', 'survival', 'defend', 'extract'];
   G.settings.runMode = valid.includes(mode) ? mode : 'rotation';
   saveSettings(G.settings);
   if (hud && hud.setModeSelect) hud.setModeSelect(G.settings.runMode);
   updateBriefing(G.settings.runMode);
   refreshMenuBoard(true);
+  if (audio && audio.ctx) audio.ui();
+}
+
+/* ---------------------------------------------------------------- operations */
+function operationsDone() {
+  return campaign.done.filter((n) => n > 0).length;
+}
+
+function renderOps() {
+  const list = document.getElementById('ops-list');
+  const prog = document.getElementById('menu-ops-progress');
+  const note = document.getElementById('ops-note');
+  if (prog) prog.textContent = `${operationsDone()}/${OPERATIONS.length}`;
+  if (!list) return;
+  list.textContent = '';
+  for (const op of OPERATIONS) {
+    const unlocked = isUnlocked(campaign, op.id);
+    const done = campaign.done.includes(op.id);
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'ops-row'
+      + (campaignActive && op.id === campaign.selected ? ' is-active' : '')
+      + (unlocked ? '' : ' is-locked');
+    row.disabled = !unlocked;
+    row.title = unlocked ? op.brief : '完成上一任务后解锁';
+    const code = document.createElement('span');
+    code.className = 'ops-code';
+    code.textContent = op.code;
+    const name = document.createElement('span');
+    name.className = 'ops-name';
+    name.textContent = `${op.name}${done ? ' ✓' : ''}`;
+    const status = document.createElement('span');
+    status.className = 'ops-status';
+    status.textContent = !unlocked ? 'LOCKED' : (campaignActive && op.id === campaign.selected ? 'ACTIVE' : done ? 'DONE' : 'READY');
+    row.append(code, name, status);
+    row.addEventListener('click', () => selectOperation(op.id));
+    list.appendChild(row);
+  }
+  if (note) {
+    const op = activeOperation();
+    note.textContent = op
+      ? `${op.code} ${op.name} · ${op.mode.toUpperCase()} · ${op.zoneLabel} · 按 START 部署`
+      : '选择一个任务，然后按 START 部署';
+  }
+}
+
+function selectOperation(id) {
+  const op = operationById(id);
+  if (!isUnlocked(campaign, op.id)) return;
+  campaign.selected = id;
+  saveCampaign(campaign);
+  campaignActive = true;
+  G.settings.runMode = op.mode;
+  saveSettings(G.settings);
+  if (hud && hud.setModeSelect) hud.setModeSelect(op.mode);
+  updateBriefing(op.mode);
+  renderOps();
   if (audio && audio.ctx) audio.ui();
 }
 
@@ -675,11 +767,13 @@ function setupObjective(n) {
   G.mode = mode;
   G.objective = null;
   if (mode === 'survival') { hideObjectiveUI(); return; }
-  const zone = objectiveZone(mode === 'defend' ? 'defend' : 'extract');
+  const zone = (G.operation && G.operation.zone)
+    ? { ...G.operation.zone }
+    : objectiveZone(mode === 'defend' ? 'defend' : 'extract');
   G.objective = {
     type: mode,
     zone,
-    need: mode === 'defend' ? 60 : 8,
+    need: mode === 'defend' ? ((G.operation && G.operation.hold) || 60) : 8,
     hold: 0,
     done: false,
     ready: mode === 'defend',
@@ -747,6 +841,10 @@ function onObjectiveDone() {
   if (G.stats) G.stats.objectiveCleared = true;
   if (hud && hud.setHint) hud.setHint(obj.type === 'defend' ? 'ZONE SECURED' : 'EXTRACTED');
   if (audio && audio.ctx) audio.uiConfirm();
+  if (G.operation && G.operation.mode !== 'survival') {
+    // defend/extract operations end on the objective, not on the last corpse
+    setTimeout(() => { if (G.state === 'playing' && G.operation) finishOperation(); }, 1400);
+  }
   if (beacon) {
     beacon.done = true;
     beacon.ringMat.color.setHex(0x9dffa8);
@@ -921,6 +1019,25 @@ async function boot() {
     if (hud.bindSettings) hud.bindSettings(G.settings, onSettingChange);
     if (hud.bindModeSelect) hud.bindModeSelect(G.settings.runMode, onModeSelect);
     bindPrimarySelect();
+    renderOps();
+    document.getElementById('mission-next')?.addEventListener('click', () => {
+      const cur = operationById(campaign.selected);
+      const next = OPERATIONS.find((o) => o.id === cur.id + 1);
+      if (!next) return;
+      closeMissionOverlay();
+      campaign.selected = next.id;
+      saveCampaign(campaign);
+      campaignActive = true;
+      G.settings.runMode = next.mode;
+      saveSettings(G.settings);
+      if (hud && hud.setModeSelect) hud.setModeSelect(next.mode);
+      startGame(true);
+      if (audio && audio.ctx) audio.uiConfirm();
+    });
+    document.getElementById('mission-menu')?.addEventListener('click', () => {
+      returnToMenu();
+      if (audio && audio.ctx) audio.ui();
+    });
     updateBriefing(G.settings.runMode);
     applySettings(true);
     raycaster = new THREE.Raycaster();
@@ -1084,6 +1201,8 @@ function startGame(lock = true, silent = false) {
   closeBoardModal();
   if (results) results.hide();
   resetGame();
+  // the mission is assigned after the reset, which clears the previous run
+  G.operation = activeOperation();
   if (G.settings && G.settings.primary === 'mk18') applyWeaponSwitch(1);
   menuEl.classList.add('hidden');
   hudEl.classList.remove('hidden');
@@ -1113,12 +1232,16 @@ function resetGame() {
   G.shotsFired = 0;
   G.recoilIndex = 0;
   G.lastShotAt = -1e9;
+  G.operation = null;
+  G.boss = null;
   G.diff = DIFF_TIERS[0];
   firingSlots.max = G.diff.maxFiring;
   firingSlots.at.length = 0;
   G.upgradeShown = false;
   G.upgradeCards = [];
   G.mode = 'survival';
+  G.boss = null;
+  if (hud && hud.clearRadio) hud.clearRadio();
   G.objective = null;
   hotDrop.active = false;
   if (hotDrop.group) hotDrop.group.visible = false;
@@ -1185,6 +1308,17 @@ function startWave(n) {
   G.upgradeShown = false;
   if (G.stats) G.stats.damagedThisWave = false;
   applyAtmosphereForWave(n);
+  const op = G.operation;
+  if (op) {
+    if (op.atmosphere && engine && engine.applyAtmosphere) {
+      const label = engine.applyAtmosphere(op.atmosphere);
+      if (hud && hud.setAtmosphere) hud.setAtmosphere(label);
+      G.atmosphere = op.atmosphere;
+    }
+    const line = op.radio.find((r) => r.at === n || (n === 1 && r.at === 'start'));
+    if (line && hud.radio) hud.radio(line.speaker, line.text, 5600);
+    if (op.bossWave === n) spawnBoss(op);
+  }
   setupObjective(n);
   if (prevTier && prevTier.id !== G.diff.id && hud.toast) {
     hud.toast(`敌方战术升级 · ${G.diff.id} ${G.diff.label}`, 2200);
@@ -1418,12 +1552,15 @@ function updateWaves(dt) {
     G.waveClearTimer += dt;
     if (!G.upgradeShown && G.waveClearTimer > 1.0) {
       G.upgradeShown = true;
+      if (G.operation && G.wave >= G.operation.waves) { finishOperation(); return; }
       openUpgradeChoice();
     }
   }
   hud.setWaveProgress(1 - G.waveRemaining / Math.max(1, G.waveTotal));
   const roofAlive = enemies.filter((e) => e.alive && e.baseY > 1).length;
-  if (roofAlive > 0 && alive === roofAlive) {
+  if (G.boss && G.boss.alive) {
+    hud.setObjective(`击杀指挥官 · ${Math.max(1, Math.ceil(G.boss.hp))} HP`);
+  } else if (roofAlive > 0 && alive === roofAlive) {
     hud.setObjective('屋顶狙击手 · 从后院坡道上屋顶');
   } else if (G.waveRemaining > 0 || alive > 0) {
     hud.setObjective(`清剿残敌 · 剩余 ${Math.max(alive, G.waveRemaining)}`);
@@ -1637,6 +1774,87 @@ function tryFire(dt) {
   fireShot();
 }
 
+function spawnBoss(op) {
+  if (!level || !controller) return;
+  const p = controller.pos;
+  const zx = p.x + (Math.random() < 0.5 ? -6 : 6);
+  const zz = p.z - 16;
+  spawnEnemy({ x: zx, z: zz, type: 'shield' });
+  const e = enemies[enemies.length - 1];
+  if (!e || !e.alive) return;
+  e.isBoss = true;
+  e.maxHp = 560;
+  e.hp = 560;
+  e.root.scale.setScalar(1.16);
+  G.boss = e;
+  if (hud) {
+    hud.toast('指挥官 · 重甲护卫', 2600);
+    hud.setObjective('击杀敌方指挥官');
+  }
+  if (hud && hud.radio) hud.radio('VEGA', op.radio.find((r) => r.at === op.bossWave)?.text || '指挥官下车了。', 5600);
+}
+
+function finishOperation() {
+  const op = G.operation;
+  if (!op || G.state === 'mission') return;
+  G.state = 'mission';
+  input.unlock();
+  if (hud && hud.clearRadio) hud.clearRadio();
+  markOperationDone(campaign, op.id);
+  renderOps();
+  const s = G.stats || {};
+  const acc = s.shots ? Math.round((s.hits / s.shots) * 100) : 0;
+  const overlay = document.getElementById('mission');
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  set('mission-kicker', `OPERATION COMPLETE · ${op.code}`);
+  set('mission-title', op.name);
+  set('mission-sub', `${op.en} · ${op.zoneLabel}`);
+  const statsEl = document.getElementById('mission-stats');
+  if (statsEl) {
+    statsEl.innerHTML = [
+      ['KILLS', s.kills || 0],
+      ['WAVES', G.wave],
+      ['SCORE', Math.round(G.score).toLocaleString('en-US')],
+      ['ACC', `${acc}%`],
+    ].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+  }
+  set('mission-debrief', op.debrief);
+  const next = OPERATIONS.find((o) => o.id === op.id + 1);
+  const nextBtn = document.getElementById('mission-next');
+  if (nextBtn) {
+    nextBtn.disabled = !next;
+    nextBtn.style.opacity = next ? '1' : '.4';
+    nextBtn.childNodes[0].textContent = next ? `下一任务 · ${next.name}` : '战役完成 · 无后续';
+  }
+  overlay?.classList.remove('hidden');
+  overlay?.setAttribute('aria-hidden', 'false');
+}
+
+function closeMissionOverlay() {
+  const overlay = document.getElementById('mission');
+  overlay?.classList.add('hidden');
+  overlay?.setAttribute('aria-hidden', 'true');
+}
+
+function returnToMenu() {
+  closeMissionOverlay();
+  closePrestart();
+  deathEl.classList.add('hidden');
+  if (pauseEl) pauseEl.classList.add('hidden');
+  if (results) results.hide();
+  hudEl.classList.add('hidden');
+  menuEl.classList.remove('hidden');
+  viewmodel.root.visible = false;
+  G.state = 'menu';
+  G.operation = null;
+  input.unlock();
+  resetGame();
+  refreshDailyUI();
+  refreshMenuBoard(true);
+  renderOps();
+  rollDeployFlavor();
+}
+
 function onEnemyKilled(enemy, headshot, cause = 'bullet') {
   G.kills++;
   G.waveRemaining = Math.max(0, G.waveRemaining - 1);
@@ -1649,6 +1867,13 @@ function onEnemyKilled(enemy, headshot, cause = 'bullet') {
     G.stats.kills++;
     if (headshot) G.stats.headshots++;
     if (cause === 'grenade') G.stats.grenadeKills++;
+  }
+  if (enemy && enemy.isBoss) {
+    G.score += Math.round(1500 * G.scoreMult);
+    hud.setScore(G.score, G.kills);
+    hud.toast('指挥官击毙 · +1500', 2400);
+    if (hud.radio) hud.radio('VEGA', '指挥官倒了。车队失去指挥，正在撤离。', 5200);
+    G.boss = null;
   }
   // killstreak kills must not feed the next streak (CoD rule) or artillery chains forever
   if (streakSys && cause !== 'artillery') streakSys.notifyKill({ headshot, cause });
@@ -1898,7 +2123,7 @@ function refreshDailyUI() {
 /* ------------------------------------------------------- menu command deck */
 
 function setDeckTab(tab) {
-  const next = tab === 'daily' ? tab : 'board';
+  const next = tab === 'daily' ? 'daily' : tab === 'ops' ? 'ops' : 'board';
   menuDeck.tab = next;
   for (const btn of deckTabs) {
     const on = btn.dataset.deck === next;
@@ -1911,6 +2136,7 @@ function setDeckTab(tab) {
     panel.hidden = !on;
   }
   if (next === 'board') refreshMenuBoard(false);
+  if (next === 'ops') renderOps();
 }
 
 function bindDeck() {
@@ -2553,6 +2779,10 @@ window.__game = {
   get pickups() { return pickups; }, get streaks() { return streakSys; }, get artillery() { return artillery; },
   get leaderboard() { return leaderboard; }, get results() { return results; },
   get daily() { return loadDaily(); },
+  get campaign() { return campaign; },
+  selectOperation: (id) => selectOperation(id),
+  finishOperation: () => finishOperation(),
+  renderOps: () => renderOps(),
   finishRun, playerDie,
   startGame, resetGame, spawnEnemy, applyPlayerDamage,
   openUpgradeChoice, pickUpgrade, openSettings, applySettings, finishTutorial,

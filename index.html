@@ -119,6 +119,13 @@
     </div>
 
     <!-- bottom center hint + tutorial -->
+    <div class="hud-radio" id="hud-radio" aria-live="polite">
+      <span class="radio-bars" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span class="radio-body">
+        <b id="hud-radio-speaker">VEGA</b>
+        <span id="hud-radio-text"></span>
+      </span>
+    </div>
     <div class="hud-hint" id="hint"></div>
     <div class="tutorial" id="tutorial" role="status" aria-live="polite">
       <span class="tut-key" id="tutorial-key">SHIFT</span>
@@ -234,6 +241,7 @@
             <div class="deck-tabs" role="tablist" aria-label="终端">
               <button class="deck-tab is-on" data-deck="board" role="tab" aria-selected="true">RANKING<em>排行榜</em></button>
               <button class="deck-tab" data-deck="daily" role="tab" aria-selected="false">DAILY<em>挑战</em></button>
+              <button class="deck-tab" data-deck="ops" role="tab" aria-selected="false">OPS<em>战役</em></button>
             </div>
             <div class="deck-id">
               <span class="di-label">CALLSIGN</span>
@@ -254,6 +262,11 @@
             <div class="deck-panel" id="deck-daily" role="tabpanel" hidden>
               <div class="md-head"><span>DAILY <em>今日挑战</em></span><b id="menu-daily-count">0/3</b></div>
               <ul id="menu-daily-list"></ul>
+            </div>
+            <div class="deck-panel" id="deck-ops" role="tabpanel" hidden>
+              <div class="md-head"><span>OPERATIONS <em>战役</em></span><b id="menu-ops-progress">0/5</b></div>
+              <div class="ops-list" id="ops-list"></div>
+              <div class="ops-note" id="ops-note">选择一个任务，然后按 START 部署</div>
             </div>
           </div>
         </section>
@@ -508,6 +521,21 @@
         <span class="bm-hint">ESC 关闭</span>
         <button id="board-modal-more" class="bm-load" type="button">加载更多</button>
       </footer>
+    </div>
+  </div>
+
+  <!-- ============ MISSION DEBRIEF ============ -->
+  <div id="mission" class="overlay hidden" aria-hidden="true">
+    <div class="mission-inner" role="dialog" aria-modal="true" aria-labelledby="mission-title">
+      <div class="overlay-tag" id="mission-kicker"><i></i>OPERATION COMPLETE</div>
+      <h2 class="mission-title" id="mission-title">抵达</h2>
+      <p class="mission-sub" id="mission-sub">AL-MAZRAH · 黄昏</p>
+      <div class="mission-stats" id="mission-stats"></div>
+      <p class="mission-debrief" id="mission-debrief"></p>
+      <div class="mission-actions">
+        <button id="mission-next" class="mission-btn" type="button">下一任务<em>NEXT</em></button>
+        <button id="mission-menu" class="mission-btn ghost" type="button">返回菜单<em>MENU</em></button>
+      </div>
     </div>
   </div>
 

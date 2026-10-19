@@ -58,9 +58,21 @@ export function createInput(domElement) {
     down(code) { return keys.has(code); },
     pressedOnce(code) { return pressed.has(code); },
     lock() {
-      if (domElement.requestPointerLock) {
+      if (!domElement.requestPointerLock) return;
+      // requestPointerLock can throw or reject (no gesture, iframe, headless);
+      // never let that become an unhandled rejection in the frame loop.
+      try {
         const p = domElement.requestPointerLock({ unadjustedMovement: true });
-        if (p && p.catch) p.catch(() => domElement.requestPointerLock());
+        if (p && p.catch) {
+          p.catch(() => {
+            try {
+              const q = domElement.requestPointerLock();
+              if (q && q.catch) q.catch(() => {});
+            } catch (e) { /* ignore */ }
+          });
+        }
+      } catch (e) {
+        try { domElement.requestPointerLock(); } catch (e2) { /* ignore */ }
       }
     },
     unlock() { if (document.pointerLockElement) document.exitPointerLock(); },

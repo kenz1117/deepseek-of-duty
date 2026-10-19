@@ -112,7 +112,7 @@ export function createEngine(canvas, quality = 'high') {
   sun.shadow.mapSize.set(q.shadows, q.shadows);
   sun.shadow.camera.near = 1;
   sun.shadow.camera.far = 220;
-  const S = 52;
+  const S = 44;
   sun.shadow.camera.left = -S;
   sun.shadow.camera.right = S;
   sun.shadow.camera.top = S;
@@ -159,17 +159,49 @@ export function createEngine(canvas, quality = 'high') {
   const _sunWorld = new THREE.Vector3();
   const _camDir = new THREE.Vector3();
   const _proj = new THREE.Vector3();
+  // shadow snapping (light space, see update())
+  const _shadowBasis = new THREE.Matrix4();
+  const _lightEye = new THREE.Vector3();
+  const _zero = new THREE.Vector3();
+  const _worldUp = new THREE.Vector3(0, 1, 0);
+  const _lx = new THREE.Vector3();
+  const _ly = new THREE.Vector3();
+
+  /* Snap the shadow camera target to the light's texel grid.
+     Snapping world X/Z is wrong for an oblique sun: the shadow map's texels
+     are aligned to the light camera, not to the world axes, so the grid slides
+     under every window frame while you walk and the shadows shimmer. */
+  function snapShadowFocus(focus, out) {
+    const texel = (S * 2) / sun.shadow.mapSize.x;
+    _lightEye.copy(sky.sunDir).multiplyScalar(70);
+    _shadowBasis.lookAt(_lightEye, _zero, _worldUp);
+    _lx.setFromMatrixColumn(_shadowBasis, 0);
+    _ly.setFromMatrixColumn(_shadowBasis, 1);
+    // keep the full 3D correction: the light's up axis has a Y component, so
+    // clamping the target to y=0 would re-introduce sub-texel drift
+    const a = focus.dot(_lx);
+    const b = focus.dot(_ly);
+    const da = a - Math.round(a / texel) * texel;
+    const db = b - Math.round(b / texel) * texel;
+    out.copy(focus)
+      .addScaledVector(_lx, -da)
+      .addScaledVector(_ly, -db);
+    return out;
+  }
+  const _snapPos = new THREE.Vector3();
 
   function update(dt, focus, sunOccluded = false) {
     state.frame++;
     sky.update(performance.now() / 1000);
-    // shadow frustum follows the player, snapped to texel grid to reduce shimmer
+    // shadow frustum follows the player, snapped to the light's texel grid
     if (focus) {
-      const texel = (S * 2) / sun.shadow.mapSize.x;
-      const fx = Math.round(focus.x / texel) * texel;
-      const fz = Math.round(focus.z / texel) * texel;
-      sun.target.position.set(fx, 0, fz);
-      sun.position.set(fx + sky.sunDir.x * 70, sky.sunDir.y * 70, fz + sky.sunDir.z * 70);
+      snapShadowFocus(focus, _snapPos);
+      sun.target.position.copy(_snapPos);
+      sun.position.set(
+        _snapPos.x + sky.sunDir.x * 70,
+        sky.sunDir.y * 70,
+        _snapPos.z + sky.sunDir.z * 70
+      );
       sun.target.updateMatrixWorld();
     }
 

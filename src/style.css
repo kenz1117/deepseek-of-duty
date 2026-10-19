@@ -1306,6 +1306,24 @@ html.reduce-motion .bm-panel{animation:none;}
 .mb-source.cache{color:var(--amber);}
 #menu-board-me{max-width:72%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
+/* --- deck: operations (campaign) --- */
+.ops-list{display:flex;flex-direction:column;gap:3px;max-height:136px;overflow-y:auto;
+  scrollbar-width:thin;scrollbar-color:rgba(233,238,240,.2) transparent;}
+.ops-list::-webkit-scrollbar{width:3px;}
+.ops-list::-webkit-scrollbar-thumb{background:rgba(233,238,240,.2);}
+.ops-row{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:8px;align-items:center;
+  padding:5px 6px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.06);
+  color:var(--ui-dim);cursor:pointer;text-align:left;font-family:var(--mono);}
+.ops-row:hover{border-color:rgba(227,178,106,.4);color:var(--ui);}
+.ops-row.is-active{border-color:rgba(227,178,106,.7);background:rgba(227,178,106,.1);color:var(--amber);}
+.ops-row.is-locked{opacity:.42;cursor:not-allowed;}
+.ops-code{font-size:6.5px;letter-spacing:.12em;color:var(--ui-faint);}
+.ops-name{font-family:var(--font);font-size:9.5px;letter-spacing:.02em;color:var(--ui);}
+.ops-row.is-active .ops-name{color:var(--amber-hi);}
+.ops-status{font-size:6.5px;letter-spacing:.1em;color:var(--ui-faint);}
+.ops-row.is-active .ops-status{color:var(--amber);}
+.ops-note{margin-top:6px;font-family:var(--mono);font-size:6.5px;line-height:1.5;color:var(--ui-ghost);}
+
 /* --- deck: daily --- */
 .deck .md-head{margin:0 0 5px;font-size:7.5px;letter-spacing:.18em;}
 .deck .md-head em{font-style:normal;font-size:6.5px;letter-spacing:.04em;color:var(--ui-ghost);}
@@ -1465,3 +1483,42 @@ html.reduce-motion .mode-brief.is-swap{animation:none !important;}
   gap:clamp(16px,2vw,24px);}
 .menu-bottom .deck{order:1;flex:0 0 356px;margin-top:0;}
 .menu-actions{order:2;flex:0 0 356px;align-self:flex-end;}
+
+/* ---------------- campaign radio + debrief ---------------- */
+.hud-radio{position:absolute;left:50%;bottom:clamp(96px,13vh,128px);transform:translate(-50%,6px);
+  display:flex;align-items:flex-start;gap:9px;max-width:min(620px,74vw);padding:8px 14px 8px 10px;
+  background:rgba(6,9,12,.74);border-left:2px solid var(--amber);
+  opacity:0;pointer-events:none;transition:opacity .25s ease,transform .25s ease;}
+.hud-radio.show{opacity:1;transform:translate(-50%,0);}
+.radio-bars{display:flex;gap:2px;padding-top:4px;}
+.radio-bars i{display:block;width:2px;height:9px;background:var(--amber);opacity:.8;
+  animation:radioPulse 1s infinite;transform-origin:50% 100%;}
+.radio-bars i:nth-child(2){animation-delay:.15s;}
+.radio-bars i:nth-child(3){animation-delay:.3s;}
+@keyframes radioPulse{0%,100%{transform:scaleY(.45);}50%{transform:scaleY(1);}}
+.radio-body{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.radio-body b{font-family:var(--mono);font-size:7px;letter-spacing:.24em;color:var(--amber);}
+.radio-body span{font-size:11.5px;line-height:1.55;color:rgba(233,238,240,.9);}
+
+#mission{z-index:88;background:rgba(3,5,8,.82);backdrop-filter:blur(10px);}
+.mission-inner{width:min(560px,92vw);padding:26px 30px 24px;
+  background:linear-gradient(180deg,#0f1215,#0a0c0f);
+  border:1px solid rgba(255,255,255,.13);box-shadow:0 30px 90px rgba(0,0,0,.7);}
+.mission-title{font-size:26px;font-weight:300;letter-spacing:.06em;margin-top:14px;color:#fff;}
+.mission-sub{margin-top:6px;font-family:var(--mono);font-size:8px;letter-spacing:.18em;color:var(--ui-faint);}
+.mission-stats{display:flex;gap:22px;margin:18px 0;padding:12px 0;
+  border-top:1px solid rgba(255,255,255,.08);border-bottom:1px solid rgba(255,255,255,.08);
+  font-family:var(--mono);}
+.mission-stats div{display:flex;flex-direction:column;gap:3px;}
+.mission-stats span{font-size:7px;letter-spacing:.16em;color:var(--ui-faint);}
+.mission-stats b{font-size:16px;font-weight:400;color:var(--ui);}
+.mission-debrief{font-size:12px;line-height:1.8;color:var(--ui-dim);}
+.mission-actions{display:flex;gap:10px;margin-top:22px;}
+.mission-btn{flex:1;padding:11px 14px;background:rgba(227,178,106,.12);
+  border:1px solid rgba(227,178,106,.5);color:var(--amber);
+  font-family:var(--mono);font-size:9px;letter-spacing:.16em;cursor:pointer;
+  display:flex;justify-content:space-between;align-items:center;}
+.mission-btn em{font-style:normal;color:rgba(227,178,106,.55);}
+.mission-btn:hover{background:rgba(227,178,106,.2);}
+.mission-btn.ghost{background:transparent;border-color:rgba(255,255,255,.18);color:var(--ui-dim);}
+.mission-btn.ghost em{color:var(--ui-ghost);}

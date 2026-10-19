@@ -66,6 +66,7 @@ export function createHUD() {
     uav: $('hud-uav'), uavTime: $('uav-time'),
     reward: $('hud-reward'), rewardLabel: $('hud-reward-label'),
     toast: $('hud-toast'), toastText: $('hud-toast-text'),
+    radio: $('hud-radio'), radioSpeaker: $('hud-radio-speaker'), radioText: $('hud-radio-text'),
     areaTag: $('area-tag'), areaName: $('area-name'), areaEn: $('area-en'),
   };
 
@@ -359,6 +360,33 @@ export function createHUD() {
     state.pings.push({ bearing, life, max: life, kind: 'fire' });
     if (state.pings.length > 8) state.pings.shift();
     compassDirty = true;
+  }
+
+  /* campaign radio: a small queue so simultaneous story beats do not overlap */
+  let radioQueue = [];
+  let radioTimer = 0;
+  let radioHold = false;
+  function nextRadio() {
+    if (!el.radio) return;
+    const item = radioQueue.shift();
+    if (!item) { el.radio.classList.remove('show'); radioHold = false; return; }
+    radioHold = true;
+    if (el.radioSpeaker) el.radioSpeaker.textContent = item.speaker;
+    if (el.radioText) el.radioText.textContent = item.text;
+    el.radio.classList.add('show');
+    clearTimeout(radioTimer);
+    radioTimer = setTimeout(nextRadio, item.ms);
+  }
+  function radio(speaker, text, ms = 4400) {
+    if (!el.radio || !text) return;
+    radioQueue.push({ speaker: speaker || 'VEGA', text: String(text), ms });
+    if (!radioHold) nextRadio();
+  }
+  function clearRadio() {
+    radioQueue = [];
+    radioHold = false;
+    clearTimeout(radioTimer);
+    if (el.radio) el.radio.classList.remove('show');
   }
 
   function setSpread(px, ads) {
@@ -1119,7 +1147,7 @@ export function createHUD() {
     el, show, update, reset,
     setHealth, setAmmo, setWeaponName, setWeaponTag, setSlots, setWave, setWaveProgress, setObjective,
     setScore, setGrenades, hit, addKillFeed, setDamage, flashDamage,
-    setReloadPrompt, setHint, ping, setSpread,
+    setReloadPrompt, setHint, ping, setSpread, radio, clearRadio,
     setHeading(h) { state.heading = h; },
     bindSettings, openSettings, closeSettings,
     get isSettingsOpen() { return settingsOpen; },
