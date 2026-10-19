@@ -38,7 +38,29 @@ export const SCENES = {
     ],
   },
 
-  /* OP 05 — the commander steps off the APC. */
+  /* OP 05 — Hassan, the deputy, talks before the shield escort dismounts. */
+  hassan_intro: {
+    duration: 8.6,
+    fadeIn: 0.6,
+    fadeOut: 0.8,
+    actors: [
+      { variant: 2, archetype: 'shield', x: 1.6, z: 16.5, yaw: 0, pose: 'walk', walk: true, scale: 1.16 },
+      { variant: 0, archetype: 'rifleman', x: -2.6, z: 18.5, yaw: 0, pose: 'aim' },
+      { variant: 0, archetype: 'rifleman', x: 4.4, z: 19.0, yaw: 0, pose: 'aim' },
+    ],
+    camera: [
+      { t: 0, pos: [0.2, 3.2, 30], look: [0.4, 1.35, 17] },
+      { t: 4.4, pos: [0.6, 1.9, 24.5], look: [1.4, 1.45, 16.5] },
+      { t: 8.6, pos: [0.9, 1.72, 22.0], look: [1.7, 1.45, 16] },
+    ],
+    lines: [
+      { t: 0.4, speaker: '哈桑', voice: 'hassan_1', text: 'VEGA 的人？车场是我哈桑的地盘。你走不出去。' },
+      { t: 5.2, speaker: 'VEGA', voice: 'hassan_vega', text: '哈桑在车上——解决他，别让他把货带走。' },
+    ],
+  },
+
+  /* OP 05/07/09 — the armoured boss steps off the APC. */
+
   boss_reveal: {
     duration: 9.5,
     fadeIn: 0.6,

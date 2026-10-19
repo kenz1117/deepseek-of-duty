@@ -35,8 +35,17 @@ export function createVideoIntro() {
     el.onended = finish;
     el.onerror = finish;
     el.src = src;
+    el.muted = false;
+    el.volume = 0.55;
     const p = el.play();
-    if (p && p.catch) p.catch(() => { if (el.readyState === 0) finish(); });
+    if (p && p.catch) {
+      p.catch(() => {
+        // autoplay with sound blocked: fall back to muted playback, then give up
+        el.muted = true;
+        const q = el.play();
+        if (q && q.catch) q.catch(() => { if (el.readyState === 0) finish(); });
+      });
+    }
     // never let a stalled network hold the campaign hostage
     guard = setTimeout(() => { if (playing && el.readyState === 0) finish(); }, 2600);
     return true;

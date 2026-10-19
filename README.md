@@ -216,7 +216,7 @@
 
 ### 配音（MiniMax speech-02-hd）
 
-- 32 条台词用 MiniMax `speech-02-hd` 生成，存在 `public/audio/voice/`（2.5 MB）：VEGA = `male-qn-badao-jingpin`（语速 1.30、音高 -3，低沉急促的指挥官），灰狼 = `male-qn-jingying-jingpin`（语速 1.25、音高 -1，更年轻的行动员），两人中位基频相差约 20 Hz，无线电里能听出是两个人。
+- 37 条台词用 MiniMax `speech-02-hd` 生成，存在 `public/audio/voice/`（2.5 MB）：VEGA = `male-qn-badao-jingpin`（1.30 / -3，低沉急促的指挥官），灰狼 = `male-qn-jingying-jingpin`（1.25 / -1，年轻行动员），哈桑 = `Unrestrained_Young_Man`（1.12 / -2，粗哑副官），车队调度 = `Radio_Host`（1.35 / -1，压缩感电台腔）。
 - 过场按 `voice:` id 播放录音；录音缺失/播放失败时回退浏览器 TTS，再不行只保留字幕。**注意**：接口返回的是 hex，不是 base64，落盘前必须 hex 解码。
 - 无线电台词同样带 `voice` id，字幕与录音同步入队。
 - 设置 → AUDIO → `战役语音合成 VOICE TTS` 可整体关闭（录音与 TTS 一起静音）。
@@ -228,10 +228,12 @@
 - NavGrid 随 `bounds` 自动扩格；新增 5 个出生点、掩体与区域名「北检查站」。
 - 门楼朝院子的一面补了窗洞、落水管与壁灯，不再是纯灰盒子。
 
-### 视频生成（已验证能力，暂未接入）
+### 片头 / 片尾视频（已接入）
 
-- MiniMax 视频接口可用（T2V-01 任务成功、1280×720），但这一版生成出来的街景偏软、与游戏的手绘风格不搭，**没有放进包体**。
-- 要接的话建议用 Hailuo 02 / 图生视频（拿游戏内截图当首帧）保持画风，我可以再跑。
+- 用户生成的两条 Hailuo 2.3 视频已放进 `public/media/`：`opening.mp4`、`ending.mp4`，各 10.08 s / 1280×720 / H.264 + AAC 环境声。
+- OP01 过场前先播 `opening.mp4`，OP09 结算前先播 `ending.mp4`；有 `跳过 SKIP`（按钮 / 空格 / ESC / 点击）。
+- 视频默认带声音（音量 0.55）；若浏览器拦截有声自动播放，自动降级为静音播放，再失败就直接跳过，不会卡流程。
+- 文件缺失时自动跳过视频、直接进 3D 过场（已测）。
 
 ## 🧱 北检查站美术 / 指挥官线收尾（Sprint Q）
 

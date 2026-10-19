@@ -4,7 +4,8 @@
    Casting: VEGA = male-qn-badao-jingpin (speed 1.30, pitch -3) — low, clipped
    commander; 灰狼 = male-qn-jingying-jingpin (speed 1.25, pitch -1) — younger
    operator. The two sit ~20 Hz apart in median F0 so they read as different
-   people on radio. Audio is stored as real MP3 (the API returns hex, not b64).
+   people on radio. Hassan (deputy) = Unrestrained_Young_Man at 1.12x, the
+   convoy dispatcher = Radio_Host at 1.35x (clipped, compressed). Audio is stored as real MP3 (the API returns hex, not b64).
 
    The files live in public/audio/voice and are generated once; every line has
    a stable id so the story data only stores `voice: 'op2_1'`. If a file is
@@ -47,6 +48,11 @@ export const VOICE_LINES = {
   op8_2: { file: 'op8_2.mp3', speaker: 'VEGA' },
   op9_1: { file: 'op9_1.mp3', speaker: 'VEGA' },
   op9_2: { file: 'op9_2.mp3', speaker: 'VEGA' },
+  hassan_1: { file: 'hassan_1.mp3', speaker: '哈桑' },
+  hassan_vega: { file: 'hassan_vega.mp3', speaker: 'VEGA' },
+  dispatch_1: { file: 'dispatch_1.mp3', speaker: 'DISPATCH' },
+  dispatch_2: { file: 'dispatch_2.mp3', speaker: 'DISPATCH' },
+  dispatch_3: { file: 'dispatch_3.mp3', speaker: 'DISPATCH' },
 };
 
 export function createVoice() {

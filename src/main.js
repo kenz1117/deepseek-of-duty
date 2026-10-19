@@ -1369,8 +1369,10 @@ function startWave(n) {
       if (hud && hud.setAtmosphere) hud.setAtmosphere(label);
       G.atmosphere = op.atmosphere;
     }
-    const line = op.radio.find((r) => r.at === n || (n === 1 && r.at === 'start'));
-    if (line && hud.radio && !(n === 1 && op.intro)) hud.radio(line.speaker, line.text, 7200, line.voice);
+    const lines = op.radio.filter((r) => r.at === n || (n === 1 && r.at === 'start'));
+    if (hud.radio && !(n === 1 && op.intro)) {
+      for (const line of lines) hud.radio(line.speaker, line.text, 7200, line.voice);
+    }
     if (op.bossWave === n) {
       if (op.bossIntro && cinema && (!SHOT_MODE || CINE_MODE)) {
         G.state = 'cinema';

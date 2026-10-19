@@ -92,7 +92,7 @@ export const OPERATIONS = [
     waves: 4,
     atmosphere: 'dusk',
     bossWave: 3,
-    bossIntro: 'boss_reveal',
+    bossIntro: 'hassan_intro',
     bossName: '副官 · 哈桑',
     zoneLabel: '南院车场',
     threat: 'CRITICAL',
@@ -120,6 +120,7 @@ export const OPERATIONS = [
     brief: '车队要从北门撤出。守住检查站 60 秒，别让他们碰到闸门。',
     radio: [
       { at: 'start', speaker: 'VEGA', voice: 'op6_1', text: '检查站是我们的退路。守住它 60 秒，让车队通过。' },
+      { at: 'start', speaker: 'DISPATCH', voice: 'dispatch_1', text: '北门车队，两分钟内到闸口，把路让开。' },
       { at: 2, speaker: 'VEGA', voice: 'op6_2', text: '他们从后墙翻进来了。别让任何人靠近闸门。' },
     ],
     debrief: '车队被拦下了。指挥官没走成——他退进了北楼。',
@@ -140,6 +141,7 @@ export const OPERATIONS = [
     brief: '指挥官在北门露了面。这一次，别让他再离开。',
     radio: [
       { at: 'start', speaker: 'VEGA', voice: 'op7_1', text: '北门传来消息——指挥官本人出现了。这次别让他再离开。' },
+      { at: 'start', speaker: 'DISPATCH', voice: 'dispatch_3', text: '指挥官车队已过北门，重复，已过北门。' },
       { at: 2, speaker: 'VEGA', voice: 'op7_2', text: '重装部队下车了。撑住。' },
       { at: 3, speaker: 'VEGA', voice: 'op7_3', text: '他下车了——重甲。解决他。' },
     ],
