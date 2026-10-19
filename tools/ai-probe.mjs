@@ -223,6 +223,8 @@ function cleanup(code) {
       playerShots: raw.shots || 0,
       aiDirector: raw.ai && raw.ai.director ? raw.ai.director : null,
       aiPerception: raw.ai && raw.ai.perception ? raw.ai.perception : null,
+      aiEquipment: raw.ai && raw.ai.equipment ? raw.ai.equipment : null,
+      barks: raw.ai ? raw.ai.barks : null,
       damageEvents: raw.damage.length,
       damageTotal: +raw.damage.reduce((a, b) => a + b, 0).toFixed(1),
       damagePerSec: +(raw.damage.reduce((a, b) => a + b, 0) / seconds).toFixed(2),

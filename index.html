@@ -14,6 +14,7 @@
   <div id="hud" class="hidden">
     <div class="hud-vignette"></div>
     <div id="damage-flash"></div>
+    <div id="flashbang"></div>
     <div id="lowhp"></div>
     <div class="hud-frame"><i class="ct tl"></i><i class="ct tr"></i><i class="ct bl"></i><i class="ct br"></i></div>
 
@@ -133,6 +134,12 @@
         <b id="hud-radio-speaker">VEGA</b>
         <span id="hud-radio-text"></span>
       </span>
+    </div>
+    <div class="hud-bark" id="hud-bark" aria-live="polite">
+      <b id="hud-bark-who">敌军</b><span id="hud-bark-text"></span>
+    </div>
+    <div class="grenade-warn" id="grenade-warn" aria-hidden="true">
+      <i class="gw-arrow"></i><b id="grenade-warn-text">手雷</b>
     </div>
     <div class="interact" id="interact" aria-live="polite">
       <span class="interact-key">E</span>

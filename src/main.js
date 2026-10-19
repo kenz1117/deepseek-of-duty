@@ -17,6 +17,8 @@ import { createLeaderboard } from './net/leaderboard.js';
 import { createNavGrid } from './systems/navgrid.js';
 import { Perception } from './systems/ai/perception.js';
 import { AIDirector } from './systems/ai/director.js';
+import { createBarks } from './systems/barks.js';
+import { createEnemyEquipment } from './systems/ai/equipment.js';
 import { createCinema } from './cinema.js';
 import { createVoice } from './voice.js';
 import { createVideoIntro } from './videointro.js';
@@ -92,7 +94,7 @@ const G = {
   firing: false, shotFired: false,
   recoilIndex: 0, lastShotAt: -1e9,
   tut: { reloads: 0, grenades: 0, swaps: 0, minimap: 0, interacts: 0, jumps: 0 },
-  freezeEnemies: false, debugWaves: false, hitStop: 0, lockHint: false, debugAutoFire: false,
+  freezeEnemies: false, debugWaves: false, hitStop: 0, lockHint: false, debugAutoFire: false, flashA: 0,
   readyFrames: 0, ready: false,
   hurtTimer: 0,
   settings: { ...DEFAULT_SETTINGS },
@@ -106,7 +108,7 @@ const G = {
 };
 
 let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap, interact, intelSys;
-let perception = null, aiDirector = null;
+let perception = null, aiDirector = null, barks = null, equipment = null;
 let codex = { intel: [] };
 let mothAlly = null;
 let mothGltf = null, mothLoad = null;
@@ -1345,7 +1347,24 @@ async function boot() {
     raycaster.far = 160;
     // three-mesh-bvh stops at the first hit inside each merged world buffer
     raycaster.firstHitOnly = true;
+    barks = createBarks({ hud, audio, camera: engine.camera, enabled: !SHOT_MODE });
     setupEnemyCtx();
+    equipment = createEnemyEquipment({
+      scene: engine.scene, level, fx, audio, hud, camera: engine.camera,
+      smokeTexture: engine.mats.sprites.smoke,
+      glowTexture: engine.mats.sprites.glow,
+      damagePlayer: (amount, from) => applyPlayerDamage(amount, from),
+      onFlash: (intensity) => applyFlashbang(intensity),
+      onSmoke: (x, z, r, d) => { if (perception) perception.addSmoke(x, z, r, d); },
+      onBark: (type, pos) => {
+        if (!barks) return;
+        barks.say(type === 'frag' ? 'frag' : type === 'flash' ? 'flash' : 'smoke', pos);
+      },
+      onNoise: (pos, radius, strength) => {
+        if (perception) perception.noise(pos.x, pos.z, radius, strength);
+      },
+      onShake: (amount) => { if (controller) controller.addShake(amount); },
+    });
 
     vmPass = engine.addOverlay(viewmodel.scene, viewmodel.camera);
     if (engine.enableSSAO) engine.enableSSAO();
@@ -1676,7 +1695,13 @@ function resetGame() {
   enemies.length = 0;
   for (const g of grenades) engine.scene.remove(g.mesh);
   grenades.length = 0;
+  if (equipment) equipment.reset();
+  if (barks) barks.reset();
+  if (perception) perception.clear();
+  G.flashA = 0;
   hud.reset();
+  if (hud.setFlash) hud.setFlash(0);
+  if (hud.setGrenadeWarning) hud.setGrenadeWarning(0, false);
   hud.setWeaponName(WEAPONS[0].name, magCap(WEAPONS[0]), WEAPONS[0].mode);
   if (hud.setWeaponTag) hud.setWeaponTag(WEAPONS[0].tag);
   if (hud.setAmmo) hud.setAmmo(G.mag, G.reserve, WEAPONS[0].name, WEAPONS[0].mode);
@@ -2466,6 +2491,7 @@ function updateGrenades(dt) {
     if (g.fuse <= 0) {
       fx.explosion(g.mesh.position.clone(), 1.0);
       audio.explosion(0, g.mesh.position.distanceTo(engine.camera.position));
+      if (perception) perception.noise(g.mesh.position.x, g.mesh.position.z, 45, 1.0);
       controller.addShake(0.85);
       const dist = g.mesh.position.distanceTo(engine.camera.position);
       if (dist < 7) applyPlayerDamage(Math.max(10, 85 * (1 - dist / 7)), g.mesh.position);
@@ -2484,6 +2510,34 @@ function updateGrenades(dt) {
   }
 }
 function geoDispose(m) { if (m.geometry) m.geometry.dispose(); if (m.material) m.material.dispose(); }
+
+/** Flashbang on the player: white-out + tinnitus + shake, distance/angle scaled. */
+function applyFlashbang(intensity = 0.5) {
+  if (SHOT_MODE) return;
+  const a = Math.max(0, Math.min(1, intensity));
+  G.flashA = Math.max(G.flashA, a);
+  if (hud && hud.setFlash) hud.setFlash(G.flashA);
+  if (audio) { audio.ringing(a); audio.hurt(); }
+  if (controller) controller.addShake(0.4 * a);
+}
+
+/** Hostile breach: kick a closed door open, re-bake nav, kick up dust. */
+function onEnemyBreach(door) {
+  if (!door || door.opened || !door.open) return;
+  if (!door.open()) return;
+  const r = door.rect || [0, 0, 0, 0];
+  if (nav && nav.refreshRegion) {
+    nav.refreshRegion(r[0] - 0.6, r[1] + 0.6, r[2] - 0.6, r[3] + 0.6);
+  }
+  const cx = (r[0] + r[1]) * 0.5;
+  const cz = (r[2] + r[3]) * 0.5;
+  const dist = Math.hypot(engine.camera.position.x - cx, engine.camera.position.z - cz);
+  audio.doorBreach(0, dist);
+  if (controller) controller.addShake(0.55);
+  if (fx) fx.impact(new THREE.Vector3(cx, 1.25, cz), new THREE.Vector3(0, 0, 1), 'wood');
+  if (perception) perception.noise(cx, cz, 34, 0.9);
+  if (hud && hud.toast) hud.toast('敌方破门', 1800);
+}
 
 /* ------------------------------------------------------------------ damage */
 function applyPlayerDamage(amount, fromPos) {
@@ -2904,11 +2958,15 @@ function setupEnemyCtx() {
   // AI v2: shared perception + squad director (needs the nav grid + colliders)
   if (nav && level) {
     perception = new Perception();
-    aiDirector = new AIDirector(nav, level);
+    aiDirector = new AIDirector(nav, level, {
+      barks,
+      onBreach: (door) => onEnemyBreach(door),
+    });
     enemyCtx.ai = {
       perception,
       director: aiDirector,
       neighbors: enemies,
+      barks,
     };
   }
   enemyCtx.panFor = (pos) => {
@@ -3203,6 +3261,19 @@ function updateGame(dt) {
   // AI v2: tick the shared senses, then hand out squad roles once per 0.3 s
   if (perception) perception.update(dt);
   if (aiDirector && nav) aiDirector.tick(dt, enemies, controller.pos, G.diff);
+  if (equipment && !SHOT_MODE) {
+    equipment.update(dt, {
+      playerPos: controller.pos,
+      playerSpeed: controller.state.speed,
+      playerAlive: G.hp > 0,
+      enemies,
+      tier: G.diff,
+    });
+  }
+  if (G.flashA > 0) {
+    G.flashA = Math.max(0, G.flashA - dt * 0.55);
+    if (hud && hud.setFlash) hud.setFlash(G.flashA);
+  }
   for (const e of enemies) {
     if (!e.root.visible) continue;
     if (G.freezeEnemies && SHOT_MODE) {
@@ -3332,13 +3403,17 @@ window.__game = {
   get audio() { return audio; },
   get mothAlly() { return mothAlly; },
   get mothInfo() { return mothAlly && mothAlly.info; },
-  get ai() { return { perception, director: aiDirector }; },
+  get ai() { return { perception, director: aiDirector, barks }; },
+  get equipment() { return equipment; },
+  get barks() { return barks; },
   aiStats: () => {
     const live = enemies.filter((e) => e.root.visible);
     return {
       roles: aiDirector ? aiDirector.roleCounts() : null,
       director: aiDirector ? { ...aiDirector.stats } : null,
       perception: perception ? perception.stats() : null,
+      equipment: equipment ? equipment.stats() : null,
+      barks: barks ? barks.count : null,
       enemies: live.map((e) => ({
         a: e.archetype, role: e.aiRole, state: e.state,
         awareness: +(e.awareness || 0).toFixed(2),

@@ -209,6 +209,7 @@ export class Enemy {
     this.investigateT = 0;
     this.wantCover = false;
     this.coverKey = null;
+    this.breachDoor = null;
     this.coverCd = 0;
     this.coverPhase = 'move';    // move | hide | peek
     this.coverPhaseT = 0;
@@ -632,6 +633,7 @@ export class Enemy {
     this.investigateT = 0;
     this.wantCover = false;
     this.coverKey = null;
+    this.breachDoor = null;
     this.coverCd = 0;
     this.coverPhase = 'move';
     this.coverPhaseT = 0;
@@ -907,6 +909,8 @@ export class Enemy {
     } else if (!aware) {
       this.state = this.investigate && this.investigateT < 24 ? 'search' : 'idle';
       if (this.state === 'search' && this.searchHold <= 0) this.searchHold = 4 + Math.random() * 3;
+    } else if (role === 'breach' && this.breachDoor && !this.breachDoor.opened) {
+      this.state = 'advance';
     } else if (this.canSee && confident && dist < (def.engageRange || 48)) {
       this.state = 'engage';
     } else if (this.lastSeen && this.lastSeenT < 5.5) {
@@ -971,8 +975,11 @@ export class Enemy {
       const tgt = this.investigate || (this.lastSeen && this.lastSeenT < 6 ? this.lastSeen : null) || playerPos;
       const tx = tgt.x - p.x, tz = tgt.z - p.z;
       const td = Math.hypot(tx, tz) || 1;
-      const standoff = role === 'suppress' ? 26 : role === 'hold' ? 20 : role === 'flank' ? 17 : 8;
-      if (td > standoff) {
+      const standoff = role === 'breach' ? 1.2
+        : role === 'suppress' ? 26 : role === 'hold' ? 20 : role === 'flank' ? 17 : 8;
+      if (role === 'breach' && td <= 1.6) {
+        speedTarget = 0;
+      } else if (td > standoff) {
         moveX = tx / td; moveZ = tz / td;
         speedTarget = def.advanceSpeed * (this.awareness > 0.7 ? 1 : 0.82);
         faceMove = true;

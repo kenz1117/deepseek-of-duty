@@ -44,6 +44,10 @@ export function createHUD() {
     crosshair: $('crosshair'), hitmarker: $('hitmarker'),
     headshot: $('headshot-tag'), killtag: $('kill-tag'),
     dmgDirs: $('damage-dirs'), dmgFlash: $('damage-flash'), lowhp: $('lowhp'),
+    flashbang: $('flashbang'),
+    bark: $('hud-bark'), barkWho: $('hud-bark-who'), barkText: $('hud-bark-text'),
+    grenadeWarn: $('grenade-warn'), grenadeWarnText: $('grenade-warn-text'),
+    grenadeWarnArrow: document.querySelector('#grenade-warn .gw-arrow'),
     armor: $('armor-pips'), hpFill: $('hp-fill'), hpNum: $('hp-num'),
     weaponName: $('weapon-name'), weaponTag: $('weapon-tag'), ammoMag: $('ammo-mag'), ammoReserve: $('ammo-reserve'),
     weaponSlots: $('weapon-slots'),
@@ -342,6 +346,32 @@ export function createHUD() {
   }
 
   function setReloadPrompt(v) { el.reload.classList.toggle('show', !!v); }
+
+  /* -------------------------------------------------- enemy barks / tacticals */
+  let barkTimer = 0;
+  function bark(text, who = '敌军') {
+    if (!el.bark || !text) return;
+    if (el.barkWho) el.barkWho.textContent = who;
+    if (el.barkText) el.barkText.textContent = String(text);
+    el.bark.classList.add('show');
+    clearTimeout(barkTimer);
+    barkTimer = setTimeout(() => el.bark.classList.remove('show'), 2200);
+  }
+
+  function setGrenadeWarning(angle = 0, active = false, type = 'frag') {
+    if (!el.grenadeWarn) return;
+    if (!active) { el.grenadeWarn.classList.remove('show'); return; }
+    el.grenadeWarn.classList.add('show');
+    el.grenadeWarn.classList.toggle('tactical', type !== 'frag');
+    if (el.grenadeWarnText) {
+      el.grenadeWarnText.textContent = type === 'flash' ? '闪光' : type === 'smoke' ? '烟幕' : '手雷';
+    }
+    if (el.grenadeWarnArrow) el.grenadeWarnArrow.style.transform = `rotate(${angle}rad)`;
+  }
+
+  function setFlash(alpha = 0) {
+    if (el.flashbang) el.flashbang.style.opacity = String(Math.max(0, Math.min(1, alpha)));
+  }
 
   function setHint(text) {
     if (text) {
@@ -1152,6 +1182,10 @@ export function createHUD() {
     if (el.uav) el.uav.classList.add('hidden');
     if (el.reward) el.reward.classList.remove('show');
     if (el.toast) { el.toast.classList.remove('show'); if (el.toastText) el.toastText.textContent = ''; }
+    clearTimeout(barkTimer);
+    if (el.bark) el.bark.classList.remove('show');
+    if (el.grenadeWarn) el.grenadeWarn.classList.remove('show');
+    if (el.flashbang) el.flashbang.style.opacity = '0';
     if (el.areaTag) el.areaTag.classList.remove('show');
     areaKey = '';
     areaHold = 0;
@@ -1165,6 +1199,7 @@ export function createHUD() {
     setHealth, setAmmo, setWeaponName, setWeaponTag, setSlots, setWave, setWaveProgress, setObjective,
     setScore, setGrenades, hit, addKillFeed, setDamage, flashDamage,
     setReloadPrompt, setHint, ping, setSpread, radio, clearRadio, setVoicePlayer, setInteract,
+    bark, setGrenadeWarning, setFlash,
     setHeading(h) { state.heading = h; },
     bindSettings, openSettings, closeSettings,
     get isSettingsOpen() { return settingsOpen; },

@@ -308,12 +308,79 @@ export function createAudio() {
     if (drone) { try { drone.stop(); } catch (e) { } drone = null; }
   }
 
+  /* ---------------- enemy radio chatter / tactical cues ---------------- */
+  /**
+   * Unintelligible radio bark: squelch, then 2–4 formant bursts. The subtitle
+   * carries the meaning; the audio only has to read as "a hostile shouted
+   * something on the net" and be directional. No VO assets are shipped.
+   */
+  function enemyBark(pan = 0, distance = 25, seed = 0) {
+    if (!ctx) return;
+    const d = Math.min(90, Math.max(0, distance));
+    const g = Math.max(0.04, 1 - d / 100);
+    const rnd = (n) => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return (seed % 1000) / 1000 * n;
+    };
+    noise({ dur: 0.05, type: 'bandpass', f0: 2400, f1: 900, Q: 2.4, gain: 0.13 * g, pan, send: 0.18 });
+    const syllables = 2 + Math.floor(rnd(2.99));
+    for (let i = 0; i < syllables; i++) {
+      const base = 105 + rnd(75);
+      const at = 0.055 + i * (0.105 + rnd(0.05));
+      tone({ type: 'sawtooth', f0: base, f1: base * 0.8, dur: 0.085, gain: 0.085 * g, pan, send: 0.06, delay: at });
+      tone({ type: 'sawtooth', f0: base * 5.2, f1: base * 4.1, dur: 0.07, gain: 0.03 * g, pan, send: 0.04, delay: at });
+    }
+    noise({ dur: 0.06, type: 'bandpass', f0: 1700, f1: 500, Q: 1.8, gain: 0.055 * g, pan, send: 0.14, delay: 0.07 + syllables * 0.12 });
+  }
+
+  /** Flashbang tinnitus: high sine + muffled band, long fade. */
+  function ringing(strength = 1) {
+    if (!ctx) return;
+    const g = Math.max(0.02, Math.min(0.11, 0.09 * strength));
+    tone({ type: 'sine', f0: 3400, f1: 3050, dur: 2.6, gain: g, send: 0.05, curve: 0.03 });
+    tone({ type: 'sine', f0: 2400, f1: 2150, dur: 2.2, gain: g * 0.55, send: 0.04, curve: 0.04 });
+    noise({ dur: 1.6, type: 'lowpass', f0: 420, f1: 180, gain: g * 0.9, send: 0.2 });
+  }
+
+  /** Flashbang crack: short high transient, then a muffled tail. */
+  function flashbang(pan = 0, distance = 8) {
+    if (!ctx) return;
+    const g = Math.max(0.1, 1 - distance / 40);
+    noise({ dur: 0.06, type: 'highpass', f0: 4200, f1: 1600, gain: 0.46 * g, pan, send: 0.3 });
+    tone({ type: 'sine', f0: 95, f1: 34, dur: 0.26, gain: 0.34 * g, pan, send: 0.2 });
+    noise({ dur: 0.5, type: 'lowpass', f0: 900, f1: 160, gain: 0.18 * g, pan, send: 0.45, delay: 0.02 });
+  }
+
+  /** Pressurised smoke canister pop + hiss. */
+  function smokePop(pan = 0, distance = 12) {
+    if (!ctx) return;
+    const g = Math.max(0.06, 1 - distance / 45);
+    noise({ dur: 0.04, type: 'bandpass', f0: 2200, f1: 900, Q: 2.4, gain: 0.18 * g, pan, send: 0.2 });
+    noise({ dur: 1.1, type: 'lowpass', f0: 1800, f1: 420, gain: 0.16 * g, pan, send: 0.5, delay: 0.03 });
+  }
+
+  /** Short, bright warning beep on the incoming grenade. */
+  function grenadeBeep(pan = 0, urgent = false) {
+    if (!ctx) return;
+    tone({ type: 'square', f0: urgent ? 1750 : 1250, f1: urgent ? 1500 : 1100, dur: 0.035, gain: 0.05, pan, send: 0.03 });
+  }
+
+  /** Low thump + dust when a door is kicked/breached. */
+  function doorBreach(pan = 0, distance = 8) {
+    if (!ctx) return;
+    const g = Math.max(0.08, 1 - distance / 45);
+    noise({ dur: 0.22, type: 'lowpass', f0: 2800, f1: 260, gain: 0.32 * g, pan, send: 0.4 });
+    tone({ type: 'sine', f0: 120, f1: 38, dur: 0.35, gain: 0.4 * g, pan, send: 0.25 });
+    noise({ dur: 0.07, type: 'bandpass', f0: 1500, f1: 700, Q: 1.6, gain: 0.16 * g, pan, send: 0.2, delay: 0.04 });
+  }
+
   function setMasterVolume(v) { if (master) master.gain.value = v; }
 
   return {
     init, resume, gunshot, enemyShot, whiz, reload, shell, impact, ricochet,
     explosion, footstep, hitmarker, ui, uiConfirm, death, hurt, killConfirm,
     ambient, stopAmbient, setLowHealth, setMasterVolume,
+    enemyBark, ringing, grenadeBeep, doorBreach, flashbang, smokePop,
     get ctx() { return ctx; },
     get debug() {
       return {

@@ -26,9 +26,16 @@ export class Perception {
   constructor() {
     /** short-lived noise events: gunshots, explosions, sprinting boots */
     this.noises = [];
+    /** lingering smoke clouds: { x, z, r, t } — these cut line of sight */
+    this.smokes = [];
     this.losChecks = 0;
     this.losHits = 0;
     this.time = 0;
+  }
+
+  /** Register a smoke cloud. It blocks soldier vision until it expires. */
+  addSmoke(x, z, r = 4.2, duration = 13) {
+    this.smokes.push({ x, z, r, t: duration });
   }
 
   /** A loud event at (x,z). radius in metres, strength 0..1. */
@@ -37,12 +44,36 @@ export class Perception {
     this.noises.push({ x, z, r: radius, s: strength, life });
   }
 
+  /** Drop transient stimuli between runs (noise + smoke). */
+  clear() {
+    this.noises.length = 0;
+    this.smokes.length = 0;
+  }
+
   update(dt) {
     this.time += dt;
     for (let i = this.noises.length - 1; i >= 0; i--) {
       this.noises[i].life -= dt;
       if (this.noises[i].life <= 0) this.noises.splice(i, 1);
     }
+    for (let i = this.smokes.length - 1; i >= 0; i--) {
+      this.smokes[i].t -= dt;
+      if (this.smokes[i].t <= 0) this.smokes.splice(i, 1);
+    }
+  }
+
+  /** True when the segment passes through (or ends inside) a smoke cloud. */
+  smokeBlocks(x0, z0, x1, z1) {
+    for (let i = 0; i < this.smokes.length; i++) {
+      const s = this.smokes[i];
+      const dx = x1 - x0, dz = z1 - z0;
+      const l2 = dx * dx + dz * dz;
+      let t = l2 > 1e-6 ? ((s.x - x0) * dx + (s.z - z0) * dz) / l2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const px = x0 + dx * t, pz = z0 + dz * t;
+      if (Math.hypot(s.x - px, s.z - pz) < s.r) return true;
+    }
+    return false;
   }
 
   /**
@@ -85,6 +116,12 @@ export class Perception {
     } else if (inCone) {
       visible = !!e.losCache;
     } else {
+      e.losCache = false;
+    }
+
+    // smoke is a hard visual blocker for AI; the player still sees sprites
+    if (visible && this.smokes.length && this.smokeBlocks(P.x, P.z, player.x, player.z)) {
+      visible = false;
       e.losCache = false;
     }
 
@@ -133,6 +170,8 @@ export class Perception {
         e.contact = true;
         e.acquireT = 0;
         e.reactionDelay = reactionDelay(B, e.archetype);
+        // the squad announces first contact (cooldown-gated by the bark system)
+        if (ctx.ai && ctx.ai.barks) ctx.ai.barks.say('contact', e.root.position);
       }
       e.acquireT += dt;
     } else if (e.awareness < 0.5) {
@@ -167,6 +206,9 @@ export class Perception {
   }
 
   stats() {
-    return { losChecks: this.losChecks, losHits: this.losHits, noises: this.noises.length };
+    return {
+      losChecks: this.losChecks, losHits: this.losHits,
+      noises: this.noises.length, smokes: this.smokes.length,
+    };
   }
 }

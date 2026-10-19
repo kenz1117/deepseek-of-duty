@@ -33,9 +33,10 @@ function budgets(B, n) {
 }
 
 export class AIDirector {
-  constructor(nav, level) {
+  constructor(nav, level, hooks = {}) {
     this.nav = nav;
     this.level = level;
+    this.hooks = hooks || {};
     this.cover = level ? createCoverSystem(level, nav) : null;
     this.coverReserve = new Map();     // "x,z" -> enemy
     this.coverPointByKey = new Map();  // "x,z" -> {x,z}
@@ -78,6 +79,8 @@ export class AIDirector {
 
     const counts = { assault: 0, flank: 0, suppress: 0, hold: 0 };
     for (const e of ground) {
+      // a soldier already working on a breach keeps that job
+      if (e.aiRole === 'breach' && e.breachDoor && !e.breachDoor.opened) continue;
       if (e.aiRole && counts[e.aiRole] != null) {
         if (counts[e.aiRole] < want[e.aiRole]) counts[e.aiRole]++;
         else { e.aiRole = null; pool.push(e); }   // over budget: re-queue
@@ -105,15 +108,22 @@ export class AIDirector {
       if (!e) break;
       this.flankSide = -this.flankSide;
       e.aiRole = 'flank'; e.aiSide = this.flankSide; e.roleT = 5 + Math.random() * 4; counts.flank++;
+      if (this.hooks.barks) this.hooks.barks.say('flank', e.root.position);
     }
     while (counts.suppress < want.suppress) {
       const e = take((x) => (x.canSee ? 8 : 0) - Math.abs(distTo(x) - 22) * 0.25);
       if (!e) break;
       e.aiRole = 'suppress'; e.roleT = 5 + Math.random() * 4; counts.suppress++;
+      if (this.hooks.barks) this.hooks.barks.say('suppress', e.root.position);
     }
     while (pool.length) {
       const e = pool.shift();
       e.aiRole = 'hold'; e.roleT = 5 + Math.random() * 5; counts.hold++;
+    }
+
+    for (const e of ground) {
+      if (e.aiRole !== 'breach') continue;
+      if (!e.breachDoor || e.breachDoor.opened) { e.aiRole = null; e.breachDoor = null; }
     }
 
     // Opening intel: a fresh soldier is not a statue. He gets a rough contact
@@ -156,8 +166,70 @@ export class AIDirector {
       this.stats.intelHints++;
     }
 
+    this.updateBreach(step, ground, playerPos);
+
     this.stats.reassigns++;
     this.lastRoles = counts;
+  }
+
+  /**
+   * Breach: if the player is camping on the far side of a closed breach door
+   * and a soldier is stacked on it, kick it open instead of waiting forever.
+   * Telegraphed by the caller (bark + 2.5 s of stacking).
+   */
+  updateBreach(step, ground, playerPos) {
+    const doors = this.level && this.level.breachDoors;
+    if (!doors || !doors.length) return;
+    for (const door of doors) {
+      if (door.opened) {
+        // release anyone still holding this door as a breach job
+        for (const e of ground) if (e.breachDoor === door) { e.breachDoor = null; if (e.aiRole === 'breach') e.aiRole = 'assault'; }
+        continue;
+      }
+      const r = door.rect;
+      if (!r) continue;
+      const cx = (r[0] + r[1]) * 0.5;
+      const cz = (r[2] + r[3]) * 0.5;
+      const playerNear = Math.hypot(playerPos.x - cx, playerPos.z - cz) < 15;
+      if (!playerNear) { door._aiBreachT = 0; continue; }
+      // pick one soldier on the far side and send him to the door
+      let stacker = ground.find((e) => e.aiRole === 'breach' && e.breachDoor === door) || null;
+      let bestD = Infinity;
+      if (!stacker) for (const e of ground) {
+        if (e.aiRole === 'breach') continue;
+        const ep = e.root.position;
+        if (Math.hypot(ep.x - cx, ep.z - cz) > 16) continue;
+        const sideE = (ep.z - cz);
+        const sideP = (playerPos.z - cz);
+        if (Math.abs(sideE) < 0.25 || Math.abs(sideP) < 0.25) continue;
+        if (Math.sign(sideE) === Math.sign(sideP)) continue;
+        const d = Math.hypot(ep.x - cx, ep.z - cz);
+        if (d < bestD) { bestD = d; stacker = e; }
+      }
+      if (!stacker) { door._aiBreachT = Math.max(0, (door._aiBreachT || 0) - step * 1.8); continue; }
+      if (stacker.aiRole !== 'breach') {
+        stacker.aiRole = 'breach';
+        stacker.breachDoor = door;
+        stacker.roleT = 4;
+        stacker.investigate = { x: cx, z: cz };
+        stacker.investigateT = 0;
+      }
+      const ep = stacker.root.position;
+      if (Math.hypot(ep.x - cx, ep.z - cz) > 2.8) {
+        door._aiBreachT = Math.max(0, (door._aiBreachT || 0) - step * 1.2);
+        continue;
+      }
+      door._aiBreachT = (door._aiBreachT || 0) + step;
+      if (door._aiBreachT > 2.5) {
+        door._aiBreachT = 0;
+        if (this.hooks.onBreach) this.hooks.onBreach(door, stacker);
+        if (this.hooks.barks) this.hooks.barks.say('breach', stacker.root.position);
+        stacker.aiRole = 'assault';
+        stacker.breachDoor = null;
+        stacker.roleT = 0;
+        this.stats.breaches = (this.stats.breaches || 0) + 1;
+      }
+    }
   }
 
   /** Claim a validated cover point for `e` (or return its current one). */

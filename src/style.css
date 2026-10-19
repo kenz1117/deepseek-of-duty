@@ -1500,6 +1500,33 @@ html.reduce-motion .mode-brief.is-swap{animation:none !important;}
 .radio-body b{font-family:var(--mono);font-size:7px;letter-spacing:.24em;color:var(--amber);}
 .radio-body span{font-size:11.5px;line-height:1.55;color:rgba(233,238,240,.9);}
 
+/* hostile barks: below the commander radio so the two never overlap */
+.hud-bark{position:absolute;left:50%;bottom:clamp(54px,7.5vh,78px);transform:translate(-50%,6px);
+  display:flex;align-items:baseline;gap:8px;max-width:min(560px,80vw);padding:5px 12px;
+  background:rgba(16,6,5,.72);border-left:2px solid #c2452f;
+  opacity:0;pointer-events:none;transition:opacity .2s ease,transform .2s ease;z-index:6;}
+.hud-bark.show{opacity:1;transform:translate(-50%,0);}
+.hud-bark b{font-family:var(--mono);font-size:7px;letter-spacing:.22em;color:#e0785f;white-space:nowrap;}
+.hud-bark span{font-size:11.5px;line-height:1.5;color:rgba(236,226,220,.92);}
+
+/* incoming grenade: icon + direction arrow + type label */
+.grenade-warn{position:absolute;left:50%;top:clamp(96px,15vh,150px);transform:translate(-50%,-8px);
+  display:flex;flex-direction:column;align-items:center;gap:3px;
+  opacity:0;pointer-events:none;transition:opacity .16s ease,transform .16s ease;z-index:8;}
+.grenade-warn.show{opacity:1;transform:translate(-50%,0);animation:gwPulse .55s ease-in-out infinite alternate;}
+.gw-arrow{position:absolute;left:50%;top:-27px;width:0;height:0;margin-left:-8px;
+  border-left:8px solid transparent;border-right:8px solid transparent;
+  border-bottom:13px solid #ff5a3c;transform-origin:50% 42px;filter:drop-shadow(0 0 6px rgba(255,70,40,.8));}
+.grenade-warn b{font-family:var(--mono);font-size:8px;letter-spacing:.2em;color:#ff8a6a;
+  padding:5px 10px;background:rgba(22,7,5,.72);border:1px solid rgba(255,90,60,.55);}
+.grenade-warn.tactical b{color:#9fd4ff;border-color:rgba(110,180,255,.55);}
+.grenade-warn.tactical .gw-arrow{border-bottom-color:#7fbcff;filter:drop-shadow(0 0 6px rgba(90,160,255,.8));}
+@keyframes gwPulse{from{filter:brightness(.85);}to{filter:brightness(1.25);}}
+
+/* flashbang: white-out above the HUD, below menus */
+#flashbang{position:absolute;inset:0;z-index:50;opacity:0;pointer-events:none;
+  background:radial-gradient(120% 100% at 50% 46%,#fff 0%,#fff 62%,rgba(255,255,255,.92) 100%);}
+
 #mission{z-index:88;background:rgba(3,5,8,.82);backdrop-filter:blur(10px);}
 .mission-inner{width:min(560px,92vw);padding:26px 30px 24px;
   background:linear-gradient(180deg,#0f1215,#0a0c0f);
