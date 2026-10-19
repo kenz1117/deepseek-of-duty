@@ -1695,3 +1695,6 @@ html.reduce-motion .cine-bar{height:8vh;}
 @keyframes veilPulse{0%,100%{opacity:.85;}50%{opacity:1;}}
 .story-veil p{margin:0;text-align:center;font-size:12px;line-height:2;color:var(--ui);}
 .story-veil p em{font-style:normal;font-size:9px;letter-spacing:.22em;color:var(--amber-dim);text-transform:uppercase;}
+
+/* manual overlay must sit above #menu (z 60), same tier as board-modal (86) */
+#manual{z-index:86;background:rgba(3,5,8,.78);backdrop-filter:blur(14px) saturate(.6);}
