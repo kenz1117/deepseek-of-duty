@@ -272,7 +272,7 @@ python3 tools/montage.py shots/montage.png
 - **炮火覆盖**（`src/systems/artillery.js`）：7 发错峰炮弹（0.62 s 加速下坠）、`fx.explosion` + 弹坑贴花、每发一次伤害回调与震屏；弹体/弹头 20 个 mesh 预建复用，空中上限 10 发。
 - **每日挑战**：按本地日期从 7 个目标确定性抽 3 个，进度累计；1/2/3 项完成 → 开局 +1 手雷 / +20 护甲 / 当日得分 ×1.1。
 - **联网排行榜**：客户端 `src/net/leaderboard.js`（同源 `/api`、2.5 s 超时、离线 outbox、本地镜像、`runId` 幂等）；服务端 `server/leaderboard.mjs`（零依赖、ticket+HMAC、数值一致性、每 IP 限流、JSON 原子落盘）；结算页 `src/ui/results.js` 显示本局 Top 8、首页终端显示该模式 Top 100（20 条/页，滚到底加载下一页）、来源徽章、呼号编辑与 NEW RECORD。
-- **首页作战终端**：底部 `brief-panel` 升级为 BRIEFING / RANKING / DAILY 三段式，默认停在 RANKING；START 与操作按钮行移到页面右下（人物下方，与终端底边对齐），原位置改为随模式切换的动态简报（标题/描述/THREAT/AO/CONTACT）；Top 100 带 ONLINE/LOCAL/CACHE 徽章、自己那行高亮、「你的最佳 · 当前名次」；DAILY 从 START 下方迁入终端，主按钮区域更干净。
+- **首页作战终端**：底部 `brief-panel` 升级为作战终端，默认停在 RANKING；START 与操作按钮行移到页面右下（人物下方，与终端底边对齐），原位置改为随模式切换的动态简报（标题/描述/THREAT/AO/CONTACT）；Top 100 带 ONLINE/LOCAL/CACHE 徽章、自己那行高亮、「你的最佳 · 当前名次」；DAILY 从 START 下方迁入终端，主按钮区域更干净。终端最终只保留 **RANKING / DAILY** 两个标签：BRIEFING 标签与常驻简报信息重复，已下线，模式简报改由 `updateBriefing()` 直接写入唯一数据源。
 - **呼号系统**：首次自动生成 `OPERATOR-XXX`（12 字符内），存 `localStorage['dod.callsign.v1']`，菜单终端可直接点改（回车保存 / Esc 取消 / 非法输入提示并回退）；提交时随 run 上传，服务端按 1–12 位清洗；无账号体系，改名不回溯旧记录。
 
 ### 实测
@@ -282,9 +282,10 @@ python3 tools/montage.py shots/montage.png
 - Draw call：同一视角基线 312；强制生成 10 个补给箱后 362（+50），因此保留 10 个上限并在 25 s 回收掉落物。
 - 排行榜端到端：本地服务 + 带 `VITE_LEADERBOARD_URL` 的 dev server，提交后结算页显示 `ONLINE`、`已上榜`、rank 1；`server/leaderboard.mjs` 冒烟 17 项 PASS（含幂等、越界拒绝、错误 sig、软时长规则、cid 名次）。
 - 分页实测：45 条数据时首页 20 → 40 → 45 行，状态从 `20/45`、`40/45` 到「已到底 · 共 45 名」；补到 105 条后服务端按上限保留 100 条，`offset=80` 返回第 81–100 名，`offset=100` 返回空；首页连续下翻到 100 行后停止；离线注入 60 条缓存时显示 `CACHE`、60 行、「已到底 · 共 60 名」。
+- BRIEFING 标签下线：`updateBriefing()` 直接写常驻简报的 `mode-desc-*`（含 `is-swap` 淡入），并删掉 `initModeBrief()` 的 MutationObserver 镜像（-74 行）与 `.deck .brief-*` / `.brief-panel` 等 49 行死 CSS；实测切 DEFEND → 标签 `DEFEND`、标题「区域防守」、CONTACT `WAVES`，切 EXTRACT → TUTORIAL 弹窗同步「清场撤离 / FINITE」；终端 DOM 只剩 2 个 tab、2 个 panel；1600×900 与 1280×720 布局无空洞或重叠。
 - 布局：1280×720 与 1600×900 的结算页 KIA/REDEPLOY 免滚动同屏；首页终端 1600/1280 均为 6 行窗口 + 滚动（实测 15 条可下翻到第 15 名），footer 分别在 885/683px 之上不溢出。
 - 首页榜端到端：本地服务 + 带 `VITE_LEADERBOARD_URL` 的 dev server，死亡提交后回菜单显示「你的最佳：3,800 · W7 · 当前 #3」，自己那行高亮（`.mb-row.is-you`）；切 SURVIVAL 后榜单清空并显示空态；呼号改名写入 `dod.callsign.v1` 并即时回显。
-- 构建：`npm run build` 通过（43 modules，919 KB / gzip 261 KB）。
+- 构建：`npm run build` 通过（43 modules，926.6 KB / gzip 263.7 KB；BRIEFING 标签下线后 CSS 从 81.0 KB 降到 80.8 KB）。
 
 ### 仍存短板
 

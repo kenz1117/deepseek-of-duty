@@ -284,17 +284,29 @@ const MODE_BRIEFS = {
   },
 };
 
+/* The mode brief under the mode pills is always visible (the deck no longer has
+   a BRIEFING tab), so it is the single source of truth for the mode copy; the
+   pre-mission training dialog mirrors it below. */
 function updateBriefing(mode = G.settings.runMode) {
   const b = MODE_BRIEFS[mode] || MODE_BRIEFS.rotation;
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-  set('brief-title', b.title);
-  set('brief-mode', b.label);
-  set('brief-threat', b.threat);
-  set('brief-ao', b.ao);
-  set('brief-contact', b.contact);
-  set('brief-note', b.note);
-  const th = document.getElementById('brief-threat');
+  const read = (id) => { const el = document.getElementById(id); return el ? el.textContent : ''; };
+  const before = [read('mode-desc-label'), read('mode-desc-title'), read('mode-desc-text')].join('\u0001');
+  set('mode-desc-label', b.label);
+  set('mode-desc-title', b.title);
+  set('mode-desc-text', b.desc);
+  set('mode-desc-threat', b.threat);
+  set('mode-desc-ao', b.ao);
+  set('mode-desc-contact', b.contact);
+  const th = document.getElementById('mode-desc-threat');
   if (th) th.classList.toggle('hot', b.threat !== 'LOW');
+  const after = [read('mode-desc-label'), read('mode-desc-title'), read('mode-desc-text')].join('\u0001');
+  const brief = document.getElementById('mode-desc');
+  if (brief && before !== after) {
+    brief.classList.remove('is-swap');
+    void brief.offsetWidth;
+    brief.classList.add('is-swap');
+  }
   fillPrestart(mode);
 }
 
@@ -1363,7 +1375,7 @@ function refreshDailyUI() {
 /* ------------------------------------------------------- menu command deck */
 
 function setDeckTab(tab) {
-  const next = tab === 'brief' || tab === 'daily' ? tab : 'board';
+  const next = tab === 'daily' ? tab : 'board';
   menuDeck.tab = next;
   for (const btn of deckTabs) {
     const on = btn.dataset.deck === next;
