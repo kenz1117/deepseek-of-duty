@@ -1112,7 +1112,7 @@ async function boot() {
     }
     for (const door of (level.breachDoors || [])) {
       interact.add({
-        x: door.x, z: door.z, r: 2.4, label: '按住 E 破门', hold: 1.6,
+        x: door.x, z: door.z, r: 3.2, label: '按住 E 破门', hold: 1.6,
         onUse: () => {
           if (!door.open()) return;
           if (nav && nav.refreshRegion) nav.refreshRegion(door.rect[0], door.rect[1], door.rect[2], door.rect[3]);
