@@ -24,6 +24,7 @@ import { renderControls } from './ui/controls.js';
 import { CHARACTERS, INTEL, loadCodex, saveCodex, characterUnlocked } from './codex.js';
 import { createIntel } from './systems/intel.js';
 import { createMoth } from './entities/moth.js';
+import { loadMothGlb, createMothFromGlb } from './entities/mothModel.js';
 import { createResults, renderDailyList, renderMenuBoard } from './ui/results.js';
 import {
   OPERATIONS, operationById, isUnlocked, loadCampaign, saveCampaign,
@@ -105,6 +106,7 @@ const G = {
 let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap, interact, intelSys;
 let codex = { intel: [] };
 let mothAlly = null;
+let mothGltf = null, mothLoad = null;
 let opsTab = 'missions';
 let slotT = 0;
 let pickups = null, leaderboard = null, results = null, streakSys = null, artillery = null;
@@ -634,6 +636,66 @@ function closePrestart() {
   if (!prestartEl) return;
   prestartEl.classList.add('hidden');
   prestartEl.setAttribute('aria-hidden', 'true');
+}
+
+/* ------------------------------------------------- field manual (menu lore) */
+const manualEl = document.getElementById('manual');
+
+function renderManualArchive() {
+  if (!manualEl || manualEl.dataset.filled) return;
+  const mc = document.getElementById('manual-controls');
+  if (mc && !mc.childElementCount) renderControls(mc);
+  const chars = document.getElementById('manual-chars');
+  const intel = document.getElementById('manual-intel');
+  if (chars) {
+    let prog = null;
+    try { prog = loadCampaign(); } catch (e) { /* noop */ }
+    chars.innerHTML = CHARACTERS.map((c) => {
+      const unlocked = characterUnlocked(c, prog);
+      return `<div class="arch-card${unlocked ? '' : ' locked'}">
+        <h4>${unlocked ? c.name : '???'}<i>${unlocked ? c.role : '未解锁 · 通关 OP ' + String(c.mission).padStart(2, '0')}</i></h4>
+        <p>${unlocked ? c.text : '档案在战役推进后解密。'}</p>
+      </div>`;
+    }).join('');
+  }
+  if (intel) {
+    let codex = { intel: [] };
+    try { codex = loadCodex(); } catch (e) { /* noop */ }
+    intel.innerHTML = INTEL.map((it) => {
+      const got = codex.intel.includes(it.id);
+      return `<div class="arch-card${got ? '' : ' locked'}">
+        <h4>${it.title}<i>${it.area}</i></h4>
+        <p>${got ? it.text : '尚未收集——在该区域探索并按 E 拾取。'}</p>
+      </div>`;
+    }).join('');
+  }
+  manualEl.dataset.filled = '1';
+}
+
+function selectManualTab(name) {
+  if (!manualEl) return;
+  for (const b of manualEl.querySelectorAll('#manual-tabs button')) {
+    b.classList.toggle('active', b.dataset.tab === name);
+  }
+  for (const p of manualEl.querySelectorAll('.manual-page')) {
+    p.classList.toggle('active', p.dataset.page === name);
+  }
+}
+
+function openManual() {
+  if (!manualEl) { openPrestart(); return; }
+  renderManualArchive();
+  manualEl.classList.remove('hidden');
+  manualEl.setAttribute('aria-hidden', 'false');
+  G.state = 'menu';
+  if (input) input.unlock();
+  if (audio && audio.ctx) audio.ui();
+}
+
+function closeManual() {
+  if (!manualEl || manualEl.classList.contains('hidden')) return;
+  manualEl.classList.add('hidden');
+  manualEl.setAttribute('aria-hidden', 'true');
 }
 
 function beginTutorial(force = false) {
@@ -1198,6 +1260,7 @@ async function boot() {
     }
     renderControls(document.getElementById('prestart-controls'));
     renderControls(document.getElementById('controls-grid'));
+    mothLoad = loadMothGlb().then((g) => { mothGltf = g; }).catch(() => {});
     const unlockAudio = () => { if (audio) { audio.init(); if (audio.resume) audio.resume(); } };
     window.addEventListener('pointerdown', unlockAudio, { once: true });
     window.addEventListener('keydown', unlockAudio, { once: true });
@@ -1269,7 +1332,24 @@ async function boot() {
     if (tutorialOpen) tutorialOpen.addEventListener('click', () => {
       audio.init();
       audio.setMasterVolume(G.settings.master);
-      openPrestart();
+      openManual();
+    });
+    document.getElementById('manual-close')?.addEventListener('click', closeManual);
+    document.getElementById('manual-ok')?.addEventListener('click', closeManual);
+    document.getElementById('manual')?.addEventListener('click', (e) => {
+      if (e.target && e.target.id === 'manual') closeManual();
+    });
+    for (const tab of document.querySelectorAll('#manual-tabs button')) {
+      tab.addEventListener('click', () => selectManualTab(tab.dataset.tab));
+    }
+    const veil = document.getElementById('story-veil');
+    const declassify = () => {
+      veil?.classList.add('hidden-veil');
+      document.querySelector('#manual .story-scroll')?.classList.add('declassified');
+    };
+    veil?.addEventListener('click', declassify);
+    veil?.addEventListener('keydown', (e) => {
+      if (e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); declassify(); }
     });
     document.getElementById('controls-open')?.addEventListener('click', () => {
       document.getElementById('controls')?.classList.remove('hidden');
@@ -1296,6 +1376,7 @@ async function boot() {
       hudEl.classList.add('hidden');
       menuEl.classList.remove('hidden');
       closePrestart();
+      closeManual();
       rollDeployFlavor();
       G.state = 'menu';
       input.unlock();
@@ -1355,6 +1436,7 @@ async function boot() {
       }
       if (code === 'Escape') {
         if (isBoardModalOpen()) { closeBoardModal(); return; }
+        if (manualEl && !manualEl.classList.contains('hidden')) { closeManual(); return; }
         if (prestartEl && !prestartEl.classList.contains('hidden')) { closePrestart(); return; }
         const openNow = typeof hud.isSettingsOpen === 'function' ? hud.isSettingsOpen() : !!hud.isSettingsOpen;
         if (openNow) { if (hud.closeSettings) hud.closeSettings(); return; }
@@ -1437,6 +1519,21 @@ function bindPrimarySelect() {
   apply(G.settings.primary || 'm4');
 }
 
+function spawnMoth() {
+  const at = { x: 37.6, z: -80.4, yaw: -0.588 };
+  if (mothGltf) {
+    mothAlly = createMothFromGlb(mothGltf, { scene: engine.scene, ...at });
+  } else {
+    // procedural fallback while the glTF loads (or if it fails)
+    mothAlly = createMoth({ scene: engine.scene, ...at });
+    if (mothLoad) mothLoad.then(() => {
+      if (!mothGltf || G.operation?.id !== 10 || !mothAlly || mothAlly.source === 'glb') return;
+      mothAlly.remove();
+      mothAlly = createMothFromGlb(mothGltf, { scene: engine.scene, ...at });
+    });
+  }
+}
+
 function startGame(lock = true, silent = false) {
   closePrestart();
   // any entry path (button, keyboard, debug) must have a running context
@@ -1451,9 +1548,7 @@ function startGame(lock = true, silent = false) {
   resetGame();
   // the mission is assigned after the reset, which clears the previous run
   G.operation = activeOperation();
-  if (G.operation && G.operation.id === 10 && !mothAlly) {
-    mothAlly = createMoth({ scene: engine.scene, x: 37.6, z: -80.4, yaw: -0.588 });
-  }
+  if (G.operation && G.operation.id === 10 && !mothAlly) spawnMoth();
   if (voice) voice.stop();
   if (G.settings && G.settings.primary === 'mk18') applyWeaponSwitch(1);
   menuEl.classList.add('hidden');
@@ -3171,6 +3266,7 @@ window.__game = {
   get minimap() { return minimap; },
   get audio() { return audio; },
   get mothAlly() { return mothAlly; },
+  get mothInfo() { return mothAlly && mothAlly.info; },
   selectOperation: (id) => selectOperation(id),
   finishOperation: () => finishOperation(),
   renderOps: () => renderOps(),

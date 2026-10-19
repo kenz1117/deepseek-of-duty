@@ -1,0 +1,9 @@
+MOTH character model
+====================
+File: moth.glb
+Source: Quaternius — Ultimate Modular Women Pack (CC0 / public domain)
+Author: Quaternius (https://quaternius.com)
+Pack page: https://quaternius.com/packs/ultimatemodularwomen.html
+Mirror used: https://github.com/trebeljahr/quaternius-showcase (public/glb/modular_women/SciFi.glb)
+License: CC0 1.0 — free for personal and commercial use, no attribution required.
+Changes: scaled to 1.75 m, arms posed in code, tablet/headset/antenna added procedurally.
