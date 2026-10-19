@@ -239,10 +239,10 @@
               <span class="ms-label">SETTINGS</span>
               <span class="ms-sub">设置</span>
             </button>
-            <button class="menu-settings" id="tutorial-open" type="button" title="再次查看战前教学">
+            <button class="menu-settings" id="tutorial-open" type="button" title="战场手册：剧情 / 档案 / 战术 / 键位">
               <i class="brief-ico" aria-hidden="true"></i>
-              <span class="ms-label">TUTORIAL</span>
-              <span class="ms-sub">教学</span>
+              <span class="ms-label">MANUAL</span>
+              <span class="ms-sub">手册</span>
             </button>
             <a class="menu-settings" href="https://github.com/kenz1117/deepseek-of-duty" target="_blank" rel="noopener noreferrer" title="GitHub 仓库 · 欢迎 Star / PR" aria-label="GitHub">
               <svg class="gh-icon" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
@@ -341,6 +341,95 @@
           <span class="ps-skip-text">不再自动提示 <em>DON'T AUTO-SHOW</em></span>
         </label>
         <button id="prestart-go" class="ps-go" type="button"><span>START OPERATION</span><em>进入战区</em></button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ============ FIELD MANUAL (menu-only lore / archive) ============ -->
+  <div id="manual" class="overlay hidden" aria-hidden="true">
+    <div class="manual-inner" role="dialog" aria-modal="true" aria-labelledby="manual-title">
+      <header class="manual-top">
+        <div class="overlay-tag"><i></i>FIELD MANUAL · 战场手册</div>
+        <nav class="manual-tabs" id="manual-tabs">
+          <button class="active" data-tab="story">剧情 <em>STORY</em></button>
+          <button data-tab="archive">档案 <em>ARCHIVE</em></button>
+          <button data-tab="tactics">战术 <em>TACTICS</em></button>
+          <button data-tab="controls">键位 <em>CONTROLS</em></button>
+        </nav>
+        <button class="manual-close" id="manual-close" type="button" aria-label="关闭">×</button>
+      </header>
+
+      <div class="manual-body">
+        <section class="manual-page" data-page="story">
+          <h2 class="manual-title" id="manual-title">战后归档 · AFTER ACTION<span>本卷宗由 VEGA 口述 · 战区档案室封存</span></h2>
+
+          <div class="story-scroll">
+            <p class="story-quote">「整条防线只剩你还在推进。」<em>—— VEGA，OP 01 无线电</em></p>
+
+            <p>他们叫你灰狼。防线垮掉的那个傍晚，AL-MAZRAH 的每一寸都归了一个叫卡里姆的人——你不认识他，你只认识耳机里那个语速很快的声音。VEGA 不解释，VEGA 只下令：清出一条街。你就清出了一条街。</p>
+
+            <p>第二站是市场，摊位后面藏着你们要的补给。敌人学着绕后了，你学着背靠墙。暴雨落下来的那晚，你打掉了他们的通讯车，截到一段调度——VEGA 听完很久没说话。后来你才知道他在听什么。</p>
+
+            <p>南院的车场里停着副官的指挥车。哈桑，重甲，下车的时候地面都在震。你绕着燃料岛和他耗了半条命，他到死没开口。搜车只搜出一张北门通行令，签发人一栏写着卡里姆。</p>
+
+            <p>北门。车队被拦下的时候，电台里有人说指挥官本人露面了。你击毙了他——重甲、大块头、和哈桑一样打不动。可你凑近看的时候，VEGA 的声音沉了下去：「不对。这是个替身。」真正的卡里姆，十分钟前就进了北楼。而那台通讯车最后的录音里有一句话，比车队出发还早十分钟——<b class="redact">北楼收到，替身已就位</b>。</p>
+
+            <p>暴雨里你夺下北门，把整个车队堵死在墙内。MOTH 的无人机第一次出现在你头顶，她先报坐标，再报结论：「北楼里有两个热源，一个在办公室。」你破门进去，穿过作战室，推开最后一扇门。760 斤重的现实倒在办公桌旁。北楼的电台还在响，但已经没有人回答了。</p>
+
+            <p>东码头有一辆卡车，钥匙在驾驶室。你把车开出去的时候，后视镜里北楼的火还在烧。据说那份撤离清单上有两个座位，一个写着卡里姆，另一个只写了一个字母——</p>
+
+            <p class="story-final"><b>M</b><span>档案室对此条目不予置评</span></p>
+          </div>
+
+          <div class="story-veil" id="story-veil" role="button" tabindex="0">
+            <span class="veil-stamp">CLASSIFIED</span>
+            <p>以下内容包含完整战役剧透<br /><em>点击展开卷宗 · CLICK TO DECLASSIFY</em></p>
+          </div>
+        </section>
+
+        <section class="manual-page" data-page="archive">
+          <h3 class="manual-h3">人物 CHARACTER DOSSIERS</h3>
+          <div class="arch-grid" id="manual-chars"></div>
+          <h3 class="manual-h3">情报 INTEL <em>地图上按 E 收集 · 进度存本机</em></h3>
+          <div class="arch-grid" id="manual-intel"></div>
+          <p class="manual-note">完整档案在游戏内 OPS → ARCHIVE 标签查看；人物随任务解锁，情报在世界中拾取。</p>
+        </section>
+
+        <section class="manual-page" data-page="tactics">
+          <h3 class="manual-h3">生存法则 SURVIVAL</h3>
+          <ul class="tac-list">
+            <li><b>背靠墙打</b> — AI 会侧翼包抄（20 m 外展开），站开阔地等于被三面夹。</li>
+            <li><b>约 1/3 敌人从侧后出生</b>（第 2 波起）— 常看 M 小地图，或攒 7 杀开 UAV。</li>
+            <li><b>压制是双向武器</b> — 你持续开火会在导航网格标出威胁区，AI 会绕开枪线；蹲同一枪口太久，他们也会绕到你身侧。</li>
+            <li><b>打碎掩体会改路</b> — 木箱/沙袋/路障被击碎后 AI 立刻能走进该位置。</li>
+            <li><b>屋顶有狙击手</b>（第 3 波起）— 听到激光音效先找掩体，再上坡道清掉。</li>
+          </ul>
+          <h3 class="manual-h3">武器 WEAPONS</h3>
+          <ul class="tac-list">
+            <li><b>M4A1</b> — 均衡主力，中远距 4–6 发点射（前 8 发后坐力固定爬升）。</li>
+            <li><b>MK18</b> — 25 m 内主场，36 伤害 / 850 rpm，贴脸泼水。</li>
+            <li><b>M870</b> — 4 m 满伤、12 m 衰到 52%、20 m 触底 30%，只打室内和转角。第 3 波解锁。</li>
+            <li><b>ADS</b> — 腰射准星会真实放大（移动散布 1.6×），停下 + 右键才吃满精度。</li>
+          </ul>
+          <h3 class="manual-h3">节奏 STREAKS &amp; SUPPLY</h3>
+          <ul class="tac-list">
+            <li><b>4 杀 → 补给空投</b> · <b>7 杀 → UAV</b>（12 s 标记所有活敌）· <b>11 杀 → 炮火覆盖</b>（视线前方 7 发）。</li>
+            <li><b>每 3 波</b>随机区域空投补给箱（光柱 70 s）——转场顺手拿，别为它横穿全图。</li>
+            <li><b>弹药按武器给</b> — 霰弹 +8、步枪 +60；用霰弹时先切回步枪再吃弹药箱。</li>
+            <li><b>Boss 通用</b> — 先清小怪，绕柱拉扯，重甲怕爆头；HUD 目标行实时显示 Boss 血量。</li>
+          </ul>
+        </section>
+
+        <section class="manual-page" data-page="controls">
+          <h3 class="manual-h3">全部键位 CONTROLS</h3>
+          <div class="pc-grid" id="manual-controls"></div>
+          <p class="pc-tip">鼠标锁定后移动鼠标转向 · 按 <kbd>ESC</kbd> 解锁并暂停</p>
+        </section>
+      </div>
+
+      <footer class="manual-foot">
+        <span class="manual-sig">AO · AL-MAZRAH CROSSING — 只有这条街，和这条街的火</span>
+        <button class="ps-go" id="manual-ok" type="button"><span>CLOSE</span><em>关闭手册</em></button>
       </footer>
     </div>
   </div>
