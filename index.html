@@ -488,20 +488,25 @@
 
   <!-- ============ FULL BOARD MODAL ============ -->
   <div id="board-modal" class="overlay hidden" aria-hidden="true">
-    <div class="bm-panel" role="dialog" aria-modal="true" aria-label="完整排行榜">
+    <div class="bm-panel" role="dialog" aria-modal="true" aria-labelledby="board-modal-title" tabindex="-1">
       <header class="bm-head">
-        <div class="overlay-tag"><i></i>FULL BOARD · 完整排行</div>
+        <div class="bm-headline">
+          <div class="overlay-tag" id="board-modal-title"><i></i>FULL BOARD · 完整排行</div>
+          <p class="bm-sub">TOP 100 · 按模式区分榜单</p>
+        </div>
         <span class="bm-mode" id="board-modal-mode">ROTATION</span>
         <button id="board-modal-close" class="set-close" type="button" aria-label="关闭排行榜"><i></i><i></i></button>
       </header>
       <div class="bm-cols">
-        <span class="mb-col mb-rank">#</span><span class="mb-col mb-name">OPERATOR</span>
-        <span class="mb-col mb-score">SCORE</span><span class="mb-col mb-wave">WAVE</span><span class="mb-col mb-kills">KILLS</span>
+        <span class="mb-rank">#</span><span class="mb-name">OPERATOR</span>
+        <span class="mb-score">SCORE</span><span class="mb-wave">WAVE</span><span class="mb-kills">KILLS</span>
       </div>
       <ul id="board-modal-list" class="bm-list" tabindex="0" aria-label="完整排行榜，最多 100 名"></ul>
       <footer class="bm-foot">
-        <span id="board-modal-note">TOP 100</span>
-        <button id="board-modal-more" class="bm-load" type="button">加载下一页</button>
+        <span id="board-modal-note" class="bm-count">TOP 100</span>
+        <span id="board-modal-source" class="bm-source local">LOCAL</span>
+        <span class="bm-hint">ESC 关闭</span>
+        <button id="board-modal-more" class="bm-load" type="button">加载更多</button>
       </footer>
     </div>
   </div>

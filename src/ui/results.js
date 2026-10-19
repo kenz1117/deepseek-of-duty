@@ -8,6 +8,9 @@
 const $ = (id) => document.getElementById(id);
 
 function num(v, fallback = 0) {
+  // null / '' / undefined are "not recorded", not zero — cached local rows
+  // have no rank, and Number(null) === 0 used to render them all as #0.
+  if (v === null || v === undefined || v === '') return fallback;
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 }

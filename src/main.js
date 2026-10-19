@@ -106,8 +106,11 @@ rollDeployFlavor();
 
 /* ------------------------------------------------------- full board modal */
 
-const bmNum = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
-const boardModal = { open: false, entries: [], nextOffset: 0, done: false, loading: false };
+const bmNum = (v, d) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? d : Number(v));
+const boardModal = {
+  open: false, entries: [], nextOffset: 0, done: false, loading: false,
+  source: 'local', online: false, rank: 0, total: 0,
+};
 
 function isBoardModalOpen() { return boardModal.open; }
 
@@ -118,69 +121,132 @@ function renderBoardModalRows() {
   if (!boardModal.entries.length) {
     const li = document.createElement('li');
     li.className = 'mb-empty';
-    li.textContent = boardModal.loading ? '加载中…' : '暂无记录 · 成为第一个上榜的人';
+    li.textContent = boardModal.loading ? '正在同步排行榜…' : '暂无记录 · 成为第一个上榜的人';
     list.appendChild(li);
   }
   boardModal.entries.forEach((e, i) => {
     if (!e || typeof e !== 'object') return;
     const li = document.createElement('li');
     li.className = 'mb-row';
-    const r = document.createElement('span'); r.className = 'mb-rank'; r.textContent = String(bmNum(e.rank, i + 1));
+    const rank = bmNum(e.rank, i + 1);
+    if (boardModal.rank > 0 && rank === boardModal.rank) {
+      li.classList.add('is-you');
+      li.setAttribute('aria-current', 'true');
+    }
+    const r = document.createElement('span'); r.className = 'mb-rank'; r.textContent = String(rank);
     const n = document.createElement('span'); n.className = 'mb-name'; n.textContent = String(e.name || 'UNKNOWN');
+    n.title = n.textContent;
     const s = document.createElement('span'); s.className = 'mb-score'; s.textContent = bmNum(e.score, 0).toLocaleString('en-US');
     const w = document.createElement('span'); w.className = 'mb-wave'; w.textContent = String(bmNum(e.wave, 1));
     const k = document.createElement('span'); k.className = 'mb-kills'; k.textContent = String(bmNum(e.kills, 0));
     li.append(r, n, s, w, k);
     list.appendChild(li);
   });
+  const total = Math.max(boardModal.total, boardModal.entries.length);
+  const note = document.getElementById('board-modal-note');
+  if (note) note.textContent = boardModal.entries.length ? `已显示 ${boardModal.entries.length} / ${total}` : 'TOP 100';
+  const badge = document.getElementById('board-modal-source');
+  if (badge) {
+    const src = boardModal.source === 'online' ? 'online' : boardModal.source === 'cache' ? 'cache' : 'local';
+    badge.textContent = src === 'online' ? 'ONLINE' : src === 'cache' ? 'CACHE' : 'LOCAL';
+    badge.className = `bm-source ${src}`;
+  }
   const more = document.getElementById('board-modal-more');
   if (more) {
-    more.disabled = boardModal.done || boardModal.loading;
-    more.textContent = boardModal.loading ? '加载中…' : boardModal.done ? '已到 TOP 100' : '加载下一页';
+    const atCap = boardModal.entries.length >= 100;
+    const end = boardModal.done || boardModal.nextOffset === null || atCap;
+    more.disabled = boardModal.loading || end;
+    more.textContent = boardModal.loading
+      ? '同步中…'
+      : !end ? '加载更多'
+        : !boardModal.online && boardModal.entries.length ? '离线 · 仅缓存'
+          : atCap || total >= 100 ? '已到 TOP 100' : '已到底';
   }
-  const note = document.getElementById('board-modal-note');
-  if (note) note.textContent = boardModal.entries.length ? `已显示 ${boardModal.entries.length} / 100` : 'TOP 100';
 }
 
-function loadBoardModalPage() {
-  if (!leaderboard || boardModal.loading || boardModal.done) return;
+function loadBoardModalPage(reset = false) {
+  if (!leaderboard || boardModal.loading) return;
+  if (!reset && (boardModal.done || boardModal.nextOffset === null)) return;
+  const offset = reset ? 0 : boardModal.nextOffset;
   boardModal.loading = true;
   renderBoardModalRows();
-  leaderboard.fetchBoard(G.settings.runMode, 50, leaderboard.clientId, boardModal.nextOffset).then((res) => {
+  leaderboard.fetchBoard(G.settings.runMode, 50, leaderboard.clientId, offset).then((res) => {
+    if (!boardModal.open) return;
     boardModal.loading = false;
-    if (!res || !res.ok) { boardModal.done = true; renderBoardModalRows(); return; }
-    const seen = new Set(boardModal.entries.map((e) => e.runId));
+    if (!res) { boardModal.done = true; renderBoardModalRows(); return; }
+    // Offline pages come back as cache/local — keep the badge honest about it.
+    boardModal.online = !!res.ok;
+    boardModal.source = res.source || (res.ok ? 'online' : 'local');
+    if (Number.isFinite(Number(res.rank))) boardModal.rank = Number(res.rank);
+    if (Number.isFinite(Number(res.total))) boardModal.total = Math.max(boardModal.total, Number(res.total));
+    const base = reset ? [] : boardModal.entries;
+    const seen = new Set(base.map((e) => e && e.runId));
+    const merged = base.slice();
     for (const e of res.entries || []) {
-      if (e && !seen.has(e.runId)) { boardModal.entries.push(e); seen.add(e.runId); }
+      if (e && !seen.has(e.runId)) { merged.push(e); seen.add(e.runId); }
     }
-    boardModal.nextOffset = res.nextOffset === undefined ? null : res.nextOffset;
-    if (boardModal.nextOffset === null || boardModal.entries.length >= 100) boardModal.done = true;
+    boardModal.entries = merged.slice(0, 100);
+    boardModal.total = Math.max(boardModal.total, boardModal.entries.length);
+    boardModal.nextOffset = res.ok && Number.isInteger(res.nextOffset) ? res.nextOffset : null;
+    boardModal.done = boardModal.nextOffset === null || boardModal.entries.length >= 100;
     renderBoardModalRows();
-  }).catch(() => { boardModal.loading = false; boardModal.done = true; renderBoardModalRows(); });
+  }).catch(() => {
+    if (!boardModal.open) return;
+    boardModal.loading = false;
+    boardModal.done = true;
+    renderBoardModalRows();
+  });
 }
 
 function openBoardModal() {
-  if (!leaderboard) return;
+  const mode = G.settings.runMode;
+  const state = boardPage(mode);
   boardModal.open = true;
-  boardModal.entries = [];
-  boardModal.nextOffset = 0;
-  boardModal.done = false;
+  boardModal.entries = Array.isArray(state.entries) ? state.entries.slice(0, 100) : [];
+  boardModal.source = state.source || 'local';
+  boardModal.online = state.source === 'online';
+  boardModal.rank = Number(state.rank) || 0;
+  boardModal.total = Math.max(Number(state.total) || 0, boardModal.entries.length);
+  boardModal.nextOffset = boardModal.entries.length >= 100
+    ? null
+    : (Number.isInteger(state.nextOffset) ? state.nextOffset : boardModal.entries.length);
+  boardModal.done = boardModal.nextOffset === null;
+  boardModal.loading = false;
+
+  const modal = document.getElementById('board-modal');
   const modeEl = document.getElementById('board-modal-mode');
-  if (modeEl) modeEl.textContent = String(G.settings.runMode || 'rotation').toUpperCase();
-  document.getElementById('board-modal')?.classList.remove('hidden');
-  loadBoardModalPage();
+  const list = document.getElementById('board-modal-list');
+  if (modeEl) modeEl.textContent = String(mode || 'rotation').toUpperCase();
+  renderBoardModalRows();
+  if (list) list.scrollTop = 0;
+  modal?.classList.remove('hidden');
+  modal?.setAttribute('aria-hidden', 'false');
+  if (menuEl) { menuEl.setAttribute('aria-hidden', 'true'); menuEl.inert = true; }
+  modal?.querySelector('.bm-panel')?.focus({ preventScroll: true });
+  loadBoardModalPage(true);
 }
 
 function closeBoardModal() {
+  if (!boardModal.open) return;
   boardModal.open = false;
-  document.getElementById('board-modal')?.classList.add('hidden');
+  boardModal.loading = false;
+  const modal = document.getElementById('board-modal');
+  modal?.classList.add('hidden');
+  modal?.setAttribute('aria-hidden', 'true');
+  if (menuEl) { menuEl.removeAttribute('aria-hidden'); menuEl.inert = false; }
+  document.getElementById('board-more')?.focus({ preventScroll: true });
 }
 
 document.getElementById('board-more')?.addEventListener('click', openBoardModal);
 document.getElementById('board-modal-close')?.addEventListener('click', closeBoardModal);
-document.getElementById('board-modal-more')?.addEventListener('click', loadBoardModalPage);
+document.getElementById('board-modal-more')?.addEventListener('click', () => loadBoardModalPage(false));
 document.getElementById('board-modal')?.addEventListener('click', (e) => {
   if (e.target && e.target.id === 'board-modal') closeBoardModal();
+});
+document.getElementById('board-modal-list')?.addEventListener('scroll', (e) => {
+  const el = e.currentTarget;
+  if (!boardModal.open || boardModal.loading || boardModal.done) return;
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 56) loadBoardModalPage(false);
 });
 const BOARD_SYNC_KEY = 'dod.board.sync.v1';
 const enemies = [];
@@ -965,6 +1031,8 @@ function bindPrimarySelect() {
 
 function startGame(lock = true, silent = false) {
   closePrestart();
+  // a keyboard-activated START must never leave the board modal over the game
+  closeBoardModal();
   if (results) results.hide();
   resetGame();
   if (G.settings && G.settings.primary === 'mk18') applyWeaponSwitch(1);
