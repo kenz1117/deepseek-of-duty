@@ -67,6 +67,7 @@ export function createHUD() {
     reward: $('hud-reward'), rewardLabel: $('hud-reward-label'),
     toast: $('hud-toast'), toastText: $('hud-toast-text'),
     radio: $('hud-radio'), radioSpeaker: $('hud-radio-speaker'), radioText: $('hud-radio-text'),
+    interact: $('interact'), interactLabel: $('interact-label'), interactFill: $('interact-fill'),
     areaTag: $('area-tag'), areaName: $('area-name'), areaEn: $('area-en'),
   };
 
@@ -390,6 +391,16 @@ export function createHUD() {
     radioHold = false;
     clearTimeout(radioTimer);
     if (el.radio) el.radio.classList.remove('show');
+  }
+
+  function setInteract(text, progress = null) {
+    if (!el.interact) return;
+    if (!text) { el.interact.classList.remove('show', 'holding'); return; }
+    if (el.interactLabel) el.interactLabel.textContent = text;
+    const holding = typeof progress === 'number';
+    el.interact.classList.add('show');
+    el.interact.classList.toggle('holding', holding);
+    if (el.interactFill) el.interactFill.style.width = holding ? `${Math.round(progress * 100)}%` : '0%';
   }
 
   function setSpread(px, ads) {
@@ -1153,7 +1164,7 @@ export function createHUD() {
     el, show, update, reset,
     setHealth, setAmmo, setWeaponName, setWeaponTag, setSlots, setWave, setWaveProgress, setObjective,
     setScore, setGrenades, hit, addKillFeed, setDamage, flashDamage,
-    setReloadPrompt, setHint, ping, setSpread, radio, clearRadio, setVoicePlayer,
+    setReloadPrompt, setHint, ping, setSpread, radio, clearRadio, setVoicePlayer, setInteract,
     setHeading(h) { state.heading = h; },
     bindSettings, openSettings, closeSettings,
     get isSettingsOpen() { return settingsOpen; },

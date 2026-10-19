@@ -134,6 +134,11 @@
         <span id="hud-radio-text"></span>
       </span>
     </div>
+    <div class="interact" id="interact" aria-live="polite">
+      <span class="interact-key">E</span>
+      <span class="interact-label" id="interact-label">收集情报</span>
+      <i class="interact-bar"><b id="interact-fill"></b></i>
+    </div>
     <div class="hud-hint" id="hint"></div>
     <div class="tutorial" id="tutorial" role="status" aria-live="polite">
       <span class="tut-key" id="tutorial-key">SHIFT</span>
@@ -313,15 +318,7 @@
         </section>
         <section class="prestart-controls">
           <h3>CONTROLS <em>操作教学</em><i class="hrule"></i></h3>
-          <div class="pc-grid">
-            <div class="pc-row"><span class="pc-keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="pc-label">移动 <em>MOVE</em></span></div>
-            <div class="pc-row"><span class="pc-keys"><kbd>SHIFT</kbd></span><span class="pc-label">冲刺 <em>SPRINT</em></span><span class="pc-keys"><kbd>CTRL</kbd></span><span class="pc-label">蹲伏 <em>CROUCH</em></span></div>
-            <div class="pc-row"><span class="pc-keys"><kbd>LMB</kbd></span><span class="pc-label">射击 <em>FIRE</em></span><span class="pc-keys"><kbd>RMB</kbd></span><span class="pc-label">瞄准 <em>AIM</em></span></div>
-            <div class="pc-row"><span class="pc-keys"><kbd>R</kbd></span><span class="pc-label">换弹 <em>RELOAD</em></span><span class="pc-keys"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd></span><span class="pc-label">切换武器 <em>SWAP</em></span></div>
-            <div class="pc-row"><span class="pc-keys"><kbd>G</kbd></span><span class="pc-label">手雷 <em>GRENADE</em></span><span class="pc-keys"><kbd>SPACE</kbd></span><span class="pc-label">跳跃 <em>JUMP</em></span></div>
-            <div class="pc-row"><span class="pc-keys"><kbd>F</kbd></span><span class="pc-label">检视武器 <em>INSPECT</em></span><span class="pc-keys"><kbd>ESC</kbd><kbd>P</kbd></span><span class="pc-label">暂停 <em>PAUSE</em></span></div>
-            <div class="pc-row"><span class="pc-keys"><kbd>Q</kbd></span><span class="pc-label">快速切回上一把 <em>LAST WEAPON</em></span><span class="pc-keys"><kbd>3</kbd></span><span class="pc-label">霰弹 · 第 3 波解锁 <em>M870</em></span></div>
-          </div>
+          <div class="pc-grid" id="prestart-controls"></div>
           <p class="pc-tip">鼠标锁定后移动鼠标转向 · 按 <kbd>ESC</kbd> 解锁并暂停</p>
         </section>
       </div>
@@ -348,6 +345,9 @@
         </button>
         <button id="quit" class="pause-btn">
           <span class="ba-label">RETURN TO MENU</span><span class="ba-sub">返回主菜单</span>
+        </button>
+        <button class="pause-btn" id="controls-open" type="button">
+          <span class="ba-label">CONTROLS</span><span class="ba-sub">键位 · 全部操作</span>
         </button>
         <button class="pause-btn" data-open-settings type="button">
           <span class="ba-label">SETTINGS</span><span class="ba-sub">设置 · 灵敏度 / 视角 / 音频</span>
@@ -444,6 +444,21 @@
     <div class="cine-bar cine-bottom"></div>
     <div class="cine-sub"><b id="cine-speaker">VEGA</b><span id="cine-text"></span></div>
     <button id="cine-skip" class="cine-skip" type="button">跳过 SKIP ▸</button>
+  </div>
+
+  <!-- ============ CONTROLS ============ -->
+  <div id="controls" class="overlay hidden" aria-hidden="true">
+    <div class="controls-panel" role="dialog" aria-modal="true" aria-labelledby="controls-title">
+      <header class="set-head">
+        <div>
+          <div class="overlay-tag"><i></i>SYSTEM MANUAL</div>
+          <h2 class="set-title" id="controls-title">CONTROLS<span>键位</span></h2>
+        </div>
+        <button id="controls-close" class="set-close" type="button" aria-label="关闭键位"><i></i><i></i></button>
+      </header>
+      <div class="pc-grid controls-grid" id="controls-grid"></div>
+      <p class="pc-tip">按 <kbd>ESC</kbd> 释放鼠标并暂停 · 小地图按 <kbd>M</kbd> 开关 · 情报与破门靠近后按 <kbd>E</kbd></p>
+    </div>
   </div>
 
   <!-- ============ SETTINGS ============ -->

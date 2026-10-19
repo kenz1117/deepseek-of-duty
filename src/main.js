@@ -19,6 +19,8 @@ import { createCinema } from './cinema.js';
 import { createVoice } from './voice.js';
 import { createVideoIntro } from './videointro.js';
 import { createMinimap } from './ui/minimap.js';
+import { createInteract } from './systems/interact.js';
+import { renderControls } from './ui/controls.js';
 import { createResults, renderDailyList, renderMenuBoard } from './ui/results.js';
 import {
   OPERATIONS, operationById, isUnlocked, loadCampaign, saveCampaign,
@@ -83,6 +85,7 @@ const G = {
   fireCooldown: 0, grenades: 2,
   firing: false, shotFired: false,
   recoilIndex: 0, lastShotAt: -1e9,
+  tut: { reloads: 0, grenades: 0, swaps: 0, minimap: 0, interacts: 0, jumps: 0 },
   freezeEnemies: false, debugWaves: false, hitStop: 0, lockHint: false, debugAutoFire: false,
   readyFrames: 0, ready: false,
   hurtTimer: 0,
@@ -96,7 +99,7 @@ const G = {
   stats: null, scoreMult: 1, uavUntil: 0, uavTick: 0,
 };
 
-let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap;
+let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap, interact;
 let slotT = 0;
 let pickups = null, leaderboard = null, results = null, streakSys = null, artillery = null;
 let lastRunPayload = null;
@@ -483,10 +486,15 @@ function pickUpgrade(index) {
 
 /* ---------------------------------------------------------------- tutorial */
 const TUTORIAL_STEPS = [
-  { text: 'WASD 移动 · SHIFT 冲刺', key: 'WASD' },
-  { text: '鼠标左键射击', key: 'LMB' },
-  { text: '鼠标右键瞄准（按住）', key: 'RMB' },
-  { text: 'R 换弹 · G 手雷', key: 'R / G' },
+  { key: 'WASD', text: 'WASD 移动 · SHIFT 冲刺', test: () => controller && controller.state.speed > 0.35 },
+  { key: 'CTRL', text: 'CTRL / C 蹲伏 · SPACE 跳跃', test: () => !!(controller && (controller.state.crouching || G.tut.jumps > 0)) },
+  { key: 'LMB', text: '鼠标左键射击', test: () => G.shotsFired >= 3 },
+  { key: 'RMB', text: '鼠标右键瞄准（按住）', test: () => controller && controller.adsAmount > 0.6 },
+  { key: 'R', text: 'R 换弹', test: () => G.tut.reloads > 0 },
+  { key: 'G', text: 'G 投掷手雷', test: () => G.tut.grenades > 0 },
+  { key: '1-3', text: '1 / 2 / 3 切换武器 · Q 切回', test: () => G.tut.swaps > 0 },
+  { key: 'M', text: 'M 开关小地图', test: () => G.tut.minimap > 0 },
+  { key: 'E', text: 'E 交互：破门 / 收集情报', test: () => G.tut.interacts > 0, timeout: 8 },
 ];
 
 const MODE_BRIEFS = {
@@ -639,11 +647,10 @@ function updateTutorial(dt) {
   t.stepT += dt;
   const step = TUTORIAL_STEPS[t.step];
   if (!step) { finishTutorial(); return; }
-  const moved = Math.hypot(controller.pos.x - t.lastX, controller.pos.z - t.lastZ);
-  let done = t.stepT > 5.0;
-  if (t.step === 0 && moved > 3) done = true;
-  if (t.step === 1 && G.shotsFired >= 3) done = true;
-  if (t.step === 2 && controller.adsAmount > 0.6) done = true;
+  let done = false;
+  try { done = !!(step.test && step.test()); } catch (e) { done = false; }
+  // fallback so a step can never soft-lock the run
+  if (!done && t.stepT > (step.timeout || 12)) done = true;
   if (done) {
     t.step++;
     t.stepT = 0;
@@ -1007,6 +1014,21 @@ async function boot() {
     minimap = createMinimap({ level });
     cinema.setVoice(G.settings.voice !== false);
     input = createInput(engine.renderer.domElement);
+    interact = createInteract({ hud, input, onUse: () => { G.tut.interacts++; } });
+    for (const door of (level.breachDoors || [])) {
+      interact.add({
+        x: door.x, z: door.z, r: 2.4, label: '按住 E 破门', hold: 1.6,
+        onUse: () => {
+          if (!door.open()) return;
+          if (nav && nav.refreshRegion) nav.refreshRegion(door.rect[0], door.rect[1], door.rect[2], door.rect[3]);
+          fx.explosion(new THREE.Vector3(door.x, 1.1, door.z), 0.55);
+          audio.explosion(0, 4);
+          hud.toast('门已破开', 1400);
+        },
+      });
+    }
+    renderControls(document.getElementById('prestart-controls'));
+    renderControls(document.getElementById('controls-grid'));
     const unlockAudio = () => { if (audio) { audio.init(); if (audio.resume) audio.resume(); } };
     window.addEventListener('pointerdown', unlockAudio, { once: true });
     window.addEventListener('keydown', unlockAudio, { once: true });
@@ -1076,6 +1098,19 @@ async function boot() {
       audio.setMasterVolume(G.settings.master);
       openPrestart();
     });
+    document.getElementById('controls-open')?.addEventListener('click', () => {
+      document.getElementById('controls')?.classList.remove('hidden');
+      document.getElementById('controls')?.setAttribute('aria-hidden', 'false');
+      if (audio && audio.ctx) audio.ui();
+    });
+    const closeControls = () => {
+      document.getElementById('controls')?.classList.add('hidden');
+      document.getElementById('controls')?.setAttribute('aria-hidden', 'true');
+    };
+    document.getElementById('controls-close')?.addEventListener('click', closeControls);
+    document.getElementById('controls')?.addEventListener('click', (e) => {
+      if (e.target && e.target.id === 'controls') closeControls();
+    });
     document.getElementById('resume').addEventListener('click', () => {
       G.state = 'playing';
       pauseEl.classList.add('hidden');
@@ -1133,6 +1168,7 @@ async function boot() {
     input.on('key', (code) => {
       if (code === 'KeyM' && minimap && G.state === 'playing') {
         const on = minimap.toggle();
+        G.tut.minimap++;
         if (hud && hud.toast) hud.toast(on ? '小地图 ON' : '小地图 OFF', 1100);
         return;
       }
@@ -1161,6 +1197,7 @@ async function boot() {
       if (code === 'KeyR') reload();
       if (code === 'KeyF') viewmodel.inspect();
       if (code === 'KeyG') throwGrenade();
+      if (code === 'KeyE' && interact) interact.press();
       if (code === 'Digit1') switchWeapon(0);
       if (code === 'Digit2') switchWeapon(1);
       if (code === 'Digit3') switchWeapon(2);
@@ -1286,6 +1323,7 @@ function resetGame() {
   G.shotsFired = 0;
   G.recoilIndex = 0;
   G.lastShotAt = -1e9;
+  G.tut = { reloads: 0, grenades: 0, swaps: 0, minimap: 0, interacts: 0, jumps: 0 };
   G.operation = null;
   G.boss = null;
   G.diff = DIFF_TIERS[0];
@@ -1679,6 +1717,7 @@ function switchWeapon(i) {
     if (hud.toast) hud.toast('M870 · 第 3 波解锁');
     return;
   }
+  G.tut.swaps++;
   // cancelling a reload loses its progress — switching is a commitment
   if (G.reloadTimer >= 0) { G.reloadTimer = -1; G.reloadTransferred = false; G.reloadShells = 0; }
   G.switchTo = i;
@@ -1999,6 +2038,7 @@ function reload() {
   if (G.switchT > 0) return;
   G.reloadTimer = 0;
   G.reloadTransferred = false;
+  G.tut.reloads++;
   G.reloadShells = w.shell ? magCap(w) - G.mag : 0;
   viewmodel.startReload();
   audio.reload('magOut');
@@ -2049,6 +2089,7 @@ function updateReload(dt) {
 function throwGrenade() {
   if (G.grenades <= 0) return;
   G.grenades--;
+  G.tut.grenades++;
   hud.setGrenades(G.grenades);
   const geo = new THREE.SphereGeometry(0.062, 10, 8);
   const mat = new THREE.MeshStandardMaterial({ color: 0x3b4232, roughness: 0.7, metalness: 0.35 });
@@ -2745,12 +2786,14 @@ function updateGame(dt) {
   const lookDX = playing ? input.mouse.dx : 0;
   const lookDY = playing ? input.mouse.dy : 0;
 
+  const jumpNow = playing && input.pressedOnce('Space');
   controller.update(dt, playing ? input : null, {
     ads: playing && input.mouse.right,
     sprinting: playing && input.down('ShiftLeft'),
     crouching: playing && (input.down('ControlLeft') || input.down('KeyC')),
-    jump: playing && input.pressedOnce('Space'),
+    jump: jumpNow,
   });
+  if (jumpNow) G.tut.jumps++;
 
   if (playing) {
     updateWeaponSwap(dt);
@@ -2835,6 +2878,9 @@ function updateGame(dt) {
   });
   viewmodel.camera.aspect = engine.camera.aspect;
   viewmodel.camera.updateProjectionMatrix();
+
+  // interaction prompt (E)
+  if (interact) interact.update(dt, controller.pos);
 
   // hud
   hud.setHeading(controller.headingDeg);

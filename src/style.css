@@ -1559,3 +1559,27 @@ html.reduce-motion .cine-bar{height:8vh;}
   letter-spacing:.14em;color:rgba(233,238,240,.55);}
 .mm-hint{position:absolute;right:5px;bottom:4px;font-family:var(--mono);font-size:6px;
   color:rgba(233,238,240,.35);border:1px solid rgba(233,238,240,.18);padding:0 3px;line-height:1.6;}
+
+/* ---------------- controls manual ---------------- */
+.pc-head{grid-column:1/-1;margin:16px 0 5px;}
+.pc-head:first-child{margin-top:0;}
+.pc-head-label{font-family:var(--mono);font-size:7px;letter-spacing:.22em;color:var(--amber);}
+.controls-panel{width:min(760px,94vw);max-height:86vh;overflow:auto;padding:26px 30px 22px;
+  background:linear-gradient(180deg,#0f1215,#0a0c0f);border:1px solid rgba(255,255,255,.13);
+  box-shadow:0 30px 90px rgba(0,0,0,.7);}
+.controls-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px 28px;margin-top:16px;}
+.controls-grid .pc-row{min-height:26px;}
+@media (max-width:720px){.controls-grid{grid-template-columns:1fr;}}
+
+/* ---------------- interact prompt ---------------- */
+.interact{position:absolute;left:50%;bottom:clamp(150px,22vh,230px);transform:translateX(-50%);
+  display:flex;align-items:center;gap:9px;padding:7px 13px 7px 9px;
+  background:rgba(6,9,12,.72);border:1px solid rgba(227,178,106,.38);
+  opacity:0;pointer-events:none;transition:opacity .15s ease;}
+.interact.show{opacity:1;}
+.interact-key{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;
+  border:1px solid rgba(227,178,106,.6);color:var(--amber-hi);font-family:var(--mono);font-size:10px;}
+.interact-label{font-size:12px;color:rgba(238,243,245,.92);letter-spacing:.02em;}
+.interact-bar{display:none;width:74px;height:3px;background:rgba(255,255,255,.14);}
+.interact-bar b{display:block;height:100%;width:0;background:var(--amber);}
+.interact.holding .interact-bar{display:block;}

@@ -34,6 +34,7 @@ export function createLevel(engine) {
   scene.add(root);
 
   const colliders = [];   // {x0,x1,z0,z1}
+  const breachDoors = [];
   const bulletTargets = [];
   const spawnPoints = [];
   const coverPoints = [];
@@ -2076,12 +2077,15 @@ export function createLevel(engine) {
     const z = -70, h = 15;
     for (const side of [-1, 1]) {
       const cx = side * 10.5, w = 9;
-      const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 10), mats.plasterB);
-      projectBoxUV(b.geometry, 3.4);
-      b.position.set(cx, h / 2, z);
-      b.castShadow = true; b.receiveShadow = true;
-      statics.add(b);
-      addCollider(cx, z, w, 10);
+      if (side < 0) {
+        // west block stays solid
+        const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, 10), mats.plasterB);
+        projectBoxUV(b.geometry, 3.4);
+        b.position.set(cx, h / 2, z);
+        b.castShadow = true; b.receiveShadow = true;
+        statics.add(b);
+        addCollider(cx, z, w, 10);
+      }
       // parapet
       for (const dz of [-1, 1]) meshBox(w + 0.2, 0.8, 0.34, mats.concreteDark, cx, h + 0.4, z + dz * 4.8, 0, { uv: 1.6 });
       // facade panel facing the street
@@ -2110,6 +2114,161 @@ export function createLevel(engine) {
       meshCyl(0.055, 0.055, h - 1.4, 5, mats.metal, cx - 4.1, (h - 1.4) / 2, z - 5.3);
       meshBox(0.26, 0.14, 0.2, mats.metalTan, cx + 3.8, 4.6, z - 5.2, 0, { uv: 0.6 });
     }
+    /* ---- NORTH HQ: the east gatehouse block is hollow on the ground floor.
+       Yard door (north) -> ops room -> partition -> commander office, plus a
+       side door into the gate passage. Upper mass stays solid. ---- */
+    function buildNorthHq() {
+      const x0 = 6.15, x1 = 14.85, z0 = -74.9, z1 = -65.1;
+      const cx = (x0 + x1) / 2;
+      const fY = 0.16, cY = 3.42;
+      const wallMat = mats.plasterC;
+
+      roomFloor(x0, x1, z0, z1, fY, mats.concrete, 2.4);
+      // ceiling slab + solid upper mass (visual only; ground walls do the blocking)
+      meshBox(x1 - x0, 0.24, z1 - z0, mats.concreteDark, cx, cY, (z0 + z1) / 2, 0, { uv: 2.4, cast: false });
+      meshBox(x1 - x0 + 0.3, 11.4, z1 - z0 + 0.3, mats.plasterB, cx, cY + 5.8, (z0 + z1) / 2, 0, { uv: 3.0 });
+
+      // outer walls with openings
+      wallWithHoles('z', -75.12, -74.88, x0, x1, fY, cY, [
+        { a0: 9.55, a1: 11.25, y0: fY, y1: 2.42 },
+      ], wallMat, { uv: 2.2 });
+      wallWithHoles('z', -65.12, -64.88, x0, x1, fY, cY, [], wallMat, { uv: 2.2 });
+      wallWithHoles('x', 6.0, 6.3, z0, z1, fY, cY, [
+        { a0: -70.7, a1: -69.1, y0: fY, y1: 2.35 },
+      ], wallMat, { uv: 2.2 });
+      wallWithHoles('x', 14.7, 15.0, z0, z1, fY, cY, [], wallMat, { uv: 2.2 });
+      addColliderRect(14.7, 15.0, z0, z1, cY);
+      addColliderRect(6.0, 6.3, -74.9, -70.7, cY);
+      addColliderRect(6.0, 6.3, -69.1, -65.1, cY);
+
+      // partition: ops room | commander office, with a 1.5 m door
+      wallWithHoles('z', -70.2, -69.9, x0, x1, fY, cY, [
+        { a0: 9.9, a1: 11.5, y0: fY, y1: 2.3 },
+      ], wallMat, { uv: 2.0 });
+      doorFrame('z', -70.2, -69.9, 9.9, 11.5, fY, 2.3, mats.wood);
+      thresholdStrip('z', -70.2, -69.9, 9.9, 11.5, fY, mats.concreteDark);
+
+      // frame + open leaf on the gate-side door, frame on the yard door
+      doorFrame('x', 6.0, 6.3, -70.7, -69.1, fY, 2.35, mats.metalTan);
+      thresholdStrip('x', 6.0, 6.3, -70.7, -69.1, fY, mats.concreteDark);
+      openDoorLeaf(6.26, -70.66, 0.9, 2.2, fY, -2.2, mats.metal);
+      doorFrame('z', -75.12, -74.88, 9.55, 11.25, fY, 2.42, mats.metal);
+      thresholdStrip('z', -75.12, -74.88, 9.55, 11.25, fY, mats.concreteDark);
+
+      // the breach door: closed until the player holds E
+      const doorMesh = new THREE.Mesh(new THREE.BoxGeometry(1.68, 2.28, 0.1), mats.metal);
+      projectBoxUV(doorMesh.geometry, 1.2);
+      doorMesh.position.set(10.4, fY + 1.14, -75.0);
+      doorMesh.castShadow = true; doorMesh.receiveShadow = true;
+      statics.add(doorMesh);
+      const doorCol = addColliderRect(9.58, 11.22, -75.08, -74.92, 2.5);
+      breachDoors.push({
+        id: 'hq-entry', x: 10.4, z: -75.0,
+        rect: [9.3, 11.5, -75.4, -74.6],
+        opened: false,
+        open() {
+          if (this.opened) return false;
+          this.opened = true;
+          const i = colliders.indexOf(doorCol);
+          if (i >= 0) colliders.splice(i, 1);
+          doorMesh.visible = false;
+          return true;
+        },
+      });
+
+      // ---- ops room (north half)
+      meshBox(0.8, 2.2, 1.5, mats.metal, 13.95, 1.1, -72.6, 0, { collide: true, uv: 1.2 });   // radio rack
+      meshBox(0.1, 1.4, 1.5, mats.interior, 13.5, 1.5, -72.6, 0, { uv: 0.8, cast: false });
+      meshBox(2.6, 0.08, 1.0, mats.wood, 7.9, 1.0, -72.3, 0, { uv: 1.0 });
+      for (const [lx, lz] of [[6.9, -72.3], [8.9, -72.3]]) meshBox(0.1, 0.92, 0.9, mats.metal, lx, 0.5, lz, 0, { uv: 0.6 });
+      addCollider(7.9, -72.3, 2.7, 1.1, 0.05, 1.0);
+      meshBox(1.1, 1.0, 0.9, mats.wood, 7.0, 0.5, -73.9, 0.2, { collide: true, uv: 1.0 });
+      meshBox(0.9, 0.7, 0.8, mats.wood, 7.9, 0.35, -74.1, -0.15, { collide: true, uv: 0.9 });
+      for (let i = 0; i < 6; i++) {
+        meshRound(0.6, 0.24, 0.34, 0.09, mats.sandbag, 7.1 + (i % 3) * 0.62, 0.14, -74.25, 0, { uv: 0.8 });
+      }
+      addCollider(7.8, -74.25, 1.9, 0.7, 0.05, 0.9);
+      meshBox(0.9, 0.55, 0.4, mats.metalTan, 8.4, 1.2, -70.4, 0, { uv: 0.8 });
+
+      // ---- commander office (south half)
+      meshBox(2.0, 0.82, 0.95, mats.wood, 12.7, 0.57, -67.2, 0, { uv: 1.2 });
+      meshBox(2.06, 0.06, 1.0, mats.metal, 12.7, 1.0, -67.2, 0, { uv: 0.8, cast: false });
+      addCollider(12.7, -67.2, 2.1, 1.05, 0.05, 1.05);
+      meshBox(0.55, 1.0, 0.55, mats.rubber, 12.7, 0.5, -68.1, 0, { uv: 0.8 });
+      meshBox(1.9, 0.75, 1.1, mats.wood, 8.2, 0.53, -67.0, 0.05, { uv: 1.1 });   // map table
+      addCollider(8.2, -67.0, 2.0, 1.2, 0.05, 1.0);
+      meshBox(0.8, 1.3, 0.7, mats.metal, 14.1, 0.81, -68.7, 0, { collide: true, uv: 1.0 });  // safe
+      meshBox(0.75, 1.15, 0.6, mats.metal, 14.05, 0.73, -66.2, 0, { collide: true, uv: 1.0 }); // filing
+      meshBox(0.75, 1.15, 0.6, mats.metal, 14.05, 0.73, -65.6, 0, { collide: true, uv: 1.0 });
+      meshBox(2.2, 0.04, 1.4, mats.burlap, 11.0, fY + 0.03, -67.2, 0, { uv: 1.0, cast: false });
+      for (const [rx, rz, rw, rd] of [[11.0, -66.48, 2.26, 0.06], [11.0, -67.92, 2.26, 0.06], [9.88, -67.2, 0.06, 1.5], [12.12, -67.2, 0.06, 1.5]]) {
+        meshBox(rw, 0.05, rd, mats.concreteDark, rx, fY + 0.04, rz, 0, { uv: 0.8, cast: false });
+      }
+
+      // wall dressing: boards, a clock, campaign map
+      meshBox(1.6, 1.0, 0.06, mats.signB, 8.4, 2.1, -65.2, 0, { uv: 0.8, cast: false });
+      meshBox(1.1, 0.8, 0.05, mats.signA, 12.4, 2.2, -70.16, 0, { uv: 0.7, cast: false });
+      meshBox(0.42, 0.42, 0.05, mats.interior, 10.3, 2.6, -74.94, 0, { uv: 0.5, cast: false });
+
+      // lights: two warm interior lamps + red emergency over the breach door
+      interiorLamp(8.6, 3.1, -72.6, 5.4);
+      interiorLamp(12.2, 3.1, -67.4, 4.8);
+      meshBox(0.3, 0.12, 0.18, mats.windowLit, 10.4, 2.85, -74.86, 0, { uv: 0.5, cast: false });
+      lightPool(10.4, -74.4, 1.6, 0.22, 0xff6b4a);
+
+      // ---- interior dressing: light panels, pipes, boards, monitors
+      for (const [fx, fz] of [[8.9, -72.6], [12.3, -72.4], [11.2, -67.6], [8.2, -67.2]]) {
+        meshBox(1.5, 0.06, 0.34, mats.windowLit, fx, 3.28, fz, 0, { uv: 0.7, cast: false });
+        meshBox(1.6, 0.05, 0.44, mats.metalTan, fx, 3.24, fz, 0, { uv: 0.6, cast: false });
+      }
+      // suspended ceiling panels knock the black slab back
+      for (const [px, pz, pw, pd] of [[7.9, -72.4, 3.0, 3.4], [11.6, -72.2, 2.6, 3.2], [11.2, -67.4, 4.2, 3.0]]) {
+        meshBox(pw, 0.03, pd, mats.plasterB, px, 3.33, pz, 0, { uv: 2.0, cast: false });
+      }
+      // skirting + a service pipe run
+      for (const [sx, sz, sw, sd] of [[10.5, -74.82, 8.5, 0.06], [10.5, -65.16, 8.5, 0.06], [6.34, -70, 0.06, 9.7], [14.66, -70, 0.06, 9.7]]) {
+        meshBox(sw, 0.2, sd, mats.concreteDark, sx, 0.27, sz, 0, { uv: 1.2, cast: false });
+      }
+      meshCyl(0.06, 0.06, 8.4, 6, mats.rust, 10.5, 3.18, -74.6, { rz: Math.PI / 2 });
+      meshCyl(0.045, 0.045, 8.4, 6, mats.metal, 12.9, 3.12, -70.6, { rz: Math.PI / 2 });
+
+      // ops room: monitors, map board, papers
+      const monitor = (x, y, z, rot, w = 0.62, h = 0.4) => {
+        meshBox(w, h, 0.06, mats.interior, x, y, z, rot, { uv: 0.6, cast: false });
+        meshBox(w - 0.06, h - 0.06, 0.02, mats.windowGlass, x, y, z + 0.04, rot, { uv: 0.5, cast: false });
+        meshBox(0.1, 0.1, 0.12, mats.metal, x, y - h / 2 - 0.05, z, rot, { uv: 0.4, cast: false });
+      };
+      monitor(13.34, 1.55, -72.6, -Math.PI / 2, 0.7, 0.42);
+      monitor(13.34, 1.55, -71.7, -Math.PI / 2, 0.7, 0.42);
+      meshBox(1.8, 1.05, 0.05, mats.signA, 6.36, 1.95, -72.4, Math.PI / 2, { uv: 0.8, cast: false });
+      meshBox(0.9, 0.65, 0.05, mats.signB, 6.36, 1.9, -71.2, Math.PI / 2, { uv: 0.7, cast: false });
+      for (let i = 0; i < 5; i++) {
+        meshPlane(0.28, 0.2, mats.paper || mats.signA, 10.4 + (i % 3) * 0.42, 1.045, -72.2 + Math.floor(i / 3) * 0.4,
+          { rx: -Math.PI / 2, cast: false });
+      }
+
+      // office: desk monitor, papers, lamp, chair, map board
+      monitor(12.7, 1.28, -67.05, 0, 0.66, 0.4);
+      meshBox(0.16, 0.06, 0.16, mats.metalTan, 11.9, 1.04, -67.2, 0, { uv: 0.5, cast: false });
+      meshCyl(0.03, 0.03, 0.62, 5, mats.metal, 11.9, 1.35, -67.2, { cast: false });
+      meshBox(0.22, 0.1, 0.14, mats.windowLit, 11.9, 1.68, -67.2, 0, { uv: 0.4, cast: false });
+      for (let i = 0; i < 3; i++) {
+        meshPlane(0.24, 0.16, mats.signA, 12.2 + i * 0.3, 1.02, -67.5, { rx: -Math.PI / 2, cast: false });
+      }
+      meshBox(1.1, 0.7, 0.05, mats.signB, 10.2, 1.9, -65.2, 0, { uv: 0.7, cast: false });
+      meshBox(0.5, 0.5, 0.5, mats.rubber, 12.7, 0.35, -66.2, 0.1, { uv: 0.7, cast: false });
+      meshBox(0.52, 0.08, 0.52, mats.rubber, 12.7, 0.64, -66.2, 0.1, { uv: 0.6, cast: false });
+
+      // red emergency strip over the breach door
+      meshBox(0.9, 0.08, 0.08, mats.windowLit, 10.4, 2.92, -74.8, 0, { uv: 0.5, cast: false });
+
+      // spawn/cover for the interior fight
+      spawnPoints.push({ x: 7.2, z: -73.3 }, { x: 13.4, z: -69.4 }, { x: 7.3, z: -66.1 });
+      coverPoints.push({ x: 10.4, z: -72.9, h: 1.0 }, { x: 12.7, z: -67.9, h: 1.0 }, { x: 14.1, z: -68.7, h: 1.3 });
+    }
+
+    buildNorthHq();
+
     // bridge across the gap
     const bridge = new THREE.Mesh(new THREE.BoxGeometry(12.4, 1.3, 3.6), mats.concreteDark);
     projectBoxUV(bridge.geometry, 2.6);
@@ -2240,12 +2399,17 @@ export function createLevel(engine) {
 
     // perimeter: side walls + backstop with a closed gate in the middle
     meshBox(0.36, 3.1, Z1 - Z0, wallMat, -30, 1.55, cz, 0, { collide: true, uv: 2.4 });
-    meshBox(0.36, 3.1, Z1 - Z0, wallMat, 30, 1.55, cz, 0, { collide: true, uv: 2.4 });
+    // east wall: 4 m dock gate at z -82..-78
+    meshBox(0.36, 3.1, 14, wallMat, 30, 1.55, -89, 0, { collide: true, uv: 2.4 });
+    meshBox(0.36, 3.1, 12, wallMat, 30, 1.55, -72, 0, { collide: true, uv: 2.4 });
+    meshBox(0.36, 0.7, 4, wallMat, 30, 2.75, -80, 0, { uv: 2.4, cast: false });
     for (const [xa, xb] of [[-30, -3], [3, 30]]) {
       meshBox(xb - xa, 3.1, 0.36, wallMat, (xa + xb) / 2, 1.55, Z0, 0, { collide: true, uv: 2.4 });
     }
     meshBox(0.52, 0.12, Z1 - Z0, copMat, -30, 3.16, cz, 0, { uv: 2.0, cast: false });
-    meshBox(0.52, 0.12, Z1 - Z0, copMat, 30, 3.16, cz, 0, { uv: 2.0, cast: false });
+    meshBox(0.52, 0.12, 14, copMat, 30, 3.16, -89, 0, { uv: 2.0, cast: false });
+    meshBox(0.52, 0.12, 12, copMat, 30, 3.16, -72, 0, { uv: 2.0, cast: false });
+    meshBox(0.52, 0.12, 4, copMat, 30, 3.16, -80, 0, { uv: 2.0, cast: false });
     for (const [xa, xb] of [[-30, -3], [3, 30]]) {
       meshBox(xb - xa, 0.12, 0.52, copMat, (xa + xb) / 2, 3.16, Z0, 0, { uv: 2.0, cast: false });
     }
@@ -2300,7 +2464,7 @@ export function createLevel(engine) {
       meshBox(0.5, 0.14, 0.3, mats.metalTan, x, 5.3, z, 0, { uv: 0.6 });
       lightPool(x, z, 3.2, 0.16);
     }
-    for (const [x, z] of [[11.2, -73.4], [12.1, -74.2]]) {
+    for (const [x, z] of [[16.4, -77.2], [17.3, -78.0]]) {
       meshCyl(0.32, 0.32, 0.9, 10, mats.rust, x, 0.45, z);
       addCollider(x, z, 0.7, 0.7, 0.05, 0.9);
     }
@@ -2312,7 +2476,7 @@ export function createLevel(engine) {
     // ---- art pass: chicane cover, a T-wall, tire/pipe stacks
     for (const [x, z, w, r] of [
       [-1.2, -83.2, 3.8, 0.06], [3.4, -84.0, 3.0, -0.04],
-      [-9.8, -92.0, 4.4, 0.03], [10.6, -76.4, 3.2, 0.0],
+      [-9.8, -92.0, 4.4, 0.03], [15.6, -77.0, 3.2, 0.0],
     ]) barrier(x, z, w, r);
     // concrete T-wall: blocks the straight line from gate to back wall
     meshBox(5.2, 2.2, 0.36, mats.concrete, -6.0, 1.1, -89.4, 0.02, { collide: true, uv: 1.6 });
@@ -2381,11 +2545,78 @@ export function createLevel(engine) {
     }
     addColliderRect(-5.2, 0.8, -68.7, -67.7, 1.0);
 
+    // close the new east bound behind the street block (dock is reached from
+    // the checkpoint only); plain concrete back wall
+    for (const [za, zb] of [[-66, 10], [10, 84]]) {
+      meshBox(0.4, 3.2, zb - za, mats.concreteDark, 30.2, 1.6, (za + zb) / 2, 0, { collide: true, uv: 2.6 });
+      meshBox(0.56, 0.12, zb - za, mats.concrete, 30.2, 3.26, (za + zb) / 2, 0, { uv: 2.0, cast: false });
+    }
+
     // gates warn: a faded sign on the street side of the gatehouse
     const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.5), mats.signA);
     sign.position.set(0, 4.2, -66.4);
     sign.rotation.y = Math.PI;
     statics.add(sign);
+  }
+
+  /* ------------------------------------------------------------------ east dock */
+  /* Loading yard behind the checkpoint's east wall: flat apron, containers,
+     a shed facade and floodlights, used as the escape route in OP10. */
+  function buildEastDock() {
+    const X0 = 30, X1 = 46, Z0 = -92, Z1 = -70;
+    const cx = (X0 + X1) / 2, cz = (Z0 + Z1) / 2;
+    const wallMat = mats.concreteDark;
+
+    meshPlane(X1 - X0 + 4, Z1 - Z0 + 4, mats.asphalt, cx, 0.006, cz, { rx: -Math.PI / 2, uvScale: 3.2, recv: true });
+    addPuddles([[36.5, -86.0, 1.2, 0.45], [42.0, -75.5, 0.9, 0.4]]);
+    addRubble(33.2, -72.4, 1.0, 10);
+    addWeeds(44.8, -89.0, 3);
+
+    // perimeter (west is the checkpoint wall, with the gate)
+    meshBox(0.4, 3.2, Z1 - Z0, wallMat, X1, 1.6, cz, 0, { collide: true, uv: 2.6 });
+    for (const [xa, xb] of [[X0, X1]]) {
+      meshBox(xb - xa, 3.2, 0.4, wallMat, (xa + xb) / 2, 1.6, Z0, 0, { collide: true, uv: 2.6 });
+      meshBox(xb - xa, 3.2, 0.4, wallMat, (xa + xb) / 2, 1.6, Z1, 0, { collide: true, uv: 2.6 });
+    }
+    meshBox(0.56, 0.12, Z1 - Z0, mats.concrete, X1, 3.26, cz, 0, { uv: 2.0, cast: false });
+
+    // shed facade on the east wall + roll-up door
+    meshBox(0.3, 5.2, 12.4, mats.plasterB, 45.6, 2.6, -79.5, 0, { uv: 2.4 });
+    meshBox(3.6, 3.4, 0.18, mats.metal, 45.4, 1.7, -83.6, 0, { uv: 1.2 });
+    for (let i = 0; i < 6; i++) meshBox(3.5, 0.06, 0.2, mats.metal, 45.35, 0.35 + i * 0.52, -83.6, 0, { uv: 0.6, cast: false });
+    meshBox(4.2, 0.5, 0.5, mats.concreteDark, 45.4, 3.7, -83.6, 0, { uv: 1.0 });
+
+    // containers + truck + pallets
+    for (const [x, z, rot, stack] of [[34.0, -88.8, 0, 1], [42.6, -88.0, Math.PI / 2, 2]]) {
+      for (let i = 0; i < stack; i++) {
+        meshBox(6.0, 2.5, 2.4, i % 2 ? mats.metalTan : mats.metal, x, 1.28 + i * 2.55, z, rot,
+          { collide: true, uv: 1.6 });
+      }
+    }
+    boxTruck(40.4, -74.6, Math.PI * 0.52);
+    for (const [x, z] of [[32.8, -80.4], [33.6, -81.2]]) {
+      meshCyl(0.32, 0.32, 0.9, 10, mats.rust, x, 0.45, z);
+      addCollider(x, z, 0.7, 0.7, 0.05, 0.9);
+    }
+    for (const [x, z, w, d] of [[44.2, -72.6, 2.2, 1.4], [43.2, -71.4, 1.8, 1.2]]) {
+      meshBox(w, 0.12, d, mats.wood, x, 0.08, z, 0, { uv: 1.2 });
+      addCollider(x, z, w, d, 0.05, 0.3);
+    }
+
+    // barriers + floodlights
+    for (const [x, z, w, rot] of [[37.4, -77.8, 4.0, 0.03], [39.0, -84.8, 3.4, -0.04], [33.8, -84.0, 3.0, 0.06]]) {
+      meshBox(w, 0.86, 0.52, mats.concrete, x, 0.43, z, rot, { collide: true, uv: 1.4 });
+    }
+    for (const [x, z] of [[31.8, -74.2], [44.4, -86.2]]) {
+      meshCyl(0.1, 0.12, 6.0, 6, mats.metal, x, 3.0, z);
+      meshBox(0.7, 0.22, 0.42, mats.metalTan, x, 6.0, z, 0, { uv: 0.7 });
+      meshBox(0.5, 0.1, 0.3, mats.windowLit, x, 5.86, z + 0.12, 0, { uv: 0.5, cast: false });
+      lightPool(x, z + 0.7, 3.6, 0.22, 0xffb066);
+    }
+
+    // spawns / covers / region
+    spawnPoints.push({ x: 33.0, z: -85.0 }, { x: 42.0, z: -87.0 }, { x: 38.0, z: -73.2 }, { x: 44.0, z: -80.0 });
+    coverPoints.push({ x: 34.0, z: -87.6, h: 1.0 }, { x: 39.0, z: -84.8, h: 0.9 }, { x: 40.4, z: -76.2, h: 1.2 });
   }
 
   function buildSouthYard() {
@@ -3611,6 +3842,7 @@ export function createLevel(engine) {
   buildAlley();
   buildGatehouse();
   buildNorthYard();
+  buildEastDock();
   buildSouthYard();
 
   // ---- fire escapes on the two closest multi-storey fronts
@@ -3882,6 +4114,8 @@ export function createLevel(engine) {
     market: { x: 20.8, z: -10.7, r: 3.8 },
     yard: { x: 0, z: 70, r: 8.0 },
     checkpoint: { x: 0, z: -82, r: 8.0 },
+    north_hq: { x: 10.6, z: -68.6, r: 2.6 },
+    east_dock: { x: 43.5, z: -81, r: 4.5 },
     depot: { x: 11.5, z: 68, r: 4.0 },
   };
   // expose the interior combat points through the legacy arrays too
@@ -3953,6 +4187,8 @@ export function createLevel(engine) {
   /* Coarse rectangles for the HUD location tag and the wayfinder. First hit
      wins, so keep the small / specific areas ahead of the wide fallbacks. */
   const REGIONS = [
+    { id: 'east-dock', name: '东码头', en: 'EAST DOCK', x0: 30, x1: 46, z0: -92, z1: -70 },
+    { id: 'north-hq', name: '北楼', en: 'NORTH HQ', x0: 6.0, x1: 15.0, z0: -75.2, z1: -64.8 },
     { id: 'checkpoint', name: '北检查站', en: 'CHECKPOINT', x0: -30, x1: 30, z0: -96, z1: -66 },
     { id: 'depot-roof', name: '车库屋顶', en: 'DEPOT ROOF', x0: 6.4, x1: 16.6, z0: 61.7, z1: 74.3, minY: 3.0 },
     { id: 'depot', name: '车库', en: 'DEPOT', x0: 6.4, x1: 16.6, z0: 61.8, z1: 74.2 },
@@ -3976,8 +4212,8 @@ export function createLevel(engine) {
   }
 
   return {
-    root, colliders, bulletTargets, spawnPoints, coverPoints, bvhStats,
-    bounds: { x0: -30, x1: 30, z0: -96, z1: 84 },
+    root, colliders, bulletTargets, spawnPoints, coverPoints, bvhStats, breachDoors,
+    bounds: { x0: -30, x1: 46, z0: -96, z1: 84 },
     cqbZones, objectiveZones, regionAt, regions: REGIONS,
     groundHeight, roofZones: ROOF_ZONES, roofSpawns: ROOF_SPAWNS, roofCovers: ROOF_COVERS,
     navLinks: [{ ax: 15.9, az: -12.0, bx: 17.6, bz: -12.0 }],
