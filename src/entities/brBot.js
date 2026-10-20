@@ -250,7 +250,12 @@ export function createBrBot({
   }
 
   /* --------------------------------------------------------------- damage */
-  function takeDamage(dmg, point, part = 'torso') {
+  function takeDamage(dmg, point, partOrNormal, maybePart) {
+    // (dmg, point, part) per the BR API; also tolerate main.js' shot pipeline
+    // calling (dmg, point, normal, part)
+    const part = typeof partOrNormal === 'string'
+      ? partOrNormal
+      : (typeof maybePart === 'string' ? maybePart : 'torso');
     if (!alive) return false;
     deathPart = part;
     hp -= dmg;
@@ -532,6 +537,11 @@ export function createBrBot({
 
   /* -------------------------------------------------------------- update */
   function update(dt, ctx = {}) {
+    // ctx may hand over a newer grid / level (rebakes); prefer it over the
+    // constructor values so a BR host can hot-swap them without recreating bots
+    if (ctx.nav) nav = ctx.nav;
+    if (ctx.level) level = ctx.level;
+    if (Array.isArray(ctx.colliders)) colliders = ctx.colliders;
     animT += dt;
     if (!alive) {
       corpseT += dt;

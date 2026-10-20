@@ -1309,6 +1309,79 @@ Sprint H 的网格只回答“能不能走”，不会回答“值不值得走�
 
 ---
 
-## 40. 最后的话
+## 39.5 外环地图适配补全（新机制随区走）
+
+地图扩到四区后，三处仍硬编码原街区坐标的系统已改为分区感知：
+
+- **空投补给**：落点表按区拆分（`HOT_DROP_ZONES_BY_SITE`），自由玩法/LAN 用当前 site 的候选，战役（site 为空时）按最近区质心回退——北站打波次时空投不会再落在 200 m 外的旧街。
+- **目标区轮换**：`objectiveZone()` 增加 per-district defend/extract 备选表；街区表保留原有室内轮换与 level 基准区，新区锚定 site zone + 附近开阔地，信标不再瞬移回旧图。
+- **情报收集**：INTEL 6 → 12 份，集市/北站/港区各 2 份（水井暗账、平车运单、吊臂字条……文案接原叙事线）；ARCHIVE 占位同步 0/12。
+
+局限：新区情报点位坐标为手摆（未逐点跑图验证拾取提示距离）；港区仍无高位狙击威胁；空投光柱在夜间雾中约 60–70 m 外不可见——设计取舍未改。
+
+---
+
+## 40. AI v2.x：感知 / 协同 / 士气 / 预判（Sprint Y）
+
+### 问题
+
+Sprint X 把 AI 拆成 5 个子模块（perception / director / cover / steering / equipment），之后 X.1 加了破片 / 闪光 / 烟幕和喊话，X.2 做了单人公平性。这一轮仍然不是"再做一次大型改造"，而是把上一轮"仍差"列表里能补的几个真实缺口补上：弹痕不会告诉敌人火线方向、失去视野后就靠噪音位置瞎摸、子弹不会"打过来"的方向感、侧翼很容易堆在同一侧、破门只有一个 stacker 容易被门后的玩家一击头、士气对一名士兵没有任何影响。这些都不是大方向的问题，但合起来决定了"聪明还是机械"。
+
+### 改动
+
+**感知层**（`src/systems/ai/perception.js`）
+
+- **弹痕感知**：每次玩家射击命中物体（墙 / 箱 / 地面），往感知层丢一个 6 s 寿命的"弹痕"。附近的士兵读到这个 crumb，awareness 抬一截，并且累积一个**粗略的火线方向**（反向于碰撞法线）。这给了一个真实世界里枪声能提供、但 AI v2 一直没有的信息：火从哪边打来。
+- **建筑隔音**：旧的 `noise()` 直接给所有士兵加权 awareness。新版通过 `nav.lineWalkable(...)` 判断声源到士兵之间是否被几何遮挡，被遮挡的噪音 awareness 加成 ×0.28。这让二楼 / 后院的枪战不再被街道对角的士兵瞬间听见。
+- **队友阵亡广播**：玩家击杀敌人时，主循环调用 `perception.casualty(x, z, 22)`，附近士兵的 `comradeLostT` 升 3.5 s，awareness 加速上升，并被诱导去调查阵亡点。
+- **新统计字段**：`impacts` / `casualties` 进入 `perception.stats()`，AI 探针可读。
+
+**指挥层**（`src/systems/ai/director.js`）
+
+- **扇区感知 flank 评分**：不再只看士兵自己相对玩家在 X 边，而是统计当前已分配的 flankers 各在几边，给"已经忙的那一边"打 −2.5 分的惩罚，让 D4/D5 的双翼默认分布在两侧而不是同侧。
+- **breachSupport 角色**：当敌人在破门（`breach` 角色），另一名 18 m 内士兵被指派 `breachSupport`，走到距门 9 m 远的覆盖位，给 stacker 提供火力掩护。门被打开时两个角色同时释放回 `assault`。
+- **squadMorale**：每帧统计 `comradeLostT > 0` 的士兵数，算 `1 - casualties/6 * 0.18`，存到 `this.squadMorale`。士气 < 0.95 时 `budgets()` 自动把一个 flank 槽换成 hold —— 队伍在流血时不主动分兵。
+- **新喊话**：`down`（伤亡升级时自动喊）与 `regroup`（≥3 名士兵同时被压制且有伤亡时喊）。后者把"被压制"和"队伍重组"两个信号合起来，让玩家读到"squad is bleeding + squad is pinned"时是一个有意义的转折。
+
+**掩体层**（`src/systems/ai/cover.js`）
+
+- `requestCover()` 接受一个 `threat` 参数（即 enemy.fireBearingX/Z，0.8 s 内新鲜）：火线方向上的掩体 −1.6 分（士兵仍能躲但视线方向不对），偏轴方向 +0.6 分。这让士兵在被火力覆盖后自动换到"侧后"的掩体，而不是走回同一个掩体。
+
+**射击层**（`src/entities/enemy.js`）
+
+- **Lead 预判**：主循环现在估算 `playerDirX/Z`（基于相机位置帧间差，平滑到单帧抖动不翻转），传进 `enemyCtx`。`shoot()` 用它算 lead 偏移：rifleman ×0.16, rusher ×0.10, sniper ×0.32，散布基线上叠加 lead。命中率也根据 lead 投影微调。
+- **squadMorale mul**：士兵命中率再乘 `squadMorale` 的 ±4% 修正，并叠加 `comradeLostT` 单兵调整。一名刚失去 4 名队友的士兵仍在 0.85 精度下作战。
+- **低血量 panic**：rifleman 低于 36 % HP 时 `panicT = 4.2 s`，`aimSettle` 上限降到 0.62，并持续注入 ±0.05 的 sin jitter。shield / sniper / rusher 不动 —— 保持 archetype 各自的"硬"感。
+- **breachSupport 状态**：`update(dt)` 中增加 `role === 'breachSupport'` 的处理；advance 状态根据距门远近选"到达 → 距门 9 m 覆盖位 → 横向移动"三段路径。
+- **breachSupport 不冲脸**：选人时 `archetype === 'rusher'` 直接跳过（rusher 的 archetype 就是莽，给它 hold 角色它也立刻冲脸）。sniper / shield / rifleman 都可以。engage 状态下 breachSupport 不会按 archetype 默认分支朝玩家推进，而是 (a) 偏离 9 m 太远时缓慢回到支持线，(b) 在支持线上横向 strafe。followPath 也用门位代替玩家位置作为寻路目标 —— 否则 A* 会把支援手一路引到玩家脸上。
+
+**辅助修改**
+
+- `barks.js` 增加 `regroup` / `takingFire` 两种台词槽和冷却；`COOLDOWN.down` 由 9000 ms 降到 7000 ms（伤亡事件最常发生，给短一点冷却让玩家持续读到"队伍在掉人"）。
+- `main.js` 把 `playerDirX / playerDirZ` 写进 `enemyCtx`，并调用 `perception.casualty(...)`（玩家击杀）和 `perception.impact(...)`（子弹命中）。
+- 一些 enemy 字段初始化：`comradeLostT / fireBearingX/Z / fireBearingT / panicT`。
+
+### 验证
+
+- `npm run build`：123 modules transformed. / dist JS 1327.93 KB / gzip 399.12 KB。
+- **AI 探针**（`tools/ai-probe.mjs`，headless Chrome，D3 wave 5 AUTO=1，18 s）：
+  - 旧基线（D3 / wave 5）：未直接采集
+  - 本轮：groundSamples=597、idleGroundPct=1.2、minPairAvg=5.07、pairOverlapPerSample=0.08、impacts=29
+- **AI 探针**（D4 wave 9 AUTO=1，30 s）：
+  - groundSamples=902、idleGroundPct=0.6、minPairAvg=7.32、pairOverlapPerSample=0.06、impacts=29
+- 与 Sprint X.2（无 AUTO）D4/wave 8 的 7 采样 `idleGroundPct 3.3` / `minPairAvg 9.64` 相比，idle 比例大幅下降、最小间距显著增加 —— 士兵不再叠在一起。
+- 头文件状态：与原版相比 `impacts / casualties` 都暴露在 `perception.stats()` 中；下游 debug API 可读。
+
+### 仍差
+
+- lead 用的是"玩家位置帧间差"近似法，**不是真实手抓取 player.vel**。遇到 teleport / 玩家立刻停下 → 重新冲刺 时 lead 偏一次（已被 0.5 平滑缓解，但不完美）。
+- `breachSupport` 已排除 rusher，但 archetype 间没有偏好排序（rifleman / sniper / shield 都可）。 sniper 实际到达时间被 speed 拖慢，但 hire 还是最稳的覆盖手 —— 没单独偏 sniper，因为 rifleman 已经在 80% 的交战里当 sniper 用。
+- `regroup` 喊话只看"被压制 ≥ 3 人"，还没把"hp 低于某阈值"或"被击中次数 ≥ N"作为额外信号。
+- panic 只对 rifleman 生效，rusher 还是会狂冲 —— 这是有意的（rusher 的人设就是莽），但需要长跑验证 D5 不会因为 panic 反而太软。
+- 玩家击杀 `perception.casualty` 没有排除自己被击杀（玩家死时调用） —— 这条路径在网络死亡时未触发，目前无副作用，但值得记录。
+
+---
+
+## 41. 最后的话
 
 3A FPS 的"完美"来自数百人年的资产生产、动作捕捉、扫描材质、烘焙全局光照与主机级管线；WebGL 单页 + 程序化生成能做到的是**方向正确、系统完整、可玩、可持续迭代**。这份工程在 3 轮内把评委分数从 2.4 推到 4.7，并让硬指标的 5 项里 3 项达标（最终轮两项曝光指标也已达标）。它不是 CoD，也不需要假装是。

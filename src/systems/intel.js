@@ -11,6 +11,13 @@ const SPOTS = [
   { id: 'roster', x: 6.2, y: 0.9, z: -61.0 },
   { id: 'order', x: 11.4, y: 1.1, z: -66.3 },
   { id: 'exfil', x: 41.8, y: 0.9, z: -76.8 },
+  /* expansion districts — two per district so intel play pays off everywhere */
+  { id: 'souk_ledger', x: -73.4, y: 0.9, z: 10.8 },
+  { id: 'souk_route', x: -53.2, y: 0.9, z: 13.2 },
+  { id: 'rail_waybill', x: 15.0, y: 1.62, z: -159.2 },
+  { id: 'rail_signal', x: 5.2, y: 0.9, z: -148.6 },
+  { id: 'port_tally', x: 78.8, y: 0.95, z: 25.8 },
+  { id: 'port_note', x: 82.8, y: 0.95, z: 12.6 },
 ];
 
 export function createIntel({ scene, mats }) {

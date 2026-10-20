@@ -405,12 +405,77 @@ export function createAudio() {
 
   function setMasterVolume(v) { if (master) master.gain.value = v; }
 
+  /* ------------------------------------------------------- weather loops */
+  /* 程序化天气层：雨（宽带白噪 + 高频嘶声）、风（低通噪声 + 慢速 LFO 阵风）、
+     雷（低通噪声爆衰减 + 亚低频轰）。循环节点常驻、gain 淡入淡出，无逐帧 CPU 开销。 */
+
+  let rainSrc = null, rainGain = null, rainHiss = null;
+  let windSrc = null, windGain = null, windLfo = null;
+
+  function ensureWeatherLoops() {
+    if (!ctx || rainSrc) return;
+    // 雨：宽带噪声循环
+    rainGain = ctx.createGain(); rainGain.gain.value = 0;
+    const rlp = ctx.createBiquadFilter(); rlp.type = 'lowpass'; rlp.frequency.value = 2400; rlp.Q.value = 0.4;
+    rainSrc = ctx.createBufferSource(); rainSrc.buffer = noiseBuf; rainSrc.loop = true;
+    rainSrc.connect(rlp).connect(rainGain).connect(master);
+    // 高频嘶声层（雨点打硬地的碎感）
+    rainHiss = ctx.createGain(); rainHiss.gain.value = 0;
+    const rhp = ctx.createBiquadFilter(); rhp.type = 'highpass'; rhp.frequency.value = 5200;
+    const hissSrc = ctx.createBufferSource(); hissSrc.buffer = noiseBuf; hissSrc.loop = true; hissSrc.playbackRate.value = 1.31;
+    hissSrc.connect(rhp).connect(rainHiss).connect(master);
+    rainSrc.start(); hissSrc.start();
+    // 风：低通噪声 + 0.13Hz LFO 同时调制滤波频率与增益，模拟阵风起伏
+    windGain = ctx.createGain(); windGain.gain.value = 0;
+    const wlp = ctx.createBiquadFilter(); wlp.type = 'lowpass'; wlp.frequency.value = 420; wlp.Q.value = 0.9;
+    windSrc = ctx.createBufferSource(); windSrc.buffer = noiseBuf; windSrc.loop = true; windSrc.playbackRate.value = 0.83;
+    windSrc.connect(wlp).connect(windGain).connect(master);
+    windLfo = ctx.createOscillator(); windLfo.frequency.value = 0.13;
+    const lfoF = ctx.createGain(); lfoF.gain.value = 180;
+    windLfo.connect(lfoF).connect(wlp.frequency);
+    const windLfoAmp = ctx.createGain(); windLfoAmp.gain.value = 0;
+    const lfoG = ctx.createGain(); lfoG.gain.value = 1;
+    windLfo.connect(lfoG).connect(windLfoAmp.gain);
+    windLfo.start();
+    windGain._amp = windLfoAmp; windGain._ampBase = 0;
+    windLfoAmp.connect(windGain.gain);
+  }
+
+  /** 雨声强度 0..1（weather.rain 直接映射） */
+  function setRainLevel(k) {
+    if (!ctx) return;
+    ensureWeatherLoops();
+    const t = ctx.currentTime, k2 = Math.max(0, Math.min(1, k));
+    rainGain.gain.setTargetAtTime(0.14 * k2, t, 1.2);
+    rainHiss.gain.setTargetAtTime(0.05 * k2 * k2, t, 1.2);
+  }
+
+  /** 风声强度 0..1（由风力映射） */
+  function setWindLevel(k) {
+    if (!ctx) return;
+    ensureWeatherLoops();
+    const t = ctx.currentTime, k2 = Math.max(0, Math.min(1, k));
+    windGain._ampBase = 0.16 * k2;
+    windGain._amp.gain.setTargetAtTime(0.35 * k2, t, 1.5);
+    windGain.gain.setTargetAtTime(windGain._ampBase, t, 1.5);
+  }
+
+  /** 一声雷：低通噪声爆 + 亚低频轰 + 远处二次滚雷 */
+  function thunder(distance = 0.5) {
+    if (!ctx) return;
+    const g = Math.max(0.25, 1 - distance);
+    noise({ dur: 1.6 + Math.random() * 1.6, type: 'lowpass', f0: 900, f1: 90, gain: 0.5 * g, send: 0.45 });
+    tone({ type: 'sine', f0: 110, f1: 30, dur: 2.2, gain: 0.42 * g, send: 0.3, delay: 0.06 });
+    noise({ dur: 2.4, type: 'lowpass', f0: 320, f1: 60, gain: 0.18 * g, send: 0.4, delay: 0.5 + Math.random() * 0.7 });
+  }
+
   return {
     init, resume, gunshot, enemyShot, whiz, reload, shell, impact, ricochet,
     explosion, footstep, hitmarker, ui, uiConfirm, death, hurt, killConfirm,
     ambient, stopAmbient, setLowHealth, setMasterVolume,
     enemyBark, ringing, grenadeBeep, doorBreach, flashbang, smokePop,
     loadBuffer, playBuffer,
+    setRainLevel, setWindLevel, thunder,
     get ctx() { return ctx; },
     get debug() {
       return {

@@ -15,6 +15,7 @@ export const DEFAULT_SETTINGS = {
   master: 0.58,         // master volume 0-1
   reduceMotion: false,  // damp head bob / shake
   quality: 'high',      // low | medium | high | ultra
+  fpsCap: 60,           // 0 = uncapped; 30/60/120 — capping is the single biggest heat lever on 120Hz+ displays
   runMode: 'campaign',  // campaign | rotation | survival | defend | extract
   wayfinder: true,      // HUD area names + route marker to the apartment / backyard
   primary: 'm4',        // m4 | mk18 — which rifle you spawn with
@@ -32,6 +33,7 @@ export function sanitizeSettings(input = {}) {
   s.invertY = !!s.invertY;
   s.reduceMotion = !!s.reduceMotion;
   if (!['low', 'medium', 'high', 'ultra'].includes(s.quality)) s.quality = 'high';
+  s.fpsCap = [0, 30, 60, 120].includes(Number(s.fpsCap)) ? Number(s.fpsCap) : 60;
   if (!['campaign', 'rotation', 'survival', 'defend', 'extract'].includes(s.runMode)) s.runMode = 'campaign';
   s.wayfinder = s.wayfinder !== false;
   s.primary = s.primary === 'mk18' ? 'mk18' : 'm4';

@@ -284,9 +284,12 @@ export function createFX(scene, mats) {
       sz[i] = o.size;
     }
 
+    let wasAlive = false;
     function update(dt) {
+      let alive = false;
       for (let i = 0; i < max; i++) {
         if (life[i] <= 0) continue;
+        alive = true;
         const i3 = i * 3;
         life[i] -= dt;
         if (life[i] <= 0) {
@@ -318,6 +321,9 @@ export function createFX(scene, mats) {
           vel[i3] *= 0.6; vel[i3 + 2] *= 0.6;
         }
       }
+      // upload only when something moved — or once more to push the final clear
+      if (!alive && !wasAlive) return;
+      wasAlive = alive;
       aPos.needsUpdate = true;
       aColor.needsUpdate = true;
       aSize.needsUpdate = true;
@@ -495,9 +501,12 @@ export function createFX(scene, mats) {
     sparkBase[i3] = _c.r * k; sparkBase[i3 + 1] = _c.g * k; sparkBase[i3 + 2] = _c.b * k;
   }
 
+  let sparksAlive = false;
   function updateSparks(dt) {
+    let alive = false;
     for (let i = 0; i < MAX_SPARKS; i++) {
       if (sparkLife[i] <= 0) continue;
+      alive = true;
       const i3 = i * 3;
       sparkLife[i] -= dt;
       if (sparkLife[i] <= 0) {
@@ -525,6 +534,9 @@ export function createFX(scene, mats) {
       spCol[i3 + 1] = sparkBase[i3 + 1] * fade;
       spCol[i3 + 2] = sparkBase[i3 + 2] * fade;
     }
+    // skip the GPU upload when the pool is idle (one last upload pushes the clear)
+    if (!alive && !sparksAlive) return;
+    sparksAlive = alive;
     spPosAttr.needsUpdate = true;
     spColAttr.needsUpdate = true;
     spSizeAttr.needsUpdate = true;
@@ -565,6 +577,7 @@ export function createFX(scene, mats) {
     });
   }
   let tracerCursor = 0;
+  let prevTracerN = 0;
 
   function tracer(from, to, opts) {
     opts = opts || {};
@@ -609,6 +622,9 @@ export function createFX(scene, mats) {
       n++;
     }
     tracerGeo.setDrawRange(0, n * TR_VERTS);
+    // upload only while beams live (plus one final frame to clear them)
+    if (n === 0 && prevTracerN === 0) return;
+    prevTracerN = n;
     trPosAttr.needsUpdate = true;
     trColAttr.needsUpdate = true;
   }
@@ -1273,10 +1289,15 @@ export function createFX(scene, mats) {
 
   /* ------------------------------------------------------------------ update */
   let clock = 0;
+  let resW = 0, resH = 0;
   function update(dt) {
     clock += dt;
     const pr = Math.min(window.devicePixelRatio || 1, 1.5);
-    U.res.value.set(window.innerWidth * pr, window.innerHeight * pr);
+    const w = window.innerWidth * pr, h = window.innerHeight * pr;
+    if (w !== resW || h !== resH) {   // reading innerWidth forces layout; don't re-write the uniform too
+      resW = w; resH = h;
+      U.res.value.set(w, h);
+    }
 
     updateSparks(dt);
     addPool.update(dt);

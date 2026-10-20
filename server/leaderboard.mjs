@@ -570,6 +570,29 @@ function validateRun(raw) {
     };
   }
 
+  // Cross-field rate caps. Generous on purpose: they must never reject a real
+  // run (fastest weapon is ~14 rounds/s, pellets included), only catch scripts
+  // that submit impossible throughput.
+  if (raw.kills > raw.shots) {
+    return { ok: false, error: 'inconsistent_run', message: 'kills 不能大于 shots（每杀至少消耗一发）' };
+  }
+  const killRateCap = Math.floor(raw.durationMs / 1000) * 4 + 8;
+  if (raw.kills > killRateCap) {
+    return {
+      ok: false,
+      error: 'inconsistent_run',
+      message: `kills 相对时长过高（${raw.kills} 杀 > 上限 ${killRateCap}）`,
+    };
+  }
+  const shotRateCap = Math.floor(raw.durationMs / 1000) * 20 + 40;
+  if (raw.shots > shotRateCap) {
+    return {
+      ok: false,
+      error: 'inconsistent_run',
+      message: `shots 相对时长过高（${raw.shots} 发 > 上限 ${shotRateCap}）`,
+    };
+  }
+
   return {
     ok: true,
     mode: raw.mode,

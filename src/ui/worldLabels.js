@@ -74,10 +74,16 @@ export function createWorldLabels({ camera, level } = {}) {
   const _origin = new THREE.Vector3();
   const _target = new THREE.Vector3();
   const _ray = new THREE.Raycaster();
+  _ray.firstHitOnly = true;   // three-mesh-bvh: first hit per mesh is enough for occlusion
   const _blocked = new Map();
   let occlT = 0;
   let on = true;
   const visibleSet = new Set();
+  // candidate pool: allocating {t,dist,dot} per POI per frame cost ~900 allocs/sec
+  const _cand = [];
+  const _candPool = [];
+  let acc = 1;               // start hot so the first frame populates immediately
+  const FRAME = 1 / 30;      // 30 Hz DOM projection — half the layout writes, still smooth
 
   function setVisible(v) {
     on = !!v;
@@ -86,11 +92,14 @@ export function createWorldLabels({ camera, level } = {}) {
 
   function update(dt, playerPos, cameraForward) {
     if (!on) return;
+    acc += dt;
+    if (acc < FRAME) return;
+    acc = 0;
     const cam = camera;
     const fwd = cameraForward || cam.getWorldDirection(_fwd);
     const w = host.clientWidth || window.innerWidth;
     const h = host.clientHeight || window.innerHeight;
-    const cand = [];
+    _cand.length = 0;
     for (const t of tags) {
       const dx = t.p.x - cam.position.x;
       const dz = t.p.z - cam.position.z;
@@ -99,18 +108,23 @@ export function createWorldLabels({ camera, level } = {}) {
       const inv = 1 / Math.max(0.001, dist);
       const dot = (dx * fwd.x + dz * fwd.z) * inv;
       if (dot < 0.12) { t.visible = false; continue; }
-      cand.push({ t, dist, dot });
+      const c = _candPool.pop() || { t: null, dist: 0, dot: 0 };
+      c.t = t; c.dist = dist; c.dot = dot;
+      t._d = Math.round(dist);
+      _cand.push(c);
     }
-    cand.sort((a, b) => a.dist - b.dist);
+    _cand.sort((a, b) => a.dist - b.dist);
     // Occlusion: a wall between the camera and the label hides it. This also
     // stops district tags leaking through the walls when the player is indoors.
-    occlT -= dt;
+    occlT -= FRAME;
     if (occlT <= 0) {
       occlT = 0.22;
       const objects = level && level.bulletTargets ? level.bulletTargets : null;
       if (objects) {
         _origin.copy(cam.position);
-        for (const c of cand.slice(0, 6)) {
+        const n = Math.min(_cand.length, 6);
+        for (let i = 0; i < n; i++) {
+          const c = _cand[i];
           _target.set(c.t.p.x, c.t.p.y, c.t.p.z);
           _ray.set(_origin, _target.sub(_origin).normalize());
           _ray.far = Math.max(1, c.dist - 0.8);
@@ -119,25 +133,40 @@ export function createWorldLabels({ camera, level } = {}) {
         }
       }
     }
-    const keep = cand.filter((c) => !_blocked.get(c.t)).slice(0, 4);
     visibleSet.clear();
-    for (const c of keep) visibleSet.add(c.t);
+    let kept = 0;
+    for (const c of _cand) {
+      if (kept >= 4) break;
+      if (_blocked.get(c.t)) continue;
+      visibleSet.add(c.t);
+      kept++;
+    }
+    // recycle the candidate objects for the next frame
+    for (const c of _cand) _candPool.push(c);
     for (const t of tags) {
       if (!visibleSet.has(t)) {
-        if (t.visible) { t.el.style.opacity = '0'; t.visible = false; }
+        if (t.visible) { t.el.style.opacity = '0'; t.visible = false; t._tx = null; }
         continue;
       }
       t.visible = true;
       _proj.set(t.p.x, t.p.y, t.p.z).project(cam);
-      if (_proj.z > 1 || _proj.z < -1) { t.el.style.opacity = '0'; continue; }
-      const x = (_proj.x * 0.5 + 0.5) * w;
-      const y = (-_proj.y * 0.5 + 0.5) * h;
-      const d = Math.round(cand.find((c) => c.t === t)?.dist || 0);
+      if (_proj.z > 1 || _proj.z < -1) {
+        if (t._tx !== null) { t.el.style.opacity = '0'; t._tx = null; }
+        continue;
+      }
+      // quantize to 0.5px / 0.01 so we only touch style when something moved
+      const x = Math.round(((_proj.x * 0.5 + 0.5) * w) * 2) / 2;
+      const y = Math.round(((-_proj.y * 0.5 + 0.5) * h) * 2) / 2;
+      const d = t._d || 0;
       if (d !== t.last) { t.last = d; t.dist.textContent = `${d}m`; }
-      const scale = Math.max(0.72, Math.min(1, 1.18 - d / 160));
-      const op = Math.max(0.32, Math.min(0.92, 0.95 - d / 120));
-      t.el.style.transform = `translate(-50%,-100%) translate(${x.toFixed(1)}px,${y.toFixed(1)}px) scale(${scale.toFixed(2)})`;
-      t.el.style.opacity = op.toFixed(2);
+      const scale = Math.max(0.72, Math.min(1, Math.round((1.18 - d / 160) * 100) / 100));
+      const op = Math.max(0.32, Math.min(0.92, Math.round((0.95 - d / 120) * 100) / 100));
+      const key = x + ',' + y + ',' + scale;
+      if (key !== t._tx) {
+        t._tx = key;
+        t.el.style.transform = `translate(-50%,-100%) translate(${x.toFixed(1)}px,${y.toFixed(1)}px) scale(${scale.toFixed(2)})`;
+      }
+      if (op !== t._op) { t._op = op; t.el.style.opacity = op.toFixed(2); }
     }
   }
 

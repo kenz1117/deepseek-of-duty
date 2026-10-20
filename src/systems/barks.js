@@ -24,6 +24,8 @@ const LINES = {
   flank:    ['我从侧面上去！', '包抄他！'],
   suppress: ['压制住他！', '别让他抬头！'],
   down:     ['有人倒了！', '失去一个兄弟！'],
+  regroup:  ['重组！', '换位置！', '走！撤到掩体！'],
+  takingFire: ['被压制！', '火力太猛！'],
 };
 
 const VOICE_BASE = '/audio/voice/enemy/';
@@ -36,6 +38,8 @@ const VOICE_FILES = {
   flank:    ['flank_1.mp3'],
   suppress: ['suppress_1.mp3'],
   down:     ['down_1.mp3'],
+  regroup:  ['regroup_1.mp3'],
+  takingFire: ['taking_fire_1.mp3'],
 };
 
 const COOLDOWN = {
@@ -46,7 +50,9 @@ const COOLDOWN = {
   breach: 9000,
   flank: 8500,
   suppress: 9000,
-  down: 9000,
+  down: 7000,
+  regroup: 9000,
+  takingFire: 7500,
 };
 
 import * as THREE from 'three';

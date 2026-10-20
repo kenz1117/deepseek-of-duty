@@ -26,6 +26,10 @@ export function createController(camera, colliders, bounds, audio, groundProvide
   const SPEED = { walk: 4.3, sprint: 7.0, crouch: 2.2, ads: 2.9 };
   const radius = 0.36;
   const state = { speed: 0, moving: false, sprinting: false, crouching: false, ads: false };
+  // per-frame basis vectors, hoisted: fresh Vector3s here cost ~180 allocs/sec
+  const forward = new THREE.Vector3();
+  const right = new THREE.Vector3();
+  const wish = new THREE.Vector3();
 
   function collides(x, z, y = pos.y) {
     for (const c of colliders) {
@@ -82,9 +86,9 @@ export function createController(camera, colliders, bounds, audio, groundProvide
     const len = Math.hypot(mx, mz);
     if (len > 0) { mx /= len; mz /= len; }
 
-    const forward = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw));
-    const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
-    const wish = new THREE.Vector3().addScaledVector(forward, mz).addScaledVector(right, mx);
+    forward.set(-Math.sin(yaw), 0, -Math.cos(yaw));
+    right.set(Math.cos(yaw), 0, -Math.sin(yaw));
+    wish.set(0, 0, 0).addScaledVector(forward, mz).addScaledVector(right, mx);
 
     let targetSpeed = 0;
     if (len > 0) {

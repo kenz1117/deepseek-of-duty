@@ -13,16 +13,34 @@ class HalfSSAOPass extends SSAOPass {
   }
   // Decals, glass, sky and particles have no meaningful normals; feeding them
   // to the normal pass creates halos (the puddle ring). Hide them from AO.
+  // The base implementation traverses the WHOLE scene twice per frame
+  // (override + restore, with a Map write per object). The hide-set changes
+  // only when the scene does, so classify into a cached list rebuilt a few
+  // times per second and just flip visibility on the members.
   overrideVisibility() {
-    const scene = this.scene;
-    const cache = this._visibilityCache;
-    scene.traverse((object) => {
-      cache.set(object, object.visible);
-      if (object.isPoints || object.isLine) { object.visible = false; return; }
-      const m = Array.isArray(object.material) ? object.material[0] : object.material;
-      if (object.userData && object.userData.noAO) { object.visible = false; return; }
-      if (m && (m.transparent || m.depthWrite === false || m.alphaTest > 0)) object.visible = false;
-    });
+    const now = performance.now();
+    if (!this._aoList || now - this._aoListAt > 400) {
+      this._aoListAt = now;
+      const list = [];
+      this.scene.traverse((object) => {
+        if (object.isPoints || object.isLine) { list.push(object); return; }
+        if (object.userData && object.userData.noAO) { list.push(object); return; }
+        const m = Array.isArray(object.material) ? object.material[0] : object.material;
+        if (m && (m.transparent || m.depthWrite === false || m.alphaTest > 0)) list.push(object);
+      });
+      this._aoList = list;
+    }
+    const changed = this._aoChanged || (this._aoChanged = []);
+    changed.length = 0;
+    for (const o of this._aoList) {
+      if (o.visible) { o.visible = false; changed.push(o); }
+    }
+  }
+  restoreVisibility() {
+    const changed = this._aoChanged;
+    if (!changed) return;
+    for (const o of changed) o.visible = true;
+    changed.length = 0;
   }
 }
 
@@ -149,9 +167,12 @@ export function createEngine(canvas, quality = 'high') {
 
   const state = {
     quality, fps: 60, frame: 0,
-    // dynamic resolution: scales the preset pixel ratio to hold ~60 fps
+    // dynamic resolution: scales the preset pixel ratio to hold the frame budget
     renderScale: 1, basePR: Math.min(window.devicePixelRatio || 1, q.pixelRatio),
     emaMs: 16.7, lastAdjust: 0,
+    // frame budget tracks the fps cap: capping at 30 fps makes frames ~33 ms,
+    // which must NOT read as "slow frame" or resolution would degrade for nothing
+    frameBudgetMs: 16.7,
   };
 
   function onResize() {
@@ -233,14 +254,23 @@ export function createEngine(canvas, quality = 'high') {
     if (state.quality === 'low') return;
     const now = performance.now();
     if (now - state.lastAdjust < 1600) return;
+    const budget = state.frameBudgetMs;
     let next = state.renderScale;
-    if (state.emaMs > 19.5 && next > 0.72) next = Math.max(0.72, next - 0.08);
-    else if (state.emaMs < 12.5 && next < 1) next = Math.min(1, next + 0.05);
+    if (state.emaMs > budget * 1.17 && next > 0.72) next = Math.max(0.72, next - 0.08);
+    else if (state.emaMs < budget * 0.75 && next < 1) next = Math.min(1, next + 0.05);
     state.lastAdjust = now;
     if (Math.abs(next - state.renderScale) < 0.001) return;
     state.renderScale = next;
     renderer.setPixelRatio(state.basePR * next);
     post.resize(window.innerWidth, window.innerHeight, renderer.getPixelRatio());
+  }
+
+  function setFrameBudget(fpsCap) {
+    state.frameBudgetMs = fpsCap > 0 ? 1000 / fpsCap : 16.7;
+    // reset the EMA too: it still carries the OLD cap's frame time, which
+    // would otherwise read as "slow frames" and trigger phantom downscaling
+    state.emaMs = state.frameBudgetMs;
+    state.lastAdjust = performance.now();
   }
 
   function render(dt) {
@@ -306,7 +336,7 @@ export function createEngine(canvas, quality = 'high') {
 
   return {
     renderer, scene, camera, sky, sun, fill, mats, post, state, addOverlay, applyAtmosphere, enableSSAO,
-    update, render, setQuality, onResize,
+    update, render, setQuality, setFrameBudget, onResize,
     get renderScale() { return state.renderScale; },
     get quality() { return state.quality; },
     resize: onResize,
