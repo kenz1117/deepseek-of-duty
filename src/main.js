@@ -82,6 +82,45 @@ const ADS_RECOIL = 0.60;
 const MOVE_SPREAD = 0.60;   // was 1.4 => 2.4x spread while moving, now 1.6x
 
 const campaign = loadCampaign();
+
+/* Playlist/LAN site rotation: free runs are not locked to the central street. */
+const MAP_SITES = [
+  {
+    id: 'street', name: 'AL-MAZRAH 街区', en: 'STREET',
+    x: 1.2, z: 33, yaw: -0.03,
+    rect: { x0: -28, x1: 44, z0: -28, z1: 82 },
+    zone: { x: 0, z: 14, r: 8 },
+  },
+  {
+    id: 'souk', name: '老城集市', en: 'OLD SOUK',
+    x: -96, z: 46, yaw: 1.7,
+    rect: { x0: -116, x1: -40, z0: -42, z1: 72 },
+    zone: { x: -74, z: 12, r: 6 },
+  },
+  {
+    id: 'rail', name: '北站货场', en: 'RAIL DEPOT',
+    x: 0, z: -165, yaw: Math.PI,
+    rect: { x0: -38, x1: 42, z0: -194, z1: -106 },
+    zone: { x: 4, z: -150, r: 7 },
+  },
+  {
+    id: 'port', name: '东港集装箱场', en: 'CONTAINER YARD',
+    x: 80, z: -80, yaw: 3.7,
+    rect: { x0: 48, x1: 122, z0: -98, z1: 34 },
+    zone: { x: 98, z: -44, r: 6 },
+  },
+];
+let playlistSiteCursor = Math.floor(Math.random() * MAP_SITES.length);
+
+function nextPlaylistSite() {
+  const site = MAP_SITES[playlistSiteCursor % MAP_SITES.length];
+  playlistSiteCursor = (playlistSiteCursor + 1) % MAP_SITES.length;
+  return site;
+}
+
+function siteById(id) {
+  return MAP_SITES.find((s) => s.id === id) || MAP_SITES[0];
+}
 let campaignActive = false;
 
 const G = {
@@ -984,7 +1023,7 @@ function setupObjective(n) {
   if (mode === 'survival') { hideObjectiveUI(); return; }
   const zone = (G.operation && G.operation.zone)
     ? { ...G.operation.zone }
-    : objectiveZone(mode === 'defend' ? 'defend' : 'extract');
+    : (G.site ? { ...G.site.zone } : objectiveZone(mode === 'defend' ? 'defend' : 'extract'));
   G.objective = {
     type: mode,
     zone,
@@ -1667,7 +1706,8 @@ function startGame(lock = true, silent = false) {
   if (results) results.hide();
   resetGame();
   // the mission is assigned after the reset, which clears the previous run
-  G.operation = activeOperation();
+  if (G.settings && G.settings.runMode !== 'campaign') campaignActive = false;
+  G.operation = campaignActive ? activeOperation() : null;
   if (G.operation && G.operation.id === 10 && !mothAlly) spawnMoth();
   if (voice) voice.stop();
   if (G.settings && G.settings.primary === 'mk18') applyWeaponSwitch(1);
@@ -1675,9 +1715,18 @@ function startGame(lock = true, silent = false) {
   hudEl.classList.remove('hidden');
   viewmodel.root.visible = true;
   G.state = 'playing';
-  const st = G.operation && G.operation.start;
-  controller.revive(st ? st.x : 1.2, st ? st.z : 33);
-  controller.setLook(st ? (st.yaw || 0) : -0.03, -0.015);
+  let spawn = G.operation && G.operation.start;
+  if (spawn) {
+    G.site = null;
+    G.playRect = null;
+  } else {
+    // free play / LAN uses the whole outer ring, not just the main street
+    G.site = nextPlaylistSite();
+    G.playRect = G.site.rect;
+    spawn = G.site;
+  }
+  controller.revive(spawn ? spawn.x : 1.2, spawn ? spawn.z : 33);
+  controller.setLook(spawn ? (spawn.yaw || 0) : -0.03, -0.015);
   if (!silent) audio.uiConfirm();
   startWave(1);
   if (!SHOT_MODE && !G.tutorial.done) beginTutorial();
@@ -1718,6 +1767,8 @@ function resetGame() {
   G.lastShotAt = -1e9;
   G.tut = { reloads: 0, grenades: 0, swaps: 0, minimap: 0, interacts: 0, jumps: 0 };
   G.operation = null;
+  G.site = null;
+  G.playRect = null;
   G.boss = null;
   G.diff = DIFF_TIERS[0];
   firingSlots.max = G.diff.maxFiring;
@@ -1849,7 +1900,7 @@ function startWave(n) {
   G.spawnQueue = [];
   const playerPos = controller.pos;
   let allowedSpawns = level.spawnPoints.filter(isSpawnAllowed);
-  const sr = G.operation && G.operation.spawnRect;
+  const sr = (G.operation && G.operation.spawnRect) || G.playRect;
   if (sr) {
     const inside = allowedSpawns.filter((p) => p.x >= sr.x0 && p.x <= sr.x1 && p.z >= sr.z0 && p.z <= sr.z1);
     if (inside.length >= 2) allowedSpawns = inside;
@@ -3402,7 +3453,7 @@ function onLanSnapshot(snap) {
   if (!snap || net.role === 'host') return;
   if (!net.started) {
     if (!lanSession) return;
-    startLanClientGame();
+    startLanClientGame(snap.site);
   }
   if (net.role === 'client') {
     try { applyLanSnapshot(snap); }
@@ -3422,7 +3473,7 @@ function onLanEvent(msg) {
   }
   if (msg.t !== 'event') return;
   if (msg.kind === 'start' && net.role === 'client' && !net.started) {
-    startLanClientGame();
+    startLanClientGame(msg.site);
     return;
   }
   if (msg.target && String(msg.target) !== String(net.selfId)) return;
@@ -3667,6 +3718,7 @@ function sendLanSnapshot() {
   }
   lanSession.broadcastSnapshot({
     tick: ++net.tick, players, enemies: es,
+    site: G.site && G.site.id,
     wave: G.wave, kills: G.kills, score: G.score,
     objective: G.objective ? { type: G.objective.type, done: !!G.objective.done } : null,
   });
@@ -3687,13 +3739,13 @@ function startLanHostGame() {
   G.tutorial.active = false;
   startGame(false, true);
   G.state = 'playing';
-  if (lanSession) lanSession.broadcastEvent('start', { wave: 1 });
+  if (lanSession) lanSession.broadcastEvent('start', { wave: 1, site: G.site && G.site.id });
   if (lanLobby) lanLobby.setPlayers(lanSession.players || []);
   syncLanAvatars(lanSession.players || []);
   if (hud && hud.toast) hud.toast('LAN CO-OP · 等待队友');
 }
 
-function startLanClientGame() {
+function startLanClientGame(siteId = 'street') {
   if (net.started) return;
   // LAN START is a host event, not a local gesture; browsers may deny this.
   requestGameFullscreen();
@@ -3712,8 +3764,10 @@ function startLanClientGame() {
   menuEl.classList.add('hidden');
   hudEl.classList.remove('hidden');
   viewmodel.root.visible = true;
-  controller.revive(3.4, 33.6);
-  controller.setLook(-0.03, -0.015);
+  G.site = siteById(siteId);
+  G.playRect = G.site.rect;
+  controller.revive(G.site.x + 2.2, G.site.z + 1.0);
+  controller.setLook(G.site.yaw || -0.03, -0.015);
   G.wave = 1;
   G.reserve = Math.max(G.reserve, 240);
   hideObjectiveUI();
@@ -3731,8 +3785,8 @@ function respawnLanLocal() {
   G.armor = G.maxArmor;
   G.reserve = Math.max(G.reserve, 240);
   G.state = 'playing';
-  controller.revive(3.4, 33.6);
-  controller.setLook(-0.03, -0.015);
+  controller.revive((G.site ? G.site.x : 1.2) + 2.2, (G.site ? G.site.z : 33) + 1.0);
+  controller.setLook((G.site && G.site.yaw) || -0.03, -0.015);
   viewmodel.state.dead = false;
   if (hud) { hud.setHealth(G.hp, pipsFor(G.armor)); hud.setHint(''); }
 }
