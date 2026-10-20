@@ -17,6 +17,7 @@ import { createArtillery } from './systems/artillery.js';
 import { createLeaderboard } from './net/leaderboard.js';
 import { createNavGrid } from './systems/navgrid.js';
 import { createLanLobby } from './ui/lanLobby.js';
+import { createWorldLabels } from './ui/worldLabels.js';
 import { createLanClient } from './net/lanClient.js';
 import { createNetAvatar } from './entities/netRemote.js';
 import { Perception } from './systems/ai/perception.js';
@@ -112,7 +113,7 @@ const G = {
 };
 
 let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap, interact, intelSys;
-let lanLobby = null, lanSession = null;
+let lanLobby = null, lanSession = null, worldLabels = null;
 const net = {
   role: null, selfId: null, name: 'OPERATOR', hostId: null,
   remote: new Map(), enemies: new Map(),
@@ -522,6 +523,13 @@ const TUTORIAL_STEPS = [
 ];
 
 const MODE_BRIEFS = {
+  rotation: {
+    label: 'ROTATION', title: '标准轮换', op: 'ROTATION PROTOCOL',
+    desc: '每 3 波进入防守，每 5 波进入撤离；其余为生存波次。目标区会在街区、后院、市场与南院车场之间轮换。',
+    threat: 'HIGH', ao: 'URBAN', contact: '∞',
+    objectives: ['生存波：清空所有敌人', '防守波：在目标区累计守住 60 秒', '撤离波：清空区域后进入撤离区按住 8 秒'],
+    note: '敌军以波次持续增援，没有撤离窗口。保持移动，利用掩体，清空街区。',
+  },
   campaign: {
     label: 'CAMPAIGN', title: '剧情推进', op: 'CAMPAIGN PROTOCOL',
     desc: '按 OP01 → OP10 推进战役：每关有独立简报、过场、目标与结局。选择任务后 START 部署，完成后可继续下一关。',
@@ -579,7 +587,7 @@ function briefFor(mode = G.settings.runMode) {
       note: '',
     };
   }
-  return MODE_BRIEFS[mode] || MODE_BRIEFS.campaign;
+  return MODE_BRIEFS[mode] || MODE_BRIEFS.rotation;
 }
 
 function updateBriefing(mode = G.settings.runMode) {
@@ -631,7 +639,16 @@ function openPrestart() {
   if (audio && audio.ctx) audio.ui();
 }
 
+function requestGameFullscreen() {
+  try {
+    if (document.fullscreenElement) return;
+    const el = document.documentElement;
+    if (el && el.requestFullscreen) el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+  } catch (e) { /* browsers may deny without a gesture */ }
+}
+
 function launchGame() {
+  requestGameFullscreen();
   closePrestart();
   G.tutorial.done = true;
   markTutorialDone();
@@ -763,7 +780,13 @@ function finishTutorial() {
 function modeForWave(n) {
   const pref = G.settings && G.settings.runMode;
   if (pref === 'campaign') return (G.operation && G.operation.mode) || 'survival';
-  return pref || 'survival';
+  if (!pref || pref === 'rotation') {
+    // ROTATION: every 3rd wave is a defend, every 5th an extract, rest survival.
+    if (n % 5 === 0) return 'extract';
+    if (n % 3 === 0) return 'defend';
+    return 'survival';
+  }
+  return pref;
 }
 
 function chooseCampaignOperation() {
@@ -775,7 +798,7 @@ function chooseCampaignOperation() {
 }
 
 function onModeSelect(mode) {
-  const valid = ['campaign', 'survival', 'defend', 'extract'];
+  const valid = ['campaign', 'rotation', 'survival', 'defend', 'extract'];
   G.settings.runMode = valid.includes(mode) ? mode : 'campaign';
   campaignActive = G.settings.runMode === 'campaign';
   if (campaignActive) {
@@ -1331,6 +1354,24 @@ async function boot() {
     leaderboard.flushOutbox().catch(() => {});
     if (hud.bindSettings) hud.bindSettings(G.settings, onSettingChange);
     if (hud.bindModeSelect) hud.bindModeSelect(G.settings.runMode, onModeSelect);
+    if (hud.bindBigModes) {
+      hud.bindBigModes({
+        onBig: (mode) => {
+          if (mode === 'campaign') {
+            if (!campaignActive) onModeSelect('campaign');
+          } else if (mode === 'playlists') {
+            if (G.settings.runMode === 'campaign') onModeSelect('rotation');
+            updateBriefing(G.settings.runMode);
+            renderOps();
+          }
+        },
+        onPlaylist: (mode) => onModeSelect(mode),
+        onLan: () => { if (lanLobby) lanLobby.open(); },
+      });
+      hud.setBigMode(campaignActive ? 'campaign' : 'playlists');
+      if (!campaignActive) hud.setPlaylist(G.settings.runMode);
+    }
+    worldLabels = createWorldLabels({ camera: engine.camera, level });
     lanLobby = createLanLobby({
       onHost: (data) => joinLan(data),
       onJoin: (data) => joinLan(data),
@@ -1749,6 +1790,11 @@ function resetGame() {
 function pipsFor(armor) { return Math.ceil(armor / 20); }
 
 /* ------------------------------------------------------------------ waves */
+function coopAllyCount() {
+  if (net.role === 'host') return 1 + net.remote.size;
+  return 1;
+}
+
 function startWave(n) {
   const prevTier = G.diff;
   G.diff = diffForWave(n);
@@ -1795,7 +1841,9 @@ function startWave(n) {
     G.unlockedShotgun = true;
     if (hud.toast) hud.toast('M870 已解锁 · 按 3 装备');
   }
-  const total = Math.min(11, 3 + n);
+  const allies = coopAllyCount();
+  const coopBonus = allies > 1 ? 2 + 2 * (allies - 1) : 0;
+  const total = Math.min(14, 3 + n + coopBonus);   // + up to 2 roof snipers => <=16
   G.waveTotal = total;
   G.waveRemaining = total;
   G.spawnQueue = [];
@@ -2009,7 +2057,8 @@ function updateWaves(dt) {
   if (G.spawnQueue.length > 0) {
     G.spawnTimer -= dt;
     const alive = enemies.filter((e) => e.alive).length;
-    if (G.spawnTimer <= 0 && alive < 6) {
+    const aliveCap = Math.min(12, 6 + 2 * (coopAllyCount() - 1));
+    if (G.spawnTimer <= 0 && alive < aliveCap) {
       const p = G.spawnQueue.shift();
       spawnEnemy(p);
       G.spawnTimer = 0.75 + Math.random() * 0.6;
@@ -3625,6 +3674,7 @@ function sendLanSnapshot() {
 
 function startLanHostGame() {
   if (!lanSession || !lanSession.isHost) return;
+  requestGameFullscreen();
   if (net.started) return;
   net.role = 'host';
   net.selfId = lanSession.id;
@@ -3645,6 +3695,8 @@ function startLanHostGame() {
 
 function startLanClientGame() {
   if (net.started) return;
+  // LAN START is a host event, not a local gesture; browsers may deny this.
+  requestGameFullscreen();
   if (audio) { audio.init(); if (audio.resume) audio.resume(); audio.setMasterVolume(G.settings.master); }
   net.role = 'client';
   net.selfId = lanSession ? lanSession.id : net.selfId;
@@ -3925,6 +3977,10 @@ function updateGame(dt) {
       uav: G.uavUntil > G.time,
       time: G.time,
     });
+  }
+  if (worldLabels) {
+    worldLabels.setVisible(playing && !HIDE_HUD && !SHOT_MODE);
+    if (playing && !HIDE_HUD) worldLabels.update(dt, controller.pos);
   }
   hud.setReloadPrompt(playing && (G.mag === 0 || (G.mag <= Math.ceil(currentWeapon().magSize * 0.15) && G.reloadTimer < 0)) && G.reserve > 0);
   hud.setGrenades(G.grenades);

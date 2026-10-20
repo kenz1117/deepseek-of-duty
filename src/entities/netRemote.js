@@ -40,13 +40,47 @@ function makeNameSprite(name) {
   return sprite;
 }
 
-export function createNetAvatar({ scene, mats, name, variant = 0 }) {
+export function createNetAvatar({ scene, mats, name, variant = 0, officer = true }) {
   const rig = buildSoldier(mats, variant % 3, 'rifleman');
   const group = new THREE.Group();
   group.add(rig.root);
-  const label = makeNameSprite(name);
+  const label = makeNameSprite(officer ? `★ ${name}` : name);
   group.add(label);
   scene.add(group);
+
+  // Officer silhouette: peaked cap + gold shoulder boards + collar tabs +
+  // chest badge. Human LAN players must not read as another generic insurgent
+  // when they stand next to AI soldiers.
+  const officerBits = [];
+  if (officer) {
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x1b241f, roughness: 0.82, metalness: 0.05 });
+    const goldMat = new THREE.MeshStandardMaterial({ color: 0xc9a24a, roughness: 0.35, metalness: 0.75 });
+    const redMat = new THREE.MeshStandardMaterial({ color: 0x7d2320, roughness: 0.8, metalness: 0.05 });
+    const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.rotation.set(rx, ry, rz);
+      m.castShadow = true;
+      rig.root.add(m);
+      officerBits.push(m);
+      return m;
+    };
+    const isRed = true;   // officers always wear the red beret — the clearest silhouette cue
+    if (isRed) {
+      add(new THREE.SphereGeometry(0.135, 12, 8), redMat, 0, 1.785, -0.012, 0, 0, -0.16).scale.set(1, 0.46, 1.05);
+    } else {
+      add(new THREE.CylinderGeometry(0.145, 0.16, 0.085, 12), capMat, 0, 1.8, 0);
+      add(new THREE.BoxGeometry(0.3, 0.018, 0.13), capMat, 0, 1.762, 0.08);
+      add(new THREE.BoxGeometry(0.155, 0.016, 0.155), goldMat, 0, 1.768, 0.012);
+    }
+    // gold shoulder boards
+    add(new THREE.BoxGeometry(0.11, 0.018, 0.2), goldMat, -0.23, 1.47, 0, 0, 0, 0.18);
+    add(new THREE.BoxGeometry(0.11, 0.018, 0.2), goldMat, 0.23, 1.47, 0, 0, 0, -0.18);
+    // collar tabs and chest badge
+    add(new THREE.BoxGeometry(0.055, 0.03, 0.02), goldMat, -0.09, 1.51, 0.14, 0, 0.25, 0);
+    add(new THREE.BoxGeometry(0.055, 0.03, 0.02), goldMat, 0.09, 1.51, 0.14, 0, -0.25, 0);
+    add(new THREE.BoxGeometry(0.075, 0.085, 0.018), goldMat, 0.16, 1.36, 0.155, 0, -0.1, 0);
+  }
 
   let walkT = 0;
   let walkAmp = 0;
@@ -96,6 +130,12 @@ export function createNetAvatar({ scene, mats, name, variant = 0 }) {
 
   function dispose() {
     scene.remove(group);
+    for (const m of officerBits) {
+      if (m.parent) m.parent.remove(m);
+      if (m.geometry) m.geometry.dispose();
+      if (m.material) m.material.dispose();
+    }
+    officerBits.length = 0;
     rig.dispose();
     if (label.material) {
       if (label.material.map) label.material.map.dispose();

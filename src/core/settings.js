@@ -15,7 +15,7 @@ export const DEFAULT_SETTINGS = {
   master: 0.58,         // master volume 0-1
   reduceMotion: false,  // damp head bob / shake
   quality: 'high',      // low | medium | high | ultra
-  runMode: 'campaign',  // campaign | survival | defend | extract
+  runMode: 'campaign',  // campaign | rotation | survival | defend | extract
   wayfinder: true,      // HUD area names + route marker to the apartment / backyard
   primary: 'm4',        // m4 | mk18 — which rifle you spawn with
   voice: true,          // cinematic TTS (browser speechSynthesis)
@@ -32,8 +32,7 @@ export function sanitizeSettings(input = {}) {
   s.invertY = !!s.invertY;
   s.reduceMotion = !!s.reduceMotion;
   if (!['low', 'medium', 'high', 'ultra'].includes(s.quality)) s.quality = 'high';
-  if (s.runMode === 'rotation') s.runMode = 'campaign';   // old save migration
-  if (!['campaign', 'survival', 'defend', 'extract'].includes(s.runMode)) s.runMode = 'campaign';
+  if (!['campaign', 'rotation', 'survival', 'defend', 'extract'].includes(s.runMode)) s.runMode = 'campaign';
   s.wayfinder = s.wayfinder !== false;
   s.primary = s.primary === 'mk18' ? 'mk18' : 'm4';
   s.voice = s.voice !== false;

@@ -36,14 +36,6 @@
       </div>
     </div>
 
-    <!-- minimap: local tactical view (M toggles) -->
-    <div class="minimap-wrap" id="minimap-wrap">
-      <canvas id="minimap" width="320" height="320" aria-label="小地图"></canvas>
-      <span class="mm-north">N</span>
-      <span class="mm-region" id="mm-region">街区</span>
-      <span class="mm-hint">M</span>
-    </div>
-
     <!-- top center: compass -->
     <div class="compass-wrap">
       <canvas id="compass" width="640" height="56"></canvas>
@@ -74,6 +66,14 @@
         <div class="score-cell"><span class="score-label">SCORE</span><span class="score-val" id="score">0</span></div>
         <span class="score-div"></span>
         <div class="score-cell"><span class="score-label">KILLS</span><span class="score-val" id="kills">0</span></div>
+      </div>
+
+      <!-- minimap: local tactical view (M toggles) -->
+      <div class="minimap-wrap" id="minimap-wrap">
+        <canvas id="minimap" width="320" height="320" aria-label="小地图"></canvas>
+        <span class="mm-north">N</span>
+        <span class="mm-region" id="mm-region">街区</span>
+        <span class="mm-hint">M</span>
       </div>
     </div>
 
@@ -190,49 +190,31 @@
             <img class="menu-logo" src="/assets/logo.png" alt="DeepSeek of Duty" draggable="false" />
           </div>
 
-          <div class="mode-select" id="mode-select" role="group" aria-label="任务模式">
-            <div class="mode-select-head">
+          <div class="mode-select big-mode-select" id="mode-select" role="group" aria-label="顶层模式">
+            <div class="big-modes-head">
               <span class="ms-title">MODE <em>模式</em></span>
-              <div class="ms-head-right">
-                <span class="mode-select-current" id="mode-select-current">CAMPAIGN</span>
-                <button id="lan-open" class="lan-entry" type="button" title="LAN CO-OP · 局域网合作">
-                  <i class="lan-entry-dot" aria-hidden="true"></i><span>LAN</span><em>CO-OP</em>
-                </button>
-              </div>
+              <span class="big-modes-hint">SELECT DEPLOYMENT</span>
             </div>
-            <div class="mode-select-pills" id="mode-select-pills">
-              <button type="button" data-mode="campaign" class="active" aria-pressed="true" title="剧情推进：按 OP01→OP10 推进战役">CAMPAIGN</button>
-              <button type="button" data-mode="survival" aria-pressed="false" title="无尽生存：清空每一波敌人">SURVIVAL</button>
-              <button type="button" data-mode="defend" aria-pressed="false" title="区域防守：守住目标区 60 秒">DEFEND</button>
-              <button type="button" data-mode="extract" aria-pressed="false" title="清场撤离：清空敌人后前往撤离区">EXTRACT</button>
+            <div class="big-modes" id="big-modes">
+              <button type="button" class="big-mode is-on" data-big-mode="campaign" aria-pressed="true">
+                <span class="bm-index">01</span>
+                <span class="bm-body"><b>CAMPAIGN</b><em>剧情模式</em><span class="bm-sub">OP01–OP14 · 战役推进</span></span>
+                <i class="bm-arrow" aria-hidden="true"></i>
+              </button>
+              <button type="button" class="big-mode" data-big-mode="playlists" aria-pressed="false">
+                <span class="bm-index">02</span>
+                <span class="bm-body"><b>PLAYLISTS</b><em>玩法模式</em><span class="bm-sub">ROTATION / SURVIVAL / DEFEND / EXTRACT</span></span>
+                <i class="bm-arrow" aria-hidden="true"></i>
+              </button>
+              <button type="button" id="lan-open" class="big-mode" data-big-mode="lan" aria-pressed="false">
+                <span class="bm-index">03</span>
+                <span class="bm-body"><b>LAN CO-OP</b><em>联机模式</em><span class="bm-sub">2–4 人 · 合作生存</span></span>
+                <span class="bm-flag">LAN</span>
+              </button>
             </div>
+            <div class="mode-picked" id="mode-picked">CAMPAIGN · 剧情模式</div>
+            <span id="mode-select-current" class="hidden">CAMPAIGN</span>
           </div>
-
-          <div class="mode-select" id="primary-select" role="group" aria-label="起始主武器">
-            <div class="mode-select-head">
-              <span class="ms-title">LOADOUT <em>起始主武器</em></span>
-              <span class="mode-select-current" id="primary-current">M4A1</span>
-            </div>
-            <div class="mode-select-pills" id="primary-pills">
-              <button type="button" data-primary="m4" class="active" aria-pressed="true" title="均衡全自动步枪">M4A1</button>
-              <button type="button" data-primary="mk18" aria-pressed="false" title="更高伤害 / 更快的近战步枪">MK18</button>
-            </div>
-          </div>
-
-          <section class="mode-brief" id="mode-desc" aria-live="polite">
-            <div class="mode-brief-head">
-              <span class="mode-brief-tag">MODE BRIEF</span>
-              <span class="mode-brief-mode" id="mode-desc-label">ROTATION</span>
-              <i class="mode-brief-rule"></i>
-            </div>
-            <h2 class="mode-brief-title" id="mode-desc-title">标准轮换</h2>
-            <p class="mode-brief-text" id="mode-desc-text">每 3 波进入防守，每 5 波进入撤离；其余为生存波次。</p>
-            <dl class="mode-brief-stats">
-              <div><dt>THREAT</dt><dd class="hot" id="mode-desc-threat">HIGH</dd></div>
-              <div><dt>AO</dt><dd id="mode-desc-ao">URBAN</dd></div>
-              <div><dt>CONTACT</dt><dd id="mode-desc-contact">∞</dd></div>
-            </dl>
-          </section>
         </div>
       </main>
 
@@ -320,6 +302,137 @@
   </div>
 
 
+
+
+  <!-- ============ PLAYLISTS ============ -->
+  <div id="playlist-modal" class="overlay hidden" aria-hidden="true">
+    <div class="pl-panel" role="dialog" aria-modal="true" aria-labelledby="playlist-title" tabindex="-1">
+      <header class="pl-head">
+        <div>
+          <div class="overlay-tag"><i></i>PLAYLISTS · 玩法模式</div>
+          <h2 class="pl-title" id="playlist-title">SELECT PLAYLIST<span>玩法选择</span></h2>
+          <p class="pl-sub">选择玩法规则 · 返回主菜单后按 START 部署</p>
+        </div>
+        <button id="playlist-close" class="set-close" type="button" aria-label="关闭玩法选择"><i></i><i></i></button>
+      </header>
+
+      <div class="pl-body">
+        <div class="pl-grid">
+          <div class="mode-select-pills pl-cards" id="mode-select-pills" role="group" aria-label="玩法列表">
+            <button type="button" data-mode="rotation" class="playlist-card" aria-pressed="false">
+              <span class="pc-index">01</span>
+              <span class="pc-body"><b>ROTATION</b><em>标准轮换</em><span class="pc-desc">每 3 波防守、每 5 波撤离，其余生存。</span></span>
+              <i class="pc-check" aria-hidden="true"></i>
+            </button>
+            <button type="button" data-mode="survival" class="playlist-card" aria-pressed="false">
+              <span class="pc-index">02</span>
+              <span class="pc-body"><b>SURVIVAL</b><em>无尽生存</em><span class="pc-desc">清空连续波次，没有撤离窗口。</span></span>
+              <i class="pc-check" aria-hidden="true"></i>
+            </button>
+            <button type="button" data-mode="defend" class="playlist-card" aria-pressed="false">
+              <span class="pc-index">03</span>
+              <span class="pc-body"><b>DEFEND</b><em>区域防守</em><span class="pc-desc">守住目标区 60 秒，撑住增援。</span></span>
+              <i class="pc-check" aria-hidden="true"></i>
+            </button>
+            <button type="button" data-mode="extract" class="playlist-card" aria-pressed="false">
+              <span class="pc-index">04</span>
+              <span class="pc-body"><b>EXTRACT</b><em>清场撤离</em><span class="pc-desc">清空区域后进入撤离区并按住 8 秒。</span></span>
+              <i class="pc-check" aria-hidden="true"></i>
+            </button>
+            <button type="button" data-mode="campaign" id="big-campaign-mode" class="hidden" tabindex="-1" aria-hidden="true">CAMPAIGN</button>
+            <button type="button" data-mode="rotation" id="playlist-default" class="hidden" tabindex="-1" aria-hidden="true">ROTATION</button>
+          </div>
+
+          <section class="mode-brief" id="mode-desc" aria-live="polite">
+            <div class="mode-brief-head">
+              <span class="mode-brief-tag">MODE BRIEF</span>
+              <span class="mode-brief-mode" id="mode-desc-label">ROTATION</span>
+              <i class="mode-brief-rule"></i>
+            </div>
+            <h2 class="mode-brief-title" id="mode-desc-title">标准轮换</h2>
+            <p class="mode-brief-text" id="mode-desc-text">每 3 波进入防守，每 5 波进入撤离；其余为生存波次。</p>
+            <dl class="mode-brief-stats">
+              <div><dt>THREAT</dt><dd class="hot" id="mode-desc-threat">HIGH</dd></div>
+              <div><dt>AO</dt><dd id="mode-desc-ao">URBAN</dd></div>
+              <div><dt>CONTACT</dt><dd id="mode-desc-contact">∞</dd></div>
+            </dl>
+            <ul class="mode-brief-objectives hidden" id="mode-desc-objectives"></ul>
+            <p class="mode-brief-note hidden" id="mode-desc-note"></p>
+          </section>
+        </div>
+
+        <div class="pl-loadout">
+          <div class="mode-select" id="primary-select" role="group" aria-label="起始主武器">
+            <div class="mode-select-head">
+              <span class="ms-title">LOADOUT <em>起始主武器</em></span>
+              <span class="mode-select-current" id="primary-current">M4A1</span>
+            </div>
+            <div class="mode-select-pills" id="primary-pills">
+              <button type="button" data-primary="m4" class="active" aria-pressed="true" title="均衡全自动步枪">M4A1</button>
+              <button type="button" data-primary="mk18" aria-pressed="false" title="更高伤害 / 更快的近战步枪">MK18</button>
+            </div>
+          </div>
+          <p class="pl-note">玩法与主武器即时保存 · 关闭后按 START 部署</p>
+        </div>
+      </div>
+
+      <footer class="pl-foot">
+        <span class="pl-foot-note">ROTATION / SURVIVAL / DEFEND / EXTRACT</span>
+        <button id="playlist-done" class="pl-done" type="button"><span>CLOSE</span><em>关闭</em></button>
+      </footer>
+    </div>
+  </div>
+
+  <!-- ============ LAN MODES ============ -->
+  <div id="lan-modal" class="overlay hidden" aria-hidden="true">
+    <div class="lm-panel" role="dialog" aria-modal="true" aria-labelledby="lan-mode-title" tabindex="-1">
+      <header class="lm-head">
+        <div>
+          <div class="overlay-tag"><i></i>LAN CO-OP · 联机模式</div>
+          <h2 class="lm-title" id="lan-mode-title">NETWORK<span>OPERATIONS</span></h2>
+          <p class="lm-sub">2–8 人 · 局域网 · 房主权威</p>
+        </div>
+        <button id="lan-modal-close" class="set-close" type="button" aria-label="关闭联机模式"><i></i><i></i></button>
+      </header>
+
+      <div class="lm-grid">
+        <button id="lan-coop-open" class="lan-mode-card is-open" type="button">
+          <span class="lm-badge open">OPEN</span>
+          <span class="lm-code">01 / CO-OP</span>
+          <b>CO-OP SURVIVAL</b>
+          <em>合作生存</em>
+          <p>2–4 名 TASK FORCE 军官同阵营，对抗 AI 叛军；8–16 AI / 波，场上最多 6–12。</p>
+          <dl class="lm-stats">
+            <div><dt>PLAYERS</dt><dd>2–4</dd></div>
+            <div><dt>FACTION</dt><dd>TASK FORCE vs AI</dd></div>
+            <div><dt>AI / WAVE</dt><dd>8–16</dd></div>
+            <div><dt>ALIVE</dt><dd>6–12</dd></div>
+          </dl>
+          <span class="lm-cta">OPEN LOBBY <i>›</i></span>
+        </button>
+
+        <button class="lan-mode-card is-locked" type="button" disabled aria-disabled="true">
+          <span class="lm-badge next">DESIGNED / NEXT</span>
+          <span class="lm-code">02 / VERSUS</span>
+          <b>VERSUS 4v4</b>
+          <em>对抗模式</em>
+          <p>2–8 名玩家分为两阵营，AI 补足每队 4 人；此模式尚未接入。</p>
+          <dl class="lm-stats">
+            <div><dt>PLAYERS</dt><dd>2–8</dd></div>
+            <div><dt>TEAMS</dt><dd>2</dd></div>
+            <div><dt>AI FILL</dt><dd>4 / TEAM</dd></div>
+            <div><dt>STATUS</dt><dd>DESIGNED</dd></div>
+          </dl>
+          <span class="lm-cta">NEXT UPDATE <i>—</i></span>
+        </button>
+      </div>
+
+      <footer class="lm-foot">
+        <span class="lm-foot-note">CO-OP 已可玩 · VERSUS 为设计稿，不可开始</span>
+        <button id="lan-modal-done" class="pl-done" type="button"><span>CLOSE</span><em>关闭</em></button>
+      </footer>
+    </div>
+  </div>
 
   <!-- ============ LAN CO-OP LOBBY ============ -->
   <div id="lan-lobby" class="overlay hidden" aria-hidden="true">

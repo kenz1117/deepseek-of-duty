@@ -69,7 +69,7 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
   const statusEl = $('lan-status');
   const statusTextEl = $('lan-status-text');
   const youEl = $('lan-you');
-  const entry = $('lan-open');
+  const entry = $('lan-coop-open');
 
   let isOpen = false;
   let localHost = false;

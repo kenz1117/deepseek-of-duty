@@ -65,6 +65,11 @@ export function createHUD() {
     modeZone: $('zone-distance'), modeZoneText: $('zone-distance-text'),
     modeSelect: $('mode-select'), modeSelectCurrent: $('mode-select-current'),
     modeSelectBtns: Array.from(document.querySelectorAll('#mode-select-pills button')),
+    bigModeCards: Array.from(document.querySelectorAll('.big-mode')),
+    modePicked: $('mode-picked'),
+    playlistModal: $('playlist-modal'),
+    lanModal: $('lan-modal'),
+    deploy: $('deploy'),
     streak: $('hud-streak'), streakN: $('streak-n'), streakNext: $('streak-next'),
     streakNextWrap: $('streak-next-wrap'),
     uav: $('hud-uav'), uavTime: $('uav-time'),
@@ -120,8 +125,23 @@ export function createHUD() {
   let modeClearTimer = 0;
   let rewardTimer = 0;
   let toastTimer = 0;
-  const MODE_SELECT_VALUES = ['campaign', 'survival', 'defend', 'extract'];
+  const MODE_SELECT_VALUES = ['campaign', 'rotation', 'survival', 'defend', 'extract'];
+  const MODE_LABELS = {
+    campaign: ['CAMPAIGN', '剧情模式'],
+    rotation: ['ROTATION', '标准轮换'],
+    survival: ['SURVIVAL', '无尽生存'],
+    defend: ['DEFEND', '区域防守'],
+    extract: ['EXTRACT', '清场撤离'],
+  };
+  const BIG_MODE_VALUES = ['campaign', 'playlists', 'lan'];
   let modeSelectValue = 'campaign';
+  let bigMode = 'campaign';
+  let bigModesWired = false;
+  let bigModeCallbacks = {};
+  let playlistOpen = false;
+  let lanModalOpen = false;
+  let bigModalFocus = null;
+  let bigModalKey = null;
   let modeSelectOnChange = null;
   let modeSelectWired = false;
 
@@ -592,15 +612,200 @@ export function createHUD() {
     return MODE_SELECT_VALUES.includes(k) ? k : 'campaign';
   }
 
+  function modeSummary(mode) {
+    const pair = MODE_LABELS[mode] || MODE_LABELS.campaign;
+    return `${pair[0]} · ${pair[1]}`;
+  }
+
+  function paintBigModes() {
+    for (const card of el.bigModeCards || []) {
+      const on = card.dataset.bigMode === bigMode;
+      card.classList.toggle('is-on', on);
+      card.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    if (!el.modePicked) return;
+    if (bigMode === 'lan') el.modePicked.textContent = 'LAN CO-OP · 联机';
+    else if (bigMode === 'campaign') el.modePicked.textContent = 'CAMPAIGN · 剧情模式';
+    else if (modeSelectValue === 'campaign') el.modePicked.textContent = 'PLAYLISTS · 玩法模式';
+    else el.modePicked.textContent = modeSummary(modeSelectValue);
+  }
+
+  function setBigMode(mode) {
+    const next = BIG_MODE_VALUES.includes(String(mode)) ? String(mode) : 'campaign';
+    bigMode = next;
+    paintBigModes();
+  }
+
   function paintModeSelect(mode) {
     const m = normalizeModeSelect(mode);
     if (el.modeSelectCurrent) el.modeSelectCurrent.textContent = m.toUpperCase();
-    if (!el.modeSelectBtns) return;
-    for (const btn of el.modeSelectBtns) {
-      const on = btn.dataset.mode === m;
-      btn.classList.toggle('active', on);
-      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (el.modeSelectBtns) {
+      for (const btn of el.modeSelectBtns) {
+        const on = btn.dataset.mode === m;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+      }
     }
+    if (bigMode !== 'lan') bigMode = m === 'campaign' ? 'campaign' : 'playlists';
+    paintBigModes();
+  }
+
+  function setPlaylist(mode) {
+    const m = normalizeModeSelect(mode);
+    setBigMode('playlists');
+    paintModeSelect(m);
+  }
+
+  function removeBigModalKey() {
+    if (bigModalKey) document.removeEventListener('keydown', bigModalKey, true);
+    bigModalKey = null;
+  }
+  function onBigModalKey(e) {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (playlistOpen) closePlaylist();
+    else if (lanModalOpen) closeLanModal();
+  }
+  function installBigModalKey() {
+    removeBigModalKey();
+    bigModalKey = onBigModalKey;
+    document.addEventListener('keydown', bigModalKey, true);
+  }
+  function restoreBigFocus() {
+    const target = bigModalFocus;
+    bigModalFocus = null;
+    if (target && typeof target.focus === 'function') {
+      try { target.focus(); } catch (e) { /* ignore */ }
+    }
+  }
+
+  function openPlaylist() {
+    if (!el.playlistModal) return;
+    closeLanModal();
+    setBigMode('playlists');
+    const card = (el.bigModeCards || []).find((c) => c.dataset.bigMode === 'playlists');
+    bigModalFocus = card || document.activeElement;
+    if (modeSelectValue === 'campaign') {
+      const def = $('playlist-default');
+      if (def) def.click();
+    }
+    el.playlistModal.classList.remove('hidden');
+    el.playlistModal.setAttribute('aria-hidden', 'false');
+    playlistOpen = true;
+    installBigModalKey();
+    requestAnimationFrame(() => {
+      const first = el.playlistModal.querySelector('.playlist-card');
+      if (first) first.focus();
+    });
+  }
+
+  function closePlaylist() {
+    if (!el.playlistModal || !playlistOpen) return;
+    playlistOpen = false;
+    el.playlistModal.classList.add('hidden');
+    el.playlistModal.setAttribute('aria-hidden', 'true');
+    removeBigModalKey();
+    restoreBigFocus();
+  }
+
+  function openLanModal() {
+    if (!el.lanModal) return;
+    closePlaylist();
+    setBigMode('lan');
+    const card = (el.bigModeCards || []).find((c) => c.dataset.bigMode === 'lan');
+    bigModalFocus = card || document.activeElement;
+    el.lanModal.classList.remove('hidden');
+    el.lanModal.setAttribute('aria-hidden', 'false');
+    lanModalOpen = true;
+    installBigModalKey();
+    requestAnimationFrame(() => {
+      const coop = $('lan-coop-open');
+      if (coop) coop.focus();
+    });
+  }
+
+  function closeLanModal() {
+    if (!el.lanModal || !lanModalOpen) return;
+    lanModalOpen = false;
+    el.lanModal.classList.add('hidden');
+    el.lanModal.setAttribute('aria-hidden', 'true');
+    removeBigModalKey();
+    restoreBigFocus();
+  }
+
+  function bindBigModes(callbacks) {
+    if (callbacks && typeof callbacks === 'object') bigModeCallbacks = { ...bigModeCallbacks, ...callbacks };
+    if (bigModesWired) {
+      paintBigModes();
+      return;
+    }
+    bigModesWired = true;
+
+    for (const card of el.bigModeCards || []) {
+      card.addEventListener('click', () => {
+        const m = card.dataset.bigMode;
+        if (m === 'campaign') {
+          closePlaylist();
+          closeLanModal();
+          setBigMode('campaign');
+          const hidden = $('big-campaign-mode');
+          if (hidden) hidden.click();
+          if (bigModeCallbacks.onBig) bigModeCallbacks.onBig('campaign');
+        } else if (m === 'playlists') {
+          closeLanModal();
+          setBigMode('playlists');
+          openPlaylist();
+          if (bigModeCallbacks.onBig) bigModeCallbacks.onBig('playlists');
+        } else if (m === 'lan') {
+          closePlaylist();
+          openLanModal();
+          if (bigModeCallbacks.onBig) bigModeCallbacks.onBig('lan');
+        }
+      });
+    }
+
+    for (const btn of el.modeSelectBtns || []) {
+      if (!btn.classList.contains('playlist-card')) continue;
+      btn.addEventListener('click', () => {
+        const mode = normalizeModeSelect(btn.dataset.mode);
+        setBigMode('playlists');
+        closePlaylist();
+        if (bigModeCallbacks.onPlaylist) bigModeCallbacks.onPlaylist(mode);
+      });
+    }
+
+    const closePl = $('playlist-close');
+    const donePl = $('playlist-done');
+    if (closePl) closePl.addEventListener('click', closePlaylist);
+    if (donePl) donePl.addEventListener('click', closePlaylist);
+    if (el.playlistModal) {
+      el.playlistModal.addEventListener('click', (e) => { if (e.target === el.playlistModal) closePlaylist(); });
+    }
+    const closeLm = $('lan-modal-close');
+    const doneLm = $('lan-modal-done');
+    if (closeLm) closeLm.addEventListener('click', closeLanModal);
+    if (doneLm) doneLm.addEventListener('click', closeLanModal);
+    if (el.lanModal) {
+      el.lanModal.addEventListener('click', (e) => { if (e.target === el.lanModal) closeLanModal(); });
+    }
+    const coop = $('lan-coop-open');
+    if (coop) coop.addEventListener('click', () => {
+      closeLanModal();
+      if (bigModeCallbacks.onLan) bigModeCallbacks.onLan();
+    });
+
+    // LAN START: capture before main's bubble listener; main owns solo start.
+    if (el.deploy) {
+      el.deploy.addEventListener('click', (e) => {
+        if (bigMode !== 'lan') return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        openLanModal();
+      }, true);
+    }
+
+    paintBigModes();
   }
 
   function setModeSelect(mode) {
@@ -1194,6 +1399,8 @@ export function createHUD() {
     compassDirty = true;
   }
 
+  bindBigModes();
+
   return {
     el, show, update, reset,
     setHealth, setAmmo, setWeaponName, setWeaponTag, setSlots, setWave, setWaveProgress, setObjective,
@@ -1206,6 +1413,9 @@ export function createHUD() {
     showUpgrades, hideUpgrades, showTutorial, hideTutorial, setAtmosphere,
     setMode, setModeProgress, setZoneDistance, hideMode,
     bindModeSelect, setModeSelect,
+    bindBigModes, setBigMode, setPlaylist, openPlaylist, closePlaylist,
+    openLanModal, closeLanModal, get bigMode() { return bigMode; },
+    get playlistOpen() { return playlistOpen; }, get lanModalOpen() { return lanModalOpen; },
     setStreak, setStreakReward, setUav, uavPing, toast, setArea,
     get state() { return state; },
   };
