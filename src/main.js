@@ -157,6 +157,7 @@ const G = {
   // single-target assumptions do not hold) and the safe zone runs. Turning it
   // off restores the PvE behaviour exactly.
   versusMode: false,
+  versusGraceT: 0,
   teamScores: [0, 0],
   ffaWinner: null, ffaResultShown: false,
   // Sprint D: run counters, streak rewards, UAV window, score multiplier
@@ -1266,6 +1267,7 @@ function updateMilestones(dt) {
 const VERSUS_TEAM_SIZE = 4;
 const VERSUS_KILL_TARGET = 40;
 const VERSUS_RESPAWN_MS = 5000;
+const VERSUS_GRACE_S = 20;   // no AI fire while the lobby spreads out
 
 let versusBots = [];          // [{ e: Enemy, team, respawnAt }]
 let zoneVisual = null;        // { wall, ringNext, ringNow }
@@ -1289,18 +1291,26 @@ let teamDirectors = [null, null];
  * lobby covers the map instead of piling onto one point. `index` is the
  * combatant's slot within its team (humans first, then fill bots).
  */
-function versusSpawnSlot(team, index = 0, jitter = 3) {
-  const rect = G.playRect || (G.site && G.site.rect) || { x0: -30, x1: 30, z0: -30, z1: 30 };
-  const midZ = (rect.z0 + rect.z1) / 2;
-  const hz0 = team === 0 ? rect.z0 + 14 : midZ + 12;
-  const hz1 = team === 0 ? midZ - 12 : rect.z1 - 14;
-  const col = index % 2;
-  const row = Math.floor(index / 2) % 2;
-  const x = (rect.x0 + 16) + col * ((rect.x1 - rect.x0) - 32);
-  const z = hz0 + row * (hz1 - hz0);
+const VERSUS_MAP_SPAWNS = [
+  { x: 1, z: 33 },      // street
+  { x: -96, z: 46 },    // old souk
+  { x: 0, z: -165 },    // rail depot
+  { x: 80, z: -80 },    // container yard
+  { x: -190, z: 24 },   // west foothills
+  { x: 130, z: -12 },   // dock
+  { x: 98, z: -44 },    // port objective
+  { x: -74, z: 12 },    // souk centre
+];
+
+/** Spawn across the whole playable map, not both teams at the same site. */
+function versusSpawnSlot(team, index = 0, jitter = 2) {
+  // Team 0 owns the first four map anchors; team 1 owns the other four and
+  // never wraps onto the street anchor (solo 1v7 needs seven distinct points).
+  const order = team === 0 ? [0, 1, 2, 3] : [4, 5, 6, 7, 1, 2, 3];
+  const base = VERSUS_MAP_SPAWNS[order[index % order.length]];
   return {
-    x: x + (Math.random() - 0.5) * jitter * 2,
-    z: z + (Math.random() - 0.5) * jitter * 2,
+    x: base.x + (Math.random() - 0.5) * jitter * 2,
+    z: base.z + (Math.random() - 0.5) * jitter * 2,
     y: 0,
   };
 }
@@ -1319,12 +1329,16 @@ function startVersusBots(teams, lobbyPlayers) {
   versusBots = [];
   const counts = [0, 0];
   for (const id of Object.keys(teams || {})) counts[teams[id]] += 1;
+  const solo = Object.keys(teams || {}).length === 1;
   for (let team = 0; team < 2; team += 1) {
-    const fill = Math.max(0, VERSUS_TEAM_SIZE - counts[team]);
+    // Solo VERSUS: one human vs seven hostile bots, not 3 allies + 4 enemies.
+    const fill = solo
+      ? (team === 0 ? 0 : 7)
+      : Math.max(0, VERSUS_TEAM_SIZE - counts[team]);
     for (let i = 0; i < fill; i += 1) {
       // slot index continues after the humans so the whole squad spreads out
       const sp = versusSpawnSlot(team, counts[team] + i, 2.5);
-      const e = spawnEnemy({ x: sp.x, z: sp.z, y: 0 });
+      const e = spawnEnemy({ x: sp.x, z: sp.z, y: 0 }, { force: true });
       if (!e) break;
       e.team = team;
       if (e.setDifficulty) e.setDifficulty(DIFF_TIERS[3]);
@@ -1724,7 +1738,9 @@ function updateZone(dt) {
 
   // objective line: 2-minute arming countdown, then score + ring countdown
   if (hud && hud.setObjective) {
-    if (!zs.started) {
+    if (G.versusGraceT > 0) {
+      hud.setObjective(`部署阶段 · ${Math.ceil(G.versusGraceT)}s 后交战 · 毒圈 ${Math.ceil(zs.delayLeft)}s 后开启`);
+    } else if (!zs.started) {
       const left = Math.max(0, Math.ceil(zs.delayLeft));
       const mm = Math.floor(left / 60), ss = String(left % 60).padStart(2, '0');
       hud.setObjective(`蓝 ${G.teamScores[0]} : ${G.teamScores[1]} 红 · 毒圈 ${mm}:${ss} 后开启`);
@@ -2975,7 +2991,7 @@ function relocateEnemy(e) {
   return false;
 }
 
-function spawnEnemy(pos) {
+function spawnEnemy(pos, opts = {}) {
   let e = enemies.find((x) => !x.alive && x.root.visible === false) || enemies.find((x) => !x.alive);
   if (!e) {
     if (enemies.length >= 14) return;
@@ -2986,7 +3002,7 @@ function spawnEnemy(pos) {
   let sp = resolveSpawn(pos.x, pos.z, pos.y || 0);
   const sealed = !!(G.operation && G.operation.spawnRect);
   if (!sp) sp = ringSpawn() || { x: pos.x, z: pos.z, y: pos.y || 0 };
-  else if (!sealed && sp.y <= 1 && !spawnReachesPlayer(sp)) sp = ringSpawn() || sp;
+  else if (!sealed && !opts.force && sp.y <= 1 && !spawnReachesPlayer(sp)) sp = ringSpawn() || sp;
   const yaw = Math.atan2(-(playerPos.x - sp.x), -(playerPos.z - sp.z));
   // a shotgun rusher stranded on a platform cannot charge; keep him a rifleman
   const type = ((pos.y || 0) > 0.6 && pos.type === 'rusher') ? 'rifleman' : (pos.type || 'rifleman');
@@ -4937,7 +4953,7 @@ function sendLanSnapshot() {
     tick: ++net.tick, players, enemies: es,
     site: G.site && G.site.id,
     versus: G.versusMode, teams: net.teamAssignments || null,
-    teamScores: G.teamScores,
+    teamScores: G.teamScores, grace: G.versusGraceT,
     zone: zoneSys ? zoneSys.serialize() : null,
     wave: G.wave, kills: G.kills, score: G.score,
     objective: G.objective ? { type: G.objective.type, done: !!G.objective.done } : null,
@@ -5007,6 +5023,8 @@ function startLanHostGame(opts = {}) {
   // ---- versus setup: teams alternate by lobby join order; host is team 0 ----
   const versus = opts.versus === true;
   G.versusMode = versus;
+  G.versusGraceT = versus ? VERSUS_GRACE_S : 0;
+  G.versusGraceNotified = false;
   G.teamScores = [0, 0];
   net.team = undefined;
   const lobbyPlayers = (opts.players && opts.players.length)
@@ -5047,6 +5065,7 @@ function startLanHostGame(opts = {}) {
   if (lanSession) {
     lanSession.broadcastEvent('start', {
       wave: 1, site: G.site && G.site.id, versus, teams,
+      grace: G.versusGraceT,
     });
   }
   if (lanLobby) lanLobby.setPlayers(lanSession.players || []);
@@ -5094,6 +5113,8 @@ function startLanClientGame(siteId = 'street', startMsg = null) {
   // versus flag + team assignment arrive with the host's start event
   const versus = startMsg && startMsg.versus === true;
   G.versusMode = versus;
+  G.versusGraceT = versus ? (Number(startMsg && startMsg.grace) || VERSUS_GRACE_S) : 0;
+  G.versusGraceNotified = false;
   G.teamScores = [0, 0];
   net.team = undefined;
   if (versus) {
@@ -5116,7 +5137,10 @@ function startLanClientGame(siteId = 'street', startMsg = null) {
   hideObjectiveUI();
   if (versus) {
     // Client mirrors the host's ring read-only; visuals + damage below.
-    netZoneMirror = createZone({ rect: G.site.rect });
+    netZoneMirror = createZone({
+      rect: (level && level.bounds) ? { ...level.bounds } : G.site.rect,
+      startDelay: 120, warnAt: 15,
+    });
     ensureZoneVisual();
     // Mirror the host's slot registry from the start event so both ends spawn
     // at the same spread-out map points, then take this client's own slot.
@@ -5224,6 +5248,14 @@ function updateGame(dt) {
   });
   if (jumpNow) G.tut.jumps++;
 
+  if (G.versusMode && G.state === 'playing' && G.versusGraceT > 0) {
+    G.versusGraceT = Math.max(0, G.versusGraceT - dt);
+    if (G.versusGraceT === 0 && !G.versusGraceNotified) {
+      G.versusGraceNotified = true;
+      if (hud && hud.toast) hud.toast('交战开始 · 自由开火', 2600);
+    }
+  }
+
   // If a prop/doorway still traps the player, nudge them to the nearest free
   // nav cell after a short pause instead of leaving them permanently stuck.
   if (playing && nav && !G.debugNoUnstick) {
@@ -5265,7 +5297,7 @@ function updateGame(dt) {
     if (G.versusMode) {
       updateZone(dt);
       if (net.role === 'host') {
-        updateTeamBrains(dt);
+        if (!(G.versusGraceT > 0)) updateTeamBrains(dt);
         updateVersusBots(dt);
         updateVersusRespawns();
       }
@@ -5315,7 +5347,7 @@ function updateGame(dt) {
   const alive = G.hp > 0;
   enemyCtx.playerPos.copy(engine.camera.position);
   enemyCtx.playerGroundY = controller.pos.y;
-  enemyCtx.playerAlive = alive;
+  enemyCtx.playerAlive = alive && !(G.versusMode && G.versusGraceT > 0);
   enemyCtx.playerSpeed = controller.state.speed;
   // lateral movement direction (X / Z) feeds AI aim lead: a soldier aiming
   // at a sprinting player puts the muzzle where the target is going, not
