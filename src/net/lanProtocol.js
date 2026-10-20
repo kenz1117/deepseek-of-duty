@@ -6,14 +6,21 @@
  * data helpers; it never touches the DOM and never throws for bad input.
  *
  * Message schema (JSON over WebSocket):
- *   c->s join     { t:'join', room, name }
- *   c->s input    { t:'input', seq, x, z, yaw, pitch, hp, alive }
+ *   c->s join     { t:'join', room, name, mode:'coop'|'br' }
+ *   c->s input    { t:'input', seq, x, y, z, yaw, pitch, hp, alive }
  *   c->s fire     { t:'fire', seq, ox, oy, oz, dx, dy, dz, weapon }
  *   c->s event    { t:'event', kind, ... }
- *   s->c welcome  { t:'welcome', id, host, room, players }
- *   s->c lobby    { t:'lobby', players:[{id,name,ready,host}] }
- *   s->c snapshot { t:'snapshot', tick, players, enemies, wave, kills, objective }
+ *   c->s start    { t:'start', mode:'coop'|'br' }        // host only
+ *   s->c welcome  { t:'welcome', id, host, room, mode, players }
+ *   s->c lobby    { t:'lobby', mode, players:[{id,name,ready,host}] }
+ *   s->c snapshot { t:'snapshot', mode, tick, players, enemies, wave, kills, objective, br? }
+ *   s->c start    { t:'start', mode }                    // relayed from host
  *   s->c event    { t:'event', kind, ... }   // host_change carries `resume`
+ *
+ * Snapshots are opaque to the relay. In BR mode the host may include:
+ *   br: { zone:{x,z,r,nextX,nextZ,nextR,phase,shrinkLeft},
+ *         alive, winner, phase }
+ * and each snapshot player may include `team`, `hp`, `alive`.
  *
  * The server stamps relayed input/fire/event messages with the sender's `id`.
  * `host_change.resume` carries the last cached host snapshot so the promoted
@@ -25,7 +32,12 @@ export const LAN_DEFAULT_PORT = 8790;
 export const LAN_DEFAULT_URL = `ws://127.0.0.1:${LAN_DEFAULT_PORT}`;
 /** UDP discovery beacon port (server -> LAN broadcast, native helpers only). */
 export const LAN_BEACON_PORT = 8791;
-export const LAN_MAX_PLAYERS = 8;
+export const LAN_MODES = Object.freeze(['coop', 'br']);
+export const LAN_DEFAULT_MODE = 'coop';
+export const LAN_COOP_MAX_PLAYERS = 4;
+export const LAN_BR_MAX_PLAYERS = 8;
+/** Absolute room ceiling (BR); co-op uses LAN_COOP_MAX_PLAYERS. */
+export const LAN_MAX_PLAYERS = LAN_BR_MAX_PLAYERS;
 export const LAN_SNAPSHOT_HZ = 20;
 export const LAN_TICK_MS = 1000 / LAN_SNAPSHOT_HZ;
 export const LAN_MAX_MESSAGE_BYTES = 16 * 1024;
@@ -48,6 +60,7 @@ export const LAN_RECONNECT_DELAYS_MS = [1000, 2000, 4000];
 export const LAN_CLOSE_CODES = Object.freeze({
   BAD_MESSAGE: 4000,
   ROOM_FULL: 4004,
+  MODE_MISMATCH: 4005,
   RATE_LIMITED: 4029,
   SERVER_SHUTDOWN: 1001,
   TOO_LARGE: 1009,
@@ -57,6 +70,7 @@ export const LAN_CLOSE_CODES = Object.freeze({
 export const LAN_FATAL_CLOSE_CODES = new Set([
   LAN_CLOSE_CODES.BAD_MESSAGE,
   LAN_CLOSE_CODES.ROOM_FULL,
+  LAN_CLOSE_CODES.MODE_MISMATCH,
   LAN_CLOSE_CODES.RATE_LIMITED,
   LAN_CLOSE_CODES.TOO_LARGE,
 ]);
@@ -106,6 +120,17 @@ export function sanitizeRoom(raw) {
   if (typeof raw !== 'string') return 'lobby';
   const value = raw.trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24);
   return value.length > 0 ? value : 'lobby';
+}
+
+/** `coop` is the default for old clients that never sent a mode. */
+export function sanitizeMode(raw) {
+  return typeof raw === 'string' && raw.trim().toLowerCase() === 'br'
+    ? 'br'
+    : LAN_DEFAULT_MODE;
+}
+
+export function roomCapacity(mode) {
+  return sanitizeMode(mode) === 'br' ? LAN_BR_MAX_PLAYERS : LAN_COOP_MAX_PLAYERS;
 }
 
 export function sanitizeEventKind(raw) {
@@ -169,8 +194,13 @@ export function encodeMessage(message) {
   return text;
 }
 
-export function makeJoin(room, name) {
-  return { t: 'join', room: sanitizeRoom(room), name: sanitizeName(name) };
+export function makeJoin(room, name, mode = LAN_DEFAULT_MODE) {
+  return {
+    t: 'join',
+    room: sanitizeRoom(room),
+    name: sanitizeName(name),
+    mode: sanitizeMode(mode),
+  };
 }
 
 export function makeInput(input) {
@@ -211,9 +241,17 @@ export function makeEvent(kind, data) {
   return { ...payload, t: 'event', kind: sanitizeEventKind(kind) };
 }
 
-export function makeSnapshot(snapshot) {
+export function makeSnapshot(snapshot, fallbackMode = LAN_DEFAULT_MODE) {
   const payload = isPlainObject(snapshot) ? snapshot : {};
-  return { ...payload, t: 'snapshot' };
+  return {
+    ...payload,
+    mode: sanitizeMode(payload.mode ?? fallbackMode),
+    t: 'snapshot',
+  };
+}
+
+export function makeStart(mode = LAN_DEFAULT_MODE) {
+  return { t: 'start', mode: sanitizeMode(mode) };
 }
 
 /** Normalize a welcome/lobby player list; invalid records are dropped. */
@@ -238,5 +276,5 @@ export function normalizePlayers(rawList) {
 export function isLanMessageType(type) {
   return type === 'join' || type === 'input' || type === 'fire' ||
     type === 'event' || type === 'welcome' || type === 'lobby' ||
-    type === 'snapshot';
+    type === 'snapshot' || type === 'start';
 }

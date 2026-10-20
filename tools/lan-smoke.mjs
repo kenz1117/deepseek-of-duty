@@ -8,7 +8,8 @@
  *   - host snapshot relay and client input/fire relay
  *   - ready event updates the lobby
  *   - host event broadcast
- *   - room cap (LAN_MAX_PLAYERS, imported from the protocol)
+ *   - co-op cap (LAN_COOP_MAX_PLAYERS) and BR cap (LAN_BR_MAX_PLAYERS)
+ *   - mode round-trip (`coop` / `br`) + BR zone/player relay
  *   - host promotion on disconnect
  *   - per-client message rate limit
  *   - 16 KB WebSocket payload cap
@@ -23,7 +24,11 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
-import { LAN_MAX_PLAYERS, LAN_RATE_LIMIT_PER_SEC } from '../src/net/lanProtocol.js';
+import {
+  LAN_BR_MAX_PLAYERS,
+  LAN_COOP_MAX_PLAYERS,
+  LAN_RATE_LIMIT_PER_SEC,
+} from '../src/net/lanProtocol.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -252,10 +257,11 @@ async function main() {
     { label: 'welcome for A' }
   );
   check(
-    'welcome: A 获得 id/host/room/players',
+    'welcome: A 获得 id/host/room/mode/players（缺省 coop）',
     typeof aWelcome.id === 'string' &&
       aWelcome.host === aWelcome.id &&
       aWelcome.room === 'COOP' &&
+      aWelcome.mode === 'coop' &&
       Array.isArray(aWelcome.players) &&
       aWelcome.players.length === 1,
     JSON.stringify(aWelcome)
@@ -266,8 +272,10 @@ async function main() {
     { label: 'lobby with 1 player' }
   );
   check(
-    'lobby: A 是 host',
-    aLobby1.players[0].id === aWelcome.id && aLobby1.players[0].host === true,
+    'lobby: A 是 host（mode=coop）',
+    aLobby1.mode === 'coop' &&
+      aLobby1.players[0].id === aWelcome.id &&
+      aLobby1.players[0].host === true,
     JSON.stringify(aLobby1)
   );
 
@@ -280,9 +288,10 @@ async function main() {
     { label: 'welcome for B' }
   );
   check(
-    'welcome: B 看到 A 是 host 且房间两人',
+    'welcome: B 看到 A 是 host、两人且 mode=coop',
     bWelcome.id !== aWelcome.id &&
       bWelcome.host === aWelcome.id &&
+      bWelcome.mode === 'coop' &&
       bWelcome.players.length === 2,
     JSON.stringify(bWelcome)
   );
@@ -313,8 +322,9 @@ async function main() {
     { label: 'snapshot from host' }
   );
   check(
-    'snapshot: host 快照到达 client',
-    snapshot.tick === 7 && snapshot.wave === 3 && snapshot.kills === 11 &&
+    'snapshot: host 快照到达 client（服务端补 mode=coop）',
+    snapshot.mode === 'coop' &&
+      snapshot.tick === 7 && snapshot.wave === 3 && snapshot.kills === 11 &&
       snapshot.objective === 'defend',
     JSON.stringify(snapshot)
   );
@@ -406,12 +416,10 @@ async function main() {
     JSON.stringify(damage)
   );
 
-  // --- room cap -----------------------------------------------------------
-  // Fill the room to LAN_MAX_PLAYERS, then assert the next joiner is rejected
-  // with ROOM_FULL (4004). Capacity comes from the protocol constant so this
-  // test follows the real rule instead of hard-coding a player count.
+  // --- co-op room cap -----------------------------------------------------
+  // Co-op stays at 4 players even though the absolute/BR ceiling is 8.
   const fillers = [];
-  for (let i = 2; i < LAN_MAX_PLAYERS; i++) {
+  for (let i = 2; i < LAN_COOP_MAX_PLAYERS; i++) {
     const filler = new TestClient(wsBase);
     await filler.open();
     filler.send({ t: 'join', room: 'COOP', name: `FILLER${i}` });
@@ -424,7 +432,7 @@ async function main() {
   overflow.send({ t: 'join', room: 'COOP', name: 'OVERFLOW' });
   const overflowClose = await overflow.waitClose(4000);
   check(
-    `room cap: 第 ${LAN_MAX_PLAYERS + 1} 人被拒绝（4004）`,
+    `co-op room cap: 第 ${LAN_COOP_MAX_PLAYERS + 1} 人被拒绝（4004）`,
     overflowClose.code === 4004,
     JSON.stringify(overflowClose)
   );
@@ -460,6 +468,153 @@ async function main() {
 
   b.close();
   await sleep(200);
+
+  // -------------------------------------------------------------------------
+  // Battle Royale: 8-player room, mode round-trip, BR zone/player relay.
+  // -------------------------------------------------------------------------
+  const brBase = `ws://127.0.0.1:${port}/?room=BRROOM`;
+  const brClients = [];
+  const brWelcomes = [];
+  for (let i = 0; i < LAN_BR_MAX_PLAYERS; i += 1) {
+    const brClient = new TestClient(brBase);
+    await brClient.open();
+    brClient.send({ t: 'join', room: 'BRROOM', name: `BR${i}`, mode: 'br' });
+    const welcome = await brClient.waitFor(
+      (message) => message.t === 'welcome',
+      { label: `BR welcome ${i}` }
+    );
+    brClients.push(brClient);
+    brWelcomes.push(welcome);
+  }
+  check(
+    `BR: ${LAN_BR_MAX_PLAYERS} 人全部加入且 welcome.mode=br`,
+    brWelcomes.length === LAN_BR_MAX_PLAYERS &&
+      brWelcomes.every((welcome) => welcome.mode === 'br' && welcome.room === 'BRROOM'),
+    JSON.stringify(brWelcomes.map((welcome) => ({ id: welcome.id, mode: welcome.mode })))
+  );
+
+  const brLobby = await brClients[0].waitFor(
+    (message) =>
+      message.t === 'lobby' &&
+      message.mode === 'br' &&
+      message.players.length === LAN_BR_MAX_PLAYERS,
+    { label: 'BR lobby with 8 players' }
+  );
+  check(
+    'BR lobby: host 看到 8 人且 mode=br',
+    brLobby.players.length === LAN_BR_MAX_PLAYERS && brLobby.mode === 'br',
+    JSON.stringify(brLobby.players.map((player) => player.name))
+  );
+
+  const brOverflow = new TestClient(brBase);
+  await brOverflow.open();
+  brOverflow.send({ t: 'join', room: 'BRROOM', name: 'BR_OVERFLOW', mode: 'br' });
+  const brOverflowClose = await brOverflow.waitClose(4000);
+  check(
+    `BR room cap: 第 ${LAN_BR_MAX_PLAYERS + 1} 人被拒绝（4004）`,
+    brOverflowClose.code === 4004,
+    JSON.stringify(brOverflowClose)
+  );
+
+  const brHostId = brWelcomes[0].id;
+  const brPeerId = brWelcomes[1].id;
+  brClients[0].send({
+    t: 'snapshot',
+    mode: 'br',
+    tick: 10,
+    players: [
+      { id: brHostId, team: 'alpha', hp: 100, alive: true, x: 1, z: 2 },
+      { id: brPeerId, team: 'bravo', hp: 80, alive: true, x: 3, z: 4 },
+    ],
+    enemies: [],
+    wave: 0,
+    kills: 0,
+    objective: null,
+    br: {
+      zone: {
+        x: 0,
+        z: 0,
+        r: 50,
+        nextX: 10,
+        nextZ: -5,
+        nextR: 40,
+        phase: 'closing',
+        shrinkLeft: 30,
+      },
+      alive: 2,
+      winner: null,
+      phase: 'live',
+    },
+  });
+  const brSnapshot = await brClients[1].waitFor(
+    (message) => message.t === 'snapshot' && message.mode === 'br',
+    { label: 'BR snapshot on client' }
+  );
+  check(
+    'BR snapshot: mode/br.zone/player team/hp/alive 原样中继',
+    brSnapshot.br &&
+      brSnapshot.br.zone &&
+      brSnapshot.br.zone.x === 0 &&
+      brSnapshot.br.zone.z === 0 &&
+      brSnapshot.br.zone.r === 50 &&
+      brSnapshot.br.zone.nextX === 10 &&
+      brSnapshot.br.zone.nextZ === -5 &&
+      brSnapshot.br.zone.nextR === 40 &&
+      brSnapshot.br.zone.phase === 'closing' &&
+      brSnapshot.br.zone.shrinkLeft === 30 &&
+      brSnapshot.br.alive === 2 &&
+      brSnapshot.br.winner === null &&
+      brSnapshot.br.phase === 'live' &&
+      brSnapshot.players[0].team === 'alpha' &&
+      brSnapshot.players[0].hp === 100 &&
+      brSnapshot.players[0].alive === true &&
+      brSnapshot.players[1].team === 'bravo' &&
+      brSnapshot.players[1].hp === 80,
+    JSON.stringify(brSnapshot)
+  );
+
+  brClients[0].send({ t: 'start', mode: 'br' });
+  const brStart = await brClients[1].waitFor(
+    (message) => message.t === 'start',
+    { label: 'BR start on client' }
+  );
+  check('BR start: mode 回环为 br', brStart.mode === 'br', JSON.stringify(brStart));
+
+  brClients[1].send({
+    t: 'fire',
+    seq: 9,
+    ox: 1,
+    oy: 2,
+    oz: 3,
+    dx: 0.1,
+    dy: 0,
+    dz: -0.1,
+    weapon: 'AR',
+  });
+  const brFire = await brClients[0].waitFor(
+    (message) => message.t === 'fire' && message.id === brPeerId,
+    { label: 'BR fire reaches host' }
+  );
+  check(
+    'BR fire: 射线参数到达 host 且带来源 id',
+    brFire.ox === 1 && brFire.oy === 2 && brFire.oz === 3 &&
+      brFire.dx === 0.1 && brFire.dz === -0.1 && brFire.weapon === 'AR',
+    JSON.stringify(brFire)
+  );
+
+  brClients[0].send({ t: 'event', kind: 'damage', target: brPeerId, amount: 25 });
+  const brDamage = await brClients[1].waitFor(
+    (message) => message.t === 'event' && message.kind === 'damage',
+    { label: 'BR damage on client' }
+  );
+  check(
+    'BR damage: host 事件带 target/amount 到达 client',
+    brDamage.id === brHostId && brDamage.target === brPeerId && brDamage.amount === 25,
+    JSON.stringify(brDamage)
+  );
+
+  for (const brClient of brClients) brClient.close();
+  await sleep(250);
 
   // --- rate limit ---------------------------------------------------------
   // Burst past the inbound budget; the budget itself is imported so this test

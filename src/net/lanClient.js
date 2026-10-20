@@ -32,11 +32,16 @@ import {
   makeInput,
   makeJoin,
   makeSnapshot,
+  makeStart,
   normalizePlayers,
   sanitizeEventKind,
+  sanitizeMode,
   sanitizeName,
   sanitizeRoom,
 } from './lanProtocol.js';
+import { createP2P } from './lanP2P.js';
+
+const P2P_SIGNAL_KINDS = new Set(['p2p_offer', 'p2p_answer', 'p2p_ice']);
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -72,16 +77,20 @@ function buildSocketUrl(rawUrl, room) {
  * @param {string} [options.url] WebSocket base URL, e.g. `ws://192.168.1.10:8790`.
  * @param {string} [options.room] Room code.
  * @param {string} [options.name] Callsign (sanitized, max 16 chars).
+ * @param {'coop'|'br'} [options.mode] Room mode; defaults to `coop`.
  * @param {(players:Array)=>void} [options.onLobby]
  * @param {(snapshot:object)=>void} [options.onSnapshot]
  * @param {(message:object)=>void} [options.onEvent] Relayed messages:
- *   `{t:'event'}`, plus `{t:'input'}` / `{t:'fire'}` when the peer is the host.
+ *   `{t:'event'}`, `{t:'start'}`, plus `{t:'input'}` / `{t:'fire'}` when the
+ *   peer is the host.
  * @param {(status:object)=>void} [options.onStatus]
  */
 export function createLanClient({
   url = LAN_DEFAULT_URL,
   room = 'lobby',
   name = 'OPERATOR',
+  mode = 'coop',
+  p2p = false,
   onLobby,
   onSnapshot,
   onEvent,
@@ -90,6 +99,7 @@ export function createLanClient({
   const roomName = sanitizeRoom(room);
   const playerName = sanitizeName(name);
   const socketUrl = buildSocketUrl(url, roomName);
+  let roomMode = sanitizeMode(mode);
 
   let socket = null;
   let manualClose = false;
@@ -105,6 +115,49 @@ export function createLanClient({
   let connectResolve = null;
   let connectSettled = true;
 
+  /* ---- direct transport (WebRTC), signaling over this WS relay ---------- */
+  let p2pMgr = null;
+
+  function p2pSendSignal(kind, to, payload) {
+    // The relay routes events by role: host -> broadcast, client -> host.
+    // That is exactly the signaling topology we need; `to` rides along so the
+    // peer can match, and the receiving side filters by selfId.
+    sendRaw(makeEvent(kind, { to, ...payload }));
+  }
+
+  function p2pEnsure() {
+    if (!p2p) return null;
+    if (!p2pMgr) {
+      p2pMgr = createP2P({
+        selfId: () => selfId,
+        isHost: () => Boolean(selfId && hostId === selfId),
+        sendSignal: p2pSendSignal,
+        onPeerMessage: (fromId, message) => {
+          // Game traffic arriving peer-to-peer feeds the same dispatch path
+          // as relayed WS frames.
+          dispatchMessage(message, fromId);
+        },
+      });
+    }
+    return p2pMgr;
+  }
+
+  /**
+   * Route the 20 Hz bulk messages over the direct channel when possible.
+   * Policy: use P2P only when EVERY relevant remote peer's channel is open —
+   * otherwise fall back to the WS relay for the whole message so nobody is
+   * left with a half-updated world. Lobby/events/host_change always stay on
+   * the relay (they must survive even when peers have no direct path).
+   */
+  function p2pReady() {
+    const mgr = p2pMgr;
+    if (!mgr) return { any: false, all: true, ids: [] };
+    const known = mgr.knownPeers();
+    if (!known.length) return { any: false, all: true, ids: [] };
+    const open = mgr.openPeers();
+    return { any: open.length > 0, all: open.length >= known.length, ids: open };
+  }
+
   function safeCall(callback, ...args) {
     if (typeof callback !== 'function') return;
     try {
@@ -119,6 +172,7 @@ export function createLanClient({
     safeCall(onStatus, {
       state,
       room: roomName,
+      mode: roomMode,
       id: selfId,
       host: hostId,
       attempt: reconnectAttempts,
@@ -147,29 +201,43 @@ export function createLanClient({
   function handleMessage(raw) {
     const message = decodeMessage(raw);
     if (!message) return;
+    dispatchMessage(message);
+  }
 
+  /** Shared dispatch for relayed WS frames and direct DataChannel messages. */
+  function dispatchMessage(message) {
     switch (message.t) {
       case 'welcome': {
         if (typeof message.id === 'string' && message.id) selfId = message.id;
         if (typeof message.host === 'string' && message.host) hostId = message.host;
+        if (typeof message.mode === 'string') roomMode = sanitizeMode(message.mode);
         players = normalizePlayers(message.players);
         joined = true;
         reconnectAttempts = 0;
         lastError = null;
+        p2pOfferToPeers();
         emitStatus('joined');
         safeCall(onLobby, playerList());
         settleConnect({ ok: true, id: selfId, host: hostId });
         break;
       }
       case 'lobby': {
+        if (typeof message.mode === 'string') roomMode = sanitizeMode(message.mode);
         players = normalizePlayers(message.players);
         const host = hostFromPlayers();
         if (host) hostId = host;
+        p2pOfferToPeers();
         safeCall(onLobby, playerList());
         break;
       }
       case 'snapshot': {
+        if (typeof message.mode === 'string') roomMode = sanitizeMode(message.mode);
         safeCall(onSnapshot, message);
+        break;
+      }
+      case 'start': {
+        if (typeof message.mode === 'string') roomMode = sanitizeMode(message.mode);
+        safeCall(onEvent, message);
         break;
       }
       case 'input':
@@ -178,6 +246,12 @@ export function createLanClient({
         // `onEvent` is the generic relayed-message channel. The host receives
         // client `input`/`fire` here; clients receive host `event`s and host
         // input/fire presentation messages here. Inspect `message.t`.
+        if (message.t === 'event' && P2P_SIGNAL_KINDS.has(message.kind)) {
+          // WebRTC signaling: consumed here, never forwarded to the game.
+          const mgr = p2pEnsure();
+          if (mgr) mgr.handleSignal(message.id, message.kind, message);
+          return;
+        }
         if (message.t === 'event' &&
             message.kind === LAN_EVENT.HOST_CHANGE &&
             typeof message.host === 'string') {
@@ -188,6 +262,16 @@ export function createLanClient({
       }
       default:
         break;
+    }
+  }
+
+  /** Host only: offer a direct channel to every other lobby member. */
+  function p2pOfferToPeers() {
+    if (!p2p || !joined) return;
+    const mgr = p2pEnsure();
+    if (!mgr || selfId === null || selfId !== hostId) return;
+    for (const player of players) {
+      if (String(player.id) !== String(selfId)) mgr.ensurePeer(player.id);
     }
   }
 
@@ -243,6 +327,7 @@ export function createLanClient({
 
     if (LAN_FATAL_CLOSE_CODES.has(code)) {
       if (code === LAN_CLOSE_CODES.ROOM_FULL) lastError = 'room_full';
+      else if (code === LAN_CLOSE_CODES.MODE_MISMATCH) lastError = 'mode_mismatch';
       else if (code === LAN_CLOSE_CODES.RATE_LIMITED) lastError = 'rate_limited';
       else if (code === LAN_CLOSE_CODES.TOO_LARGE) lastError = 'message_too_large';
       else lastError = 'bad_message';
@@ -283,7 +368,7 @@ export function createLanClient({
       ws.onopen = () => {
         if (socket !== ws) return;
         emitStatus('open');
-        sendRaw(makeJoin(roomName, playerName));
+        sendRaw(makeJoin(roomName, playerName, roomMode));
       };
       ws.onmessage = (event) => {
         if (socket !== ws) return;
@@ -324,6 +409,7 @@ export function createLanClient({
 
   function close() {
     manualClose = true;
+    if (p2pMgr) { try { p2pMgr.close(); } catch { /* ignore */ } }
     if (reconnectTimer !== null) {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
@@ -346,7 +432,11 @@ export function createLanClient({
   function sendInput(input) {
     if (!joined) return false;
     try {
-      return sendRaw(makeInput(input));
+      const message = makeInput(input);
+      if (p2p && hostId && selfId !== hostId && p2pMgr && p2pMgr.isOpen(hostId)) {
+        return p2pMgr.send(hostId, message);
+      }
+      return sendRaw(message);
     } catch {
       return false;
     }
@@ -355,7 +445,11 @@ export function createLanClient({
   function sendFire(fire) {
     if (!joined) return false;
     try {
-      return sendRaw(makeFire(fire));
+      const message = makeFire(fire);
+      if (p2p && hostId && selfId !== hostId && p2pMgr && p2pMgr.isOpen(hostId)) {
+        return p2pMgr.send(hostId, message);
+      }
+      return sendRaw(message);
     } catch {
       return false;
     }
@@ -368,6 +462,15 @@ export function createLanClient({
         return sendRaw(makeEvent(kind.kind, kind));
       }
       return sendRaw(makeEvent(sanitizeEventKind(kind), data));
+    } catch {
+      return false;
+    }
+  }
+
+  function sendStart(startMode = roomMode) {
+    if (!joined || !hostId || hostId !== selfId) return false;
+    try {
+      return sendRaw(makeStart(startMode));
     } catch {
       return false;
     }
@@ -388,7 +491,20 @@ export function createLanClient({
   function broadcastSnapshot(snapshot) {
     if (!joined || !hostId || hostId !== selfId) return false;
     try {
-      return sendRaw(makeSnapshot(snapshot));
+      const message = makeSnapshot(snapshot, roomMode);
+      if (p2p) {
+        const state = p2pReady();
+        if (state.any && state.all) {
+          // Every peer has a direct channel: skip the relay hop entirely.
+          let sent = 0;
+          for (const id of state.ids) {
+            if (p2pMgr.send(id, message)) sent += 1;
+          }
+          return sent > 0;
+        }
+        // Mixed/partial: relay so nobody is left with a half-updated world.
+      }
+      return sendRaw(message);
     } catch {
       return false;
     }
@@ -400,6 +516,7 @@ export function createLanClient({
     sendInput,
     sendFire,
     sendEvent,
+    sendStart,
     broadcastSnapshot,
     broadcastEvent,
     get isHost() {
@@ -410,6 +527,9 @@ export function createLanClient({
     },
     get host() {
       return hostId;
+    },
+    get mode() {
+      return roomMode;
     },
     get players() {
       return playerList();

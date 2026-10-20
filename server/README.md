@@ -591,7 +591,7 @@ node --check tools/lb-smoke.mjs
   服务端只负责把快照转发给同房间的 client。
 - **client-local movement**：客户端本地移动，通过 `input` 把位置/朝向发给 host；
   服务端不校验移动、不校验命中，也不做回滚/对账。
-- 2–8 人同房间；服务端不做静态文件服务，静态页面仍由 Vite / nginx 提供。
+- 房间模式 `coop`（最多 4 人）或 `br`（Battle Royale，最多 8 人）；服务端不做静态文件服务，静态页面仍由 Vite / nginx 提供。
 
 启动：
 
@@ -626,7 +626,8 @@ http://HOST:5173/?lan=ws://LAN-HOST:8790
 ### 11.2 服务端行为
 
 - 房间由 WebSocket URL 的 `?room=` 决定（缺省 `lobby`）；`join` 消息里的 `room` 只在 URL 没有房间时作为回退。
-- 每个房间最多 **4** 人；第 5 人收到 `room_full` 错误并以 close code **4004** 断开。
+- 房间模式由第一个成功 `join` 的 `mode` 决定（`coop` | `br`，缺省 `coop`）。后续 `join` 省略 `mode` 时继承房间模式；显式传入不同 mode 会收到 `mode_mismatch` 并以 close code **4005** 断开。
+- 容量按模式：**coop 最多 4 人，br 最多 8 人**；超出时收到 `room_full` 并以 close code **4004** 断开。
 - 第一个成功 `join` 的玩家是 host；host 断开后，按加入顺序把下一位提升为 host，
   广播新的 `lobby` 和 `{t:'event',kind:'host_change',host,resume}`。
 - **Host 迁移带世界快照（resume）**：中继为每个房间缓存最近一条 host `snapshot`
@@ -639,18 +640,19 @@ http://HOST:5173/?lan=ws://LAN-HOST:8790
 
 | 发送方 | 消息 | 转发目标 |
 | --- | --- | --- |
-| host | `snapshot` | 同房间其他玩家 |
+| host | `snapshot` | 同房间其他玩家（服务端规范化 `mode`） |
+| host | `start` | 同房间所有玩家（含 host ack） |
 | client | `input` / `fire` | host |
 | client | `event` | host |
 | host | `event` | 同房间其他玩家 |
 | host | `input` / `fire` | 同房间其他玩家（给 client 做表现） |
-| 非 host | `snapshot` | 不转发，回 `{kind:'error',code:'not_host'}` |
+| 非 host | `snapshot` / `start` | 不转发，回 `{kind:'error',code:'not_host'}` |
 
 - 所有转发给对端的 `input` / `fire` / `event` 都会由服务端补上发送者 `id`；
   客户端不能用消息里的 `id` 冒充别人。
 - `event.kind === 'ready'` 会更新服务端保存的 `ready` 状态并广播 `lobby`。
 - 服务端自己产生的事件：
-  - `{t:'event',kind:'error',code,message}`：`room_full`、`rate_limited`、`bad_message`、`not_joined`、`not_host`、`unknown_type` 等；
+  - `{t:'event',kind:'error',code,message}`：`room_full`、`mode_mismatch`、`rate_limited`、`bad_message`、`not_joined`、`not_host`、`unknown_type` 等；
   - `{t:'event',kind:'host_change',host,resume}`：`resume` 为该房间最后一条 host snapshot（无则 `null`）；
   - `{t:'event',kind:'leave',id}`。
 - **UDP 发现信标**：服务启动后每 3 秒向 `255.255.255.255:8791` 广播一条
@@ -661,7 +663,7 @@ http://HOST:5173/?lan=ws://LAN-HOST:8790
   局域网地址（`[lan] LAN address: ws://<ip>:<port>`）。
 - 限制：
   - 单条消息上限 **16 KB**（WebSocket `maxPayload`；超限由 ws 以 close code **1009** 断开）；
-  - 每连接 **60 条/秒** 的 token bucket（容量 60）；超限发送 `rate_limited` 并以 **4029** 断开；
+  - 每连接 **240 条/秒** 的 token bucket（容量 240）；超限发送 `rate_limited` 并以 **4029** 断开；
   - 心跳 ping 每 **20 秒**一次，连续无 pong 的连接会被 terminate；
   - 不持久化任何房间/玩家/战局状态，服务重启即清空。
 
@@ -672,11 +674,15 @@ http://HOST:5173/?lan=ws://LAN-HOST:8790
 客户端 → 服务端：
 
 ```json
-{ "t": "join", "room": "ALPHA", "name": "KEN" }
+{ "t": "join", "room": "ALPHA", "name": "KEN", "mode": "coop" }
 ```
 
 ```json
-{ "t": "input", "seq": 12, "x": 3.2, "z": -8.1, "yaw": 0.4, "pitch": -0.1, "hp": 90, "alive": true }
+{ "t": "start", "mode": "coop" }
+```
+
+```json
+{ "t": "input", "seq": 12, "x": 3.2, "y": 1.6, "z": -8.1, "yaw": 0.4, "pitch": -0.1, "hp": 90, "alive": true }
 ```
 
 ```json
@@ -688,11 +694,40 @@ http://HOST:5173/?lan=ws://LAN-HOST:8790
 ```
 
 ```json
-{ "t": "snapshot", "tick": 421, "players": [], "enemies": [], "wave": 3, "kills": 17, "objective": "defend" }
+{ "t": "snapshot", "mode": "coop", "tick": 421, "players": [], "enemies": [], "wave": 3, "kills": 17, "objective": "defend" }
 ```
 
-`snapshot` 的 `players/enemies/objective` 由 host 定义；服务端把它当作不透明 JSON 转发，
-不校验敌人数量、不检查命中、也不计算波次。
+`snapshot` 的 `players/enemies/objective/br` 由 host 定义；服务端把它当作不透明 JSON 转发，
+不校验敌人数量、不检查命中、也不计算波次。BR 模式下 snapshot 可以带：
+
+```json
+{
+  "t": "snapshot",
+  "mode": "br",
+  "tick": 421,
+  "players": [
+    { "id": "p_1a2b3c4d", "team": "alpha", "hp": 100, "alive": true, "x": 1, "y": 1.7, "z": 2 },
+    { "id": "p_5e6f7a8b", "team": "bravo", "hp": 60, "alive": true, "x": 8, "y": 0, "z": -4 }
+  ],
+  "enemies": [],
+  "wave": 0,
+  "kills": 0,
+  "objective": null,
+  "br": {
+    "zone": {
+      "x": 0, "z": 0, "r": 50,
+      "nextX": 10, "nextZ": -5, "nextR": 40,
+      "phase": "closing", "shrinkLeft": 30
+    },
+    "alive": 2,
+    "winner": null,
+    "phase": "live"
+  }
+}
+```
+
+`team` / `hp` / `alive` 是 snapshot 内的玩家字段；服务端不改写它们，也不做伤害判定。
+BR 的 `fire` 仍带射线；`damage` 由 host 通过 `{t:'event',kind:'damage',target,amount}` 广播。
 
 服务端 → 客户端：
 
@@ -702,6 +737,7 @@ http://HOST:5173/?lan=ws://LAN-HOST:8790
   "id": "p_1a2b3c4d",
   "host": "p_1a2b3c4d",
   "room": "ALPHA",
+  "mode": "coop",
   "players": [{ "id": "p_1a2b3c4d", "name": "KEN", "ready": false, "host": true }]
 }
 ```
@@ -709,6 +745,7 @@ http://HOST:5173/?lan=ws://LAN-HOST:8790
 ```json
 {
   "t": "lobby",
+  "mode": "coop",
   "players": [
     { "id": "p_1a2b3c4d", "name": "KEN", "ready": true, "host": true },
     { "id": "p_5e6f7a8b", "name": "MAYA", "ready": false, "host": false }
@@ -717,8 +754,13 @@ http://HOST:5173/?lan=ws://LAN-HOST:8790
 ```
 
 ```json
+{ "t": "start", "mode": "coop" }
+```
+
+```json
 {
   "t": "snapshot",
+  "mode": "coop",
   "tick": 421,
   "players": [{ "id": "p_1a2b3c4d", "x": 1, "z": 2, "yaw": 0.3, "hp": 100, "alive": true }],
   "enemies": [{ "id": "e1", "x": 8, "z": -4, "hp": 60 }],
@@ -735,9 +777,14 @@ http://HOST:5173/?lan=ws://LAN-HOST:8790
 转发规则补充：
 
 - `welcome` 只在 `join` 成功后发送一次；断线重连会重新 `join`，得到新的 `id`。
+- `join`/`welcome`/`lobby`/`snapshot`/`start` 都带 `mode`（`coop` | `br`）。
+  房间模式由首个 `join` 决定；`join` 的显式 mode 与房间不符会 `mode_mismatch`（4005）。
+- 服务端会把 `snapshot.mode` 规范化为房间模式；`br` 对象、玩家 `team/hp/alive`
+  与 `fire` 射线字段原样转发，不做计算。
+- `start` 只能由 host 发送；服务端校验 mode 后广播给房间内所有玩家。
 - 客户端收到的 `input`/`fire` 一定带 `id`；host 收到的 `event` 也带 `id`。
 - `event` 的业务字段由 host/client 自行约定（`damage`、`kill`、`hit`、`respawn` 等），
-  服务端只特殊处理 `ready`。
+  服务端只特殊处理 `ready`。PvP 的 `damage` 目标 id 由 host 决定，服务端不判定命中。
 - **P2P 信令事件**（`kind` 为 `p2p_offer` / `p2p_answer` / `p2p_ice`）对服务端是
   普通事件，按上面的中继规则转发（host 发 → 全员，client 发 → host）；内容是
   WebRTC 的 SDP/ICE candidate，客户端在 `src/net/lanClient.js` 内消费，不进游戏
@@ -754,28 +801,31 @@ const lan = createLanClient({
   url: params.get('lan') || 'ws://127.0.0.1:8790',
   room: params.get('room') || 'ALPHA',
   name: 'KEN',
+  mode: 'coop', // 'coop' | 'br'
   onLobby(players) {
     // [{ id, name, ready, host }]
   },
   onSnapshot(snapshot) {
-    // host 广播的 { tick, players, enemies, wave, kills, objective }
+    // { mode, tick, players, enemies, wave, kills, objective, br? }
   },
   onEvent(message) {
     // 本端收到的所有中继消息：
     //   {t:'event', kind:'damage'|'kill'|'hit'|'respawn'|...}
+    //   {t:'start', mode}
     //   {t:'input', ...}  // host 收 client 输入；client 也可能收到 host 输入
     //   {t:'fire', ...}   // host 收 client 开火；client 也可能收到 host 开火
     // 用 message.t 区分。
   },
   onStatus(status) {
-    // { state, room, id, host, attempt, error }
+    // { state, room, mode, id, host, attempt, error }
   },
 });
 
 const joined = await lan.connect(); // 永不 reject
 if (!joined.ok) {
-  // joined.error: room_full / rate_limited / message_too_large /
-  //               no_websocket / network / reconnect_failed / closed
+  // joined.error: room_full / mode_mismatch / rate_limited /
+  //               message_too_large / no_websocket / network /
+  //               reconnect_failed / closed
 }
 ```
 
@@ -783,17 +833,19 @@ if (!joined.ok) {
 
 | API | 说明 |
 | --- | --- |
-| `createLanClient({ url, room, name, onLobby, onSnapshot, onEvent, onStatus })` | 创建客户端；所有回调异常都会被吞掉，不会抛进游戏循环 |
+| `createLanClient({ url, room, name, mode, onLobby, onSnapshot, onEvent, onStatus })` | 创建客户端；`mode` 缺省 `coop`；所有回调异常都会被吞掉，不会抛进游戏循环 |
 | `connect(): Promise<{ok, id?, host?, error?}>` | 开始连接/自动重连；在收到 `welcome` 时 resolve `{ok:true}`；致命错误或 3 次重连耗尽时 resolve `{ok:false}`；永不 reject |
 | `close()` | 主动断开并停止重连 |
-| `sendInput(input): boolean` | 发送 `{t:'input',seq,x,z,yaw,pitch,hp,alive}`；未加入房间/未连接返回 `false` |
-| `sendFire(fire): boolean` | 发送 `{t:'fire',seq,ox,oy,oz,dx,dy,dz,weapon}` |
+| `sendInput(input): boolean` | 发送 `{t:'input',seq,x,y,z,yaw,pitch,hp,alive}`；未加入房间/未连接返回 `false` |
+| `sendFire(fire): boolean` | 发送 `{t:'fire',seq,ox,oy,oz,dx,dy,dz,weapon}`；BR 的射线参数原样中继 |
 | `sendEvent(kind, data?): boolean` / `sendEvent(obj)` | 发送 `{t:'event',kind,...}`；client 发给 host |
-| `broadcastSnapshot(snapshot): boolean` | 仅 host 有效；发送 20 Hz 快照 |
-| `broadcastEvent(kind, data?): boolean` / `broadcastEvent(obj)` | 仅 host 有效；广播权威事件 |
+| `sendStart(mode?): boolean` | 仅 host；发送 `{t:'start',mode}`；缺省用当前房间 mode |
+| `broadcastSnapshot(snapshot): boolean` | 仅 host 有效；发送 20 Hz 快照（自动补 `mode`） |
+| `broadcastEvent(kind, data?): boolean` / `broadcastEvent(obj)` | 仅 host 有效；广播权威事件（含 damage） |
 | `get isHost` | 当前连接是否为 host |
 | `get id` | 自己的玩家 id（未加入为 `null`） |
 | `get host` | 当前 host 的 id |
+| `get mode` | 当前房间模式 `coop` / `br` |
 | `get players` | 最近一次 `lobby` 的玩家数组副本 |
 | `get status` | `idle / connecting / open / joined / reconnecting / closed / error` |
 
@@ -808,8 +860,8 @@ if (!joined.ok) {
 - `error`：致命错误或重连耗尽（`error` 字段有原因）。
 
 重连策略：非主动断开、且不是致命 close code 时，按 `[1000, 2000, 4000] ms`
-最多重连 **3** 次；每次重连会重新 `join`。`room_full`、`rate_limited`、
-`message_too_large`、`bad_message` 不自动重连。
+最多重连 **3** 次；每次重连会重新 `join`。`room_full`、`mode_mismatch`、
+`rate_limited`、`message_too_large`、`bad_message` 不自动重连。
 
 Host 驱动 20 Hz 的典型写法（由 main.js 负责接线）：
 
@@ -836,16 +888,19 @@ node tools/lan-smoke.mjs
 
 脚本使用 `LAN_PORT=0` 的临时端口启动 `server/lan.mjs`，真实连接 `ws` 客户端，验证：
 
-1. `welcome`：id/host/room/players；
-2. `lobby`：第一人是 host，第二人加入后双方看到 2 人；
-3. host `snapshot` 到达 client；
-4. client `input`/`fire` 到达 host（带来源 id）；
+1. `welcome`：id/host/room/mode/players（缺省 coop）；
+2. `lobby`：第一人是 host，第二人加入后双方看到 2 人且 mode=coop；
+3. host `snapshot` 到达 client（服务端补 `mode`）；
+4. client `input`/`fire` 到达 host（带来源 id，fire 含射线字段）；
 5. host `fire`/`event` 广播到 client；
 6. `ready` 更新 lobby；
-7. 第 5 人收到 `room_full`（4004）；
+7. co-op 第 5 人收到 `room_full`（4004）；
 8. host 断开后下一位被提升为 host（`lobby` + `host_change`）；
-9. 超过 60 条/秒被关闭（4029）；
-10. 17KB 消息被关闭（1009）。
+9. BR：8 人加入成功、welcome/lobby mode=br、第 9 人 4004；
+10. BR snapshot：`mode` / `br.zone` / 玩家 `team/hp/alive` 原样中继；
+11. BR `start` mode=br 回环；BR `fire` 射线到达 host；host `damage` 到达 client；
+12. 超过 240 条/秒被关闭（4029）；
+13. 17KB 消息被关闭（1009）。
 
 任一断言失败退出码为 1；结束后会关闭客户端和服务器进程。
 
@@ -859,7 +914,7 @@ node tools/lan-smoke.mjs
    下发最后一条快照，新 host 可重建敌人/波次/比分，但**手雷在飞、AI 微观状态
    （当前掩体/开火节奏）不迁移**——敌人从快照位置/血量继续。
 4. **JSON 文本 + 20 Hz**。带宽随玩家/敌人数量增长；没有二进制协议、压缩或 delta 编码。
-5. **最多 8 人**，入站令牌桶 240 条/秒/连接（8 人时房主最坏入站 140/s，留 100/s 余量）；仍超限会触发 4029。
+5. **co-op 最多 4 人、BR 最多 8 人**；入站令牌桶 240 条/秒/连接（8 人时房主最坏入站 140/s，留 100/s 余量）；仍超限会触发 4029。
 6. **16 KB 单帧上限**；大快照需要 host 自己裁剪。
 7. **没有 TLS**。默认 `ws://`，适合 LAN/VPN；公网部署应放在 wss 反向代理后，
    并注意房间码仍然不是安全边界。
