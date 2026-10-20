@@ -13,4 +13,4 @@
      0.2.0  10-18 18:03  dist-sprintC.tar.gz  SSAO/ragdoll/art pass
      0.3.0  10-19 22:55  sync site build      campaign + north checkpoint + voices
    ========================================================================= */
-export const GAME_VERSION = '0.3.1';
+export const GAME_VERSION = '0.3.2';
