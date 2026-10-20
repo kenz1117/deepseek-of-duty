@@ -92,3 +92,12 @@ Content-Type: application/json
 
 - 输出：`public/media/victory.mp4`、`public/media/defeat.mp4`。
 - 不重试生成请求；额度不足（2056）直接停止，不产生任务。
+
+### 本次实际调用（2026-10-20）
+
+- 只发 **2 次**生成请求，未做任何模型名/额度探测，未因失败重试。
+- `victory` task_id `454472629158174` → `public/media/victory.mp4`
+- `defeat` task_id `454473900855682` → `public/media/defeat.mp4`
+- 两条均为 1920×1080、24 fps、5.875 s、H.264，无音轨。
+- 角色图 `docs/refs/operator.png`（用户提供，透明底）用 ffmpeg 合成到两条视频右侧：victory 高 780 px、defeat 高 700 px，带 0.6–0.9 s 淡入/滑入；不额外调用生成接口。
+- 输出文件：`public/media/victory.mp4` 4.8 MB、`public/media/defeat.mp4` 5.3 MB。
