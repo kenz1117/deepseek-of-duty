@@ -571,8 +571,8 @@ const MODE_BRIEFS = {
   },
   campaign: {
     label: 'CAMPAIGN', title: '剧情推进', op: 'CAMPAIGN PROTOCOL',
-    desc: '按 OP01 → OP10 推进战役：每关有独立简报、过场、目标与结局。选择任务后 START 部署，完成后可继续下一关。',
-    threat: 'STORY', ao: 'URBAN', contact: '10 OPS',
+    desc: '按 OP01 → OP14 推进战役：前十关在街区主线，OP11–14 转战老城/北站/港区。每关有独立简报、过场、目标与结局。',
+    threat: 'STORY', ao: 'URBAN', contact: '14 OPS',
     objectives: ['在 OPS 里选择已解锁的任务', '完成关卡目标并存活', '结算后继续下一任务'],
     note: '剧情模式会按关卡推进；其他三个模式是独立玩法，不会改变战役进度。',
   },
