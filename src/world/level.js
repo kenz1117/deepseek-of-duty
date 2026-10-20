@@ -43,6 +43,7 @@ export function createLevel(engine) {
   const fires = [];
   const rnd = mulberry32(20261018);
   let shopLights = 0;          // budget: keep the point-light count sane
+  let seaMatRef = null;
 
   const rr = (a, b) => a + rnd() * (b - a);
   const pick = (arr) => arr[(rnd() * arr.length) | 0];
@@ -961,9 +962,17 @@ export function createLevel(engine) {
     let best = 0;
     const ceiling = y + 0.6;
     for (const r of [RAMP, SOUTH_RAMP, HQ_STAIR, DOCK_RAMP, ...EXPANSION_RAMPS]) {
-      const rz0 = Math.min(r.z0, r.z1), rz1 = Math.max(r.z0, r.z1);
-      if (x < r.x0 || x > r.x1 || z < rz0 || z > rz1) continue;
-      const t = Math.max(0, Math.min(1, (z - r.z0) / (r.z1 - r.z0)));
+      let t;
+      if (r.axis === 'x') {
+        const rx0 = Math.min(r.x0, r.x1), rx1 = Math.max(r.x0, r.x1);
+        const rz0 = Math.min(r.z0, r.z1), rz1 = Math.max(r.z0, r.z1);
+        if (x < rx0 || x > rx1 || z < rz0 || z > rz1) continue;
+        t = Math.max(0, Math.min(1, (x - r.x0) / (r.x1 - r.x0)));
+      } else {
+        const rz0 = Math.min(r.z0, r.z1), rz1 = Math.max(r.z0, r.z1);
+        if (x < r.x0 || x > r.x1 || z < rz0 || z > rz1) continue;
+        t = Math.max(0, Math.min(1, (z - r.z0) / (r.z1 - r.z0)));
+      }
       const h = r.rise * t;
       if (h <= ceiling) best = Math.max(best, h);
     }
@@ -1045,12 +1054,14 @@ export function createLevel(engine) {
      =================================================================== */
   function buildBackdrop() {
     const brnd = mulberry32(77123);
-    const inPlay = (x, z) => x > -118 && x < 118 && z > -196 && z < 128;
+    const inCity = (x, z) => x > -118 && x < 118 && z > -196 && z < 128;
+    const inFoothills = (x, z) => x >= -235 && x <= -118 && z >= -120 && z <= 120;
     const H = (x, z) => {
       if (x > 118) return -4;                 // sea floor
-      if (inPlay(x, z)) return -3;            // under the city ground
-      if (x < -118) {
-        const t = Math.min(1, (-118 - x) / 632);
+      if (inCity(x, z)) return -3;            // under the city ground
+      if (inFoothills(x, z)) return -0.6;     // under the playable foothill floor
+      if (x < -235) {
+        const t = Math.min(1, (-235 - x) / 515);
         const ridge = Math.sin(Math.PI * Math.min(1, t * 1.06));
         let h = 120 * Math.pow(Math.max(0, ridge), 1.25);
         h *= 0.84 + 0.13 * Math.sin(z * 0.013) + 0.05 * Math.sin(x * 0.021 + z * 0.017);
@@ -1085,8 +1096,8 @@ export function createLevel(engine) {
       pos.setY(i, y);
       let c;
       if (wx > 118) c = cFloor.clone();
-      else if (inPlay(wx, wz)) c = cInside.clone();
-      else if (wx < -118) {
+      else if (inCity(wx, wz) || inFoothills(wx, wz)) c = cInside.clone();
+      else if (wx < -235) {
         if (y < 10) c = cGrass.clone().lerp(cDry, y / 10);
         else if (y < 50) c = cDry.clone().lerp(cRock, (y - 10) / 40);
         else c = cRock.clone().lerp(cHigh, Math.min(1, (y - 50) / 70));
@@ -1112,11 +1123,29 @@ export function createLevel(engine) {
     root.add(terrain);
 
     // ---- sea ----
-    const seaGeo = new THREE.PlaneGeometry(682, 1200, 1, 1);
+    const seaGeo = new THREE.PlaneGeometry(682, 1200, 48, 32);
     seaGeo.rotateX(-Math.PI / 2);
-    const sea = new THREE.Mesh(seaGeo, new THREE.MeshBasicMaterial({
-      color: 0x2f6470, fog: true,
-    }));
+    const seaMat = new THREE.MeshBasicMaterial({ color: 0x2f6470, fog: true });
+    seaMat.onBeforeCompile = (shader) => {
+      shader.uniforms.uSeaTime = { value: 0 };
+      shader.vertexShader = 'uniform float uSeaTime;\nvarying vec2 vSeaPos;\n' + shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+         vSeaPos = position.xz;
+         float wave = sin(position.x * 0.07 + position.z * 0.05 + uSeaTime * 0.9) * 0.12
+                    + sin(position.x * 0.13 - position.z * 0.11 + uSeaTime * 1.7) * 0.05;
+         transformed.y += wave;`
+      );
+      shader.fragmentShader = 'uniform float uSeaTime;\nvarying vec2 vSeaPos;\n' + shader.fragmentShader.replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+         float bands = sin(vSeaPos.x * 0.55 + vSeaPos.y * 0.42 + uSeaTime * 1.8) * 0.5 + 0.5;
+         gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.36, 0.52, 0.55), bands * 0.08);`
+      );
+      seaMat.userData.shader = shader;
+    };
+    seaMatRef = seaMat;
+    const sea = new THREE.Mesh(seaGeo, seaMat);
     sea.position.set(459, -0.3, 0);
     sea.castShadow = false; sea.receiveShadow = false;
     sea.name = 'backdrop-sea';
@@ -1144,31 +1173,113 @@ export function createLevel(engine) {
       meshBox(w, h, d, mat, x, y, z, rot, { group: farGroup, uv, cast: false, recv: false });
     const dCyl = (rt, rb, h, seg, mat, x, y, z) =>
       meshCyl(rt, rb, h, seg, mat, x, y, z, { group: farGroup, cast: false, recv: false });
-    dBox(70, 0.6, 20, mats.concrete, 155, 0.5, -12, 0, 2.6);
-    dBox(70, 0.12, 0.35, mats.wood, 155, 0.86, -22, 0, 1.2);
-    dBox(70, 0.12, 0.35, mats.wood, 155, 0.86, -2, 0, 1.2);
+    dBox(70, 0.6, 20, mats.concrete, 155, 0.3, -12, 0, 2.6);
+    dBox(70, 0.12, 0.35, mats.wood, 155, 0.66, -22, 0, 1.2);
+    dBox(70, 0.12, 0.35, mats.wood, 155, 0.66, -2, 0, 1.2);
     for (let x = 124; x <= 186; x += 8) for (const z of [-20, -4]) dCyl(0.35, 0.42, 2.2, 8, mats.concreteDark, x, 0.1, z);
     for (let x = 128; x <= 184; x += 14) for (const z of [-20.3, -3.7]) {
-      dCyl(0.32, 0.36, 0.9, 8, mats.rust, x, 1.25, z);
-      dCyl(0.5, 0.5, 0.12, 8, mats.metal, x, 1.72, z);
+      dCyl(0.32, 0.36, 0.9, 8, mats.rust, x, 1.05, z);
+      dCyl(0.5, 0.5, 0.12, 8, mats.metal, x, 1.52, z);
     }
     for (const x of [130, 158, 184]) {
       dCyl(0.06, 0.08, 4.6, 6, mats.metal, x, 2.8, -20.8);
       dBox(0.5, 0.18, 0.5, mats.windowLit, x, 5.15, -20.8);
     }
-    dBox(2.0, 2.0, 2.0, mats.wood, 136, 1.8, -8, 0.12);
-    dBox(1.4, 1.6, 1.4, mats.wood, 138.5, 1.6, -7.4, -0.08);
-    dBox(2.2, 2.2, 2.2, mats.wood, 148, 1.9, -16, 0.05);
-    dBox(2.4, 2.4, 2.4, mats.metalTan, 178, 2.0, -11, 0.15);
-    dBox(1.6, 1.4, 1.6, mats.rust, 168, 1.5, -6, 0.2);
+    dBox(2.0, 2.0, 2.0, mats.wood, 136, 1.6, -8, 0.12);
+    dBox(1.4, 1.6, 1.4, mats.wood, 138.5, 1.4, -7.4, -0.08);
+    dBox(2.2, 2.2, 2.2, mats.wood, 148, 1.7, -16, 0.05);
+    dBox(2.4, 2.4, 2.4, mats.metalTan, 178, 1.8, -11, 0.15);
+    dBox(1.6, 1.4, 1.6, mats.rust, 168, 1.3, -6, 0.2);
     dBox(0.8, 8.0, 0.8, mats.metal, 176, 4.4, -18, 0);
     dBox(7.0, 0.4, 0.4, mats.metal, 179, 8.2, -18, 0.55);
     dBox(0.08, 3.4, 0.08, mats.metal, 182, 6.4, -18, 0, 0.8);
-    dBox(18, 4.0, 5.0, mats.plasterB, 174, 2.2, -19.0, 0, 1.8);
-    dBox(18.5, 0.35, 5.5, mats.metal, 174, 4.35, -19.0, 0, 1.4);
-    dBox(3.0, 2.6, 0.2, mats.metal, 174, 1.5, -16.4, 0, 1.0);
-    dBox(8, 0.22, 1.8, mats.wood, 193, 0.92, -10, 0, 1.0);
+    dBox(18, 4.0, 5.0, mats.plasterB, 174, 2.6, -19.0, 0, 1.8);
+    dBox(18.5, 0.35, 5.5, mats.metal, 174, 4.75, -19.0, 0, 1.4);
+    dBox(3.0, 2.6, 0.2, mats.metal, 174, 1.9, -16.4, 0, 1.0);
+    dBox(8, 0.22, 1.8, mats.wood, 193, 0.72, -10, 0, 1.0);
     for (let x = 190; x <= 196; x += 2) dBox(0.1, 1.1, 0.1, mats.metal, x, 1.35, -10, 0, 0.6);
+
+    // ---- playable dock: 0.6 m deck, gangway from the quay, rails, nav ----
+    EXPANSION_RAMPS.push({ id: 'dock-gangway', x0: 116.2, x1: 121.0, z0: -14, z1: -10, rise: 0.6, axis: 'x' });
+    for (let i = 0; i < 7; i++) {
+      const t = i / 6;
+      meshBox(4.8, 0.1, 3.7, mats.wood, 116.3 + 4.7 * t, 0.05 + 0.6 * t, -12, 0, { group: statics, uv: 1.2, cast: false });
+    }
+    for (const z of [-14.1, -9.9]) {
+      meshBox(5.2, 0.08, 0.08, mats.rust, 118.6, 1.05, z, 0, { group: statics, cast: false });
+      for (let x = 116.4; x <= 120.8; x += 1.3) meshBox(0.07, 1.0, 0.07, mats.metal, x, 0.5, z, 0, { group: statics, cast: false });
+    }
+    // visible dock rails (colliders go in separately)
+    for (const z of [-22, -2]) {
+      for (let x = 121; x <= 189; x += 7) meshBox(0.09, 1.05, 0.09, mats.metal, x, 1.12, z, 0, { group: statics, cast: false });
+      meshBox(69, 0.07, 0.07, mats.rust, 155, 1.55, z, 0, { group: statics, cast: false });
+      meshBox(69, 0.06, 0.06, mats.rust, 155, 0.95, z, 0, { group: statics, cast: false });
+    }
+    for (let z = -21; z <= -3; z += 6) meshBox(0.09, 1.05, 0.09, mats.metal, 189.8, 1.12, z, 0, { group: statics, cast: false });
+    meshBox(0.07, 0.07, 19.2, mats.rust, 189.8, 1.55, -12, 0, { group: statics, cast: false });
+    // dock seal: perimeter colliders (sea is non-walkable outside the deck)
+    addCollider(155, -22.25, 70, 0.3, 0.04);
+    addCollider(155, -1.75, 70, 0.3, 0.04);
+    addCollider(190.25, -12, 0.3, 20, 0.04);
+    addCollider(119.6, -18, 0.3, 8, 0.04);
+    addCollider(119.6, -6, 0.3, 8, 0.04);
+    addCollider(118.5, -14.2, 5.5, 0.25, 0.04);
+    addCollider(118.5, -9.8, 5.5, 0.25, 0.04);
+    // big water exclusion outside the dock footprint
+    addCollider(154, -120, 72, 196, 0.04);
+    addCollider(154, 74, 72, 152, 0.04);
+    addCollider(119.2, -18, 2.2, 8, 0.04);
+    addCollider(119.2, -6, 2.2, 8, 0.04);
+    // deck obstacles (shed + big crates) so the player cannot walk through them
+    addCollider(174, -19, 18, 5, 0.05);
+    addCollider(136, -8, 2.1, 2.1, 0.05);
+    addCollider(148, -16, 2.3, 2.3, 0.05);
+    addCollider(178, -11, 2.5, 2.5, 0.05);
+    ROOF_ZONES.push({ x0: 120, x1: 190, z0: -22, z1: -2, y: 0.6 });
+    ROOF_SPAWNS.push({ x: 150, z: -12, y: 0.6 }); spawnPoints.push({ x: 150, z: -12, y: 0.6 });
+    ROOF_COVERS.push({ x: 160, z: -18, y: 0.6, h: true }, { x: 140, z: -6, y: 0.6, h: false });
+    coverPoints.push({ x: 160, z: -18, y: 0.6, h: true }, { x: 140, z: -6, y: 0.6, h: false });
+    // two dock buildings: office (east) + store hut (west), both enterable
+    const dockHut = (cx, cz, w, d, doorZ) => {
+      const x0 = cx - w / 2, x1 = cx + w / 2, z0 = cz - d / 2, z1 = cz + d / 2, base = 0.6, h = 2.4;
+      meshBox(w, 0.08, d, mats.wood, cx, base + 0.04, cz, 0, { group: statics, uv: 1.0, cast: false });
+      meshBox(w, h, 0.16, mats.plasterB, cx, base + h / 2, z0, 0, { group: statics, uv: 1.2 });
+      meshBox(w, h, 0.16, mats.plasterB, cx, base + h / 2, z1, 0, { group: statics, uv: 1.2 });
+      meshBox(0.16, h, d, mats.plasterB, x0, base + h / 2, cz, 0, { group: statics, uv: 1.2 });
+      const gap = 1.8;
+      // carve the door by leaving a gap in the east wall: split it around z=cz
+      meshBox(0.16, h, (d - gap) / 2, mats.plasterB, x1, base + h / 2, cz - (gap + d) / 4, 0, { group: statics, uv: 1.0 });
+      meshBox(0.16, h, (d - gap) / 2, mats.plasterB, x1, base + h / 2, cz + (gap + d) / 4, 0, { group: statics, uv: 1.0 });
+      meshBox(w + 0.3, 0.16, d + 0.3, mats.metal, cx, base + h + 0.08, cz, 0, { group: statics, uv: 1.4 });
+      meshBox(0.06, 0.75, 0.9, mats.windowLitDim, x0 + 0.05, base + 1.5, cz + 0.6, 0, { group: statics, cast: false });
+      // east wall door header + frame
+      meshBox(0.2, 0.5, gap + 0.3, mats.wood, x1, base + h - 0.25, cz, 0, { group: statics, cast: false });
+      meshBox(1.1, 0.65, 0.5, mats.wood, cx - 0.5, base + 0.35, cz - (d - 2.3) / 2, 0, { group: statics, uv: 0.8 });
+      addCollider(x0, cz, 0.2, d, 0.05);
+      addCollider(x1, cz - gap / 2 - 0.5, 0.2, (d - gap) / 2, 0.05);
+      addCollider(x1, cz + gap / 2 + 0.5, 0.2, (d - gap) / 2, 0.05);
+      addCollider(cx, z0, w, 0.2, 0.05);
+      addCollider(cx, z1, w, 0.2, 0.05);
+    };
+    dockHut(183, -6, 4.0, 3.0, true);
+    dockHut(130, -18, 3.5, 3.0, false);
+    // sentry/checkpoint at the gangway head (keeps the 4 m gate clear)
+    meshBox(1.9, 0.12, 1.9, mats.concrete, 123.2, 0.66, -16.2, 0, { group: statics, cast: false });
+    for (const [x, z] of [[122.4, -16.2], [124.0, -16.2]]) meshBox(0.3, 2.1, 0.3, mats.wood, x, 1.65, z, 0, { group: statics, cast: false });
+    meshBox(2.1, 0.14, 2.1, mats.metal, 123.2, 2.75, -16.2, 0, { group: statics, cast: false });
+    meshBox(0.12, 1.0, 1.0, mats.windowLit, 123.2, 2.2, -15.3, 0, { group: statics, cast: false });
+    meshBox(2.6, 0.8, 0.7, mats.sandbag, 121.6, 1.0, -15.0, 0, { group: statics, uv: 0.8 });
+    meshBox(2.6, 0.8, 0.7, mats.sandbag, 121.6, 1.0, -9.0, 0, { group: statics, uv: 0.8 });
+    addCollider(123.2, -16.2, 2.0, 2.0, 0.05);
+    addCollider(121.6, -15.0, 2.6, 0.7, 0.05);
+    addCollider(121.6, -9.0, 2.6, 0.7, 0.05);
+    // mooring ropes + dock lamp light
+    for (const [x, z, len, ry] of [[187, -19.5, 8, 0.55], [187, -17.0, 8, 0.45], [186, -21.0, 6, 0.7]]) {
+      meshBox(0.035, 0.035, len, mats.rust, x, 0.9, z, ry, { group: statics, cast: false });
+    }
+    const dockLight = new THREE.PointLight(0xffc48a, 0.5, 18, 1.8);
+    dockLight.position.set(160, 4.2, -12); root.add(dockLight);
+
 
     // distant ship / buoy silhouettes (unfogged so they read as a horizon)
     const silMat = new THREE.MeshLambertMaterial({ color: 0x394044, flatShading: true, fog: false });
@@ -1218,6 +1329,186 @@ export function createLevel(engine) {
     root.add(mergeStatic(treeGroup, { castShadow: false, receiveShadow: false }));
     root.add(mergeStatic(trunkGroup, { castShadow: false, receiveShadow: false }));
     root.add(mergeStatic(rockGroup, { castShadow: false, receiveShadow: false }));
+  }
+
+  /* ===================================================================
+     FOOTHILLS — playable west fringe (x -235..-118, z -120..120).
+     Buildings/rocks are merged statics (bullet targets); instanced trees,
+     grass and flowers keep the draw-call cost flat.
+     =================================================================== */
+  function buildFoothills() {
+    const frnd = mulberry32(90210);
+    // unlit vertex-coloured grass/dirt floor (readable from every direction)
+    const gg = new THREE.PlaneGeometry(117, 240, 24, 40);
+    gg.rotateX(-Math.PI / 2);
+    const gp = gg.attributes.position, gcols = [];
+    const cG1 = new THREE.Color(0x5a6a44), cG2 = new THREE.Color(0x495838), cDirt = new THREE.Color(0x7a684a);
+    for (let i = 0; i < gp.count; i++) {
+      const lx = gp.getX(i), lz = gp.getZ(i);
+      const isPath = Math.abs(lz) < 3.2 || Math.abs(lx + 1.5) < 3.6;
+      const c = (isPath ? cDirt : cG1.clone().lerp(cG2, 0.5 + 0.5 * Math.sin(lx * 0.21 + lz * 0.17))).clone();
+      const n = 0.94 + frnd() * 0.12; c.multiplyScalar(n);
+      gcols.push(c.r, c.g, c.b);
+    }
+    gg.setAttribute('color', new THREE.Float32BufferAttribute(gcols, 3));
+    const gmesh = new THREE.Mesh(gg, new THREE.MeshBasicMaterial({ vertexColors: true }));
+    gmesh.position.set(-176.5, 0.02, 0); gmesh.castShadow = false; gmesh.receiveShadow = false;
+    root.add(gmesh);
+
+    const wallH = 2.7, t = 0.24, door = 2.0;
+    const hut = (cx, cz) => {
+      const w = 4.4, d = 5.6, h = wallH;
+      const x0 = cx - w / 2, x1 = cx + w / 2, z0 = cz - d / 2, z1 = cz + d / 2;
+      meshBox(w, 0.1, d, mats.concrete, cx, 0.05, cz, 0, { uv: 1.4, cast: false });
+      meshBox(w, h, t, mats.plasterC, cx, h / 2, z0, 0, { collide: true, uv: 1.4 });
+      meshBox(t, h, d, mats.plasterC, x0, h / 2, cz, 0, { collide: true, uv: 1.4 });
+      meshBox(t, h, d, mats.plasterC, x1, h / 2, cz, 0, { collide: true, uv: 1.4 });
+      const gap = (w - door) / 2;
+      meshBox(gap, h, t, mats.plasterC, x0 + gap / 2, h / 2, z1, 0, { collide: true, uv: 1.2 });
+      meshBox(gap, h, t, mats.plasterC, x1 - gap / 2, h / 2, z1, 0, { collide: true, uv: 1.2 });
+      meshBox(door, 0.55, t, mats.plasterC, cx, h - 0.28, z1, 0, { cast: false });
+      meshBox(w + 0.5, 0.26, d + 0.5, mats.wood, cx, h + 0.13, cz, 0, { uv: 1.6 });
+      meshBox(0.06, 0.9, 1.1, mats.windowLitDim, x0 + 0.02, 1.55, cz + 1.2, 0, { cast: false });
+      meshBox(1.6, 0.7, 0.55, mats.wood, cx - 0.6, 0.35, z0 + 1.2, 0, { uv: 0.8, collide: true });
+      meshBox(1.6, 0.08, 0.75, mats.wood, cx - 0.6, 0.74, z0 + 1.2, 0, { cast: false });
+      meshBox(0.8, 0.25, 1.8, mats.wood, cx + 1.25, 0.24, z0 + 1.6, 0, { uv: 0.7, collide: true });
+      meshBox(0.8, 0.6, 0.06, mats.wood, cx + 1.25, 0.6, z0 + 2.45, 0, { cast: false });
+      meshBox(0.55, 0.55, 0.55, mats.wood, cx - 1.6, 0.3, z1 - 1.1, 0, { uv: 0.7, collide: true });
+    };
+    hut(-200, 44);
+    hut(-168, -62);
+    for (const [lx, lz] of [[-200, 44], [-168, -62]]) {
+      const lamp = new THREE.PointLight(0xffb07a, 0.55, 13, 1.6);
+      lamp.position.set(lx, 2.2, lz); root.add(lamp);
+    }
+
+    // watchtower: 4.2 m deck, ramp from the south-east, roof zone + spawn/cover
+    EXPANSION_RAMPS.push({ id: 'foothill-tower', x0: -206.8, x1: -205.4, z0: 16, z1: 8, rise: 4.2 });
+    for (const [x, z] of [[-212, 4], [-212, 8], [-208, 4], [-208, 8]]) meshBox(0.26, 4.2, 0.26, mats.wood, x, 2.1, z, 0, { uv: 0.8, collide: true });
+    meshBox(4.6, 0.32, 4.6, mats.wood, -210, 4.05, 6, 0, { uv: 1.8 });
+    meshBox(5.0, 0.22, 5.0, mats.metal, -210, 5.9, 6, 0, { uv: 1.6 });
+    for (const [x, z] of [[-212.2, 4], [-212.2, 8], [-207.8, 4], [-207.8, 8]]) meshBox(0.2, 0.05, 0.2, mats.wood, x, 4.3, z, 0, { cast: false });
+    for (const yy of [4.9, 5.5]) {
+      meshBox(4.5, 0.07, 0.07, mats.wood, -210, yy, 4.0, 0, { cast: false });
+      meshBox(4.5, 0.07, 0.07, mats.wood, -210, yy, 8.0, 0, { cast: false });
+      meshBox(0.07, 0.07, 4.5, mats.wood, -212, yy, 6, 0, { cast: false });
+      meshBox(0.07, 0.07, 4.5, mats.wood, -208, yy, 6, 0, { cast: false });
+    }
+    for (let i = 0; i < 10; i++) {
+      const tt = i / 9;
+      meshBox(1.4, 0.12, 0.9, mats.wood, -206.1, 4.2 * tt + 0.05, 16 - 8 * tt, 0, { cast: false });
+    }
+    ROOF_ZONES.push({ x0: -212, x1: -208, z0: 4, z1: 8, y: 4.2 });
+    ROOF_ZONES.push({ x0: -208, x1: -205.4, z0: 6, z1: 8, y: 4.2 });
+    ROOF_SPAWNS.push({ x: -210, z: 6, y: 4.2 }); spawnPoints.push({ x: -210, z: 6, y: 4.2 });
+    ROOF_COVERS.push({ x: -210, z: 7, y: 4.2, h: true }); coverPoints.push({ x: -210, z: 7, y: 4.2, h: true });
+
+    // checkpoint bunker + sandbags
+    const bx = -150, bz = -80;
+    meshBox(5.0, 0.1, 4.0, mats.concrete, bx, 0.05, bz, 0, { uv: 1.4, cast: false });
+    meshBox(5.0, 2.3, 0.26, mats.concrete, bx, 1.15, bz - 2.0, 0, { collide: true, uv: 1.4 });
+    meshBox(0.26, 2.3, 4.0, mats.concrete, bx - 2.5, 1.15, bz, 0, { collide: true, uv: 1.4 });
+    meshBox(0.26, 2.3, 1.4, mats.concrete, bx + 2.5, 1.15, bz - 1.3, 0, { collide: true, uv: 1.2 });
+    meshBox(0.26, 2.3, 1.4, mats.concrete, bx + 2.5, 1.15, bz + 1.3, 0, { collide: true, uv: 1.2 });
+    meshBox(0.26, 1.0, 1.6, mats.concrete, bx + 2.5, 1.8, bz, 0, { cast: false });
+    meshBox(5.2, 0.25, 4.3, mats.concreteDark, bx, 2.4, bz, 0, { uv: 1.4 });
+    for (const [ox, oz] of [[-2.8, -0.5], [-2.8, 1.0], [2.9, 2.4], [-1.4, 2.9]]) {
+      meshBox(1.8, 0.8, 0.6, mats.sandbag, bx + ox, 0.4, bz + oz, 0, { uv: 0.8, collide: true });
+      coverPoints.push({ x: bx + ox, z: bz + oz + 0.8, h: false });
+    }
+    // campfire + light pool
+    for (let i = 0; i < 7; i++) {
+      const a = i / 7 * Math.PI * 2;
+      meshBox(0.35, 0.22, 0.35, mats.plasterC, -190 + Math.cos(a) * 0.8, 0.11, 24 + Math.sin(a) * 0.8, 0, { cast: false });
+    }
+    for (const [dx, dz] of [[-0.5, -0.2], [0.4, 0.3], [0.1, -0.5]]) meshBox(0.9, 0.18, 0.18, mats.wood, -190 + dx, 0.2, 24 + dz, 0.4, { cast: false });
+    const fireLight = new THREE.PointLight(0xff8a44, 0.9, 14, 1.6);
+    fireLight.position.set(-190, 1.0, 24); root.add(fireLight);
+    const glow = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 3.2), new THREE.MeshBasicMaterial({
+      map: mats.sprites.glow, color: 0xff8a44, transparent: true, opacity: 0.3, depthWrite: false, blending: THREE.AdditiveBlending,
+    }));
+    glow.rotation.x = -Math.PI / 2; glow.position.set(-190, 0.05, 24); root.add(glow);
+
+    // rock cover (merged statics)
+    const rockMat = mats.concrete;
+    for (const [x, z, s] of [[-215, -20, 1.6], [-195, 65, 1.4], [-180, -85, 1.8], [-160, 80, 1.3], [-145, 0, 1.2], [-135, -40, 1.5], [-220, 20, 1.4], [-150, 30, 1.1]]) {
+      const g = new THREE.DodecahedronGeometry(1, 0);
+      const m = new THREE.Mesh(g, rockMat);
+      m.position.set(x, 0.45 * s, z); m.scale.set(s, s * 0.6, s); m.rotation.set(frnd() * 2, frnd() * 6, 0);
+      m.castShadow = false; m.receiveShadow = false; statics.add(m);
+      addCollider(x, z, s * 1.4, s * 1.2, 0.05);
+      coverPoints.push({ x: x + s * 0.9, z, h: false });
+    }
+    // sandbag line at the checkpoint approach
+    for (const [x, z] of [[-142, -20], [-139, -18], [-136, -22]]) {
+      meshBox(1.7, 0.85, 0.7, mats.sandbag, x, 0.42, z, 0.2, { uv: 0.8, collide: true });
+      coverPoints.push({ x, z: z + 0.8, h: false });
+    }
+
+    // boundary fences (gated to the city on the east)
+    const fence = (x0, z0, x1, z1) => {
+      const len = Math.hypot(x1 - x0, z1 - z0), rot = Math.atan2(x1 - x0, z1 - z0);
+      meshBox(0.08, 1.0, len, mats.rust, (x0 + x1) / 2, 0.5, (z0 + z1) / 2, Math.atan2(x1 - x0, z1 - z0), { uv: 0.8, cast: false });
+      for (let i = 0; i <= Math.floor(len / 3); i++) {
+        const tt = i / Math.max(1, Math.floor(len / 3));
+        meshBox(0.1, 1.2, 0.1, mats.metal, x0 + (x1 - x0) * tt, 0.6, z0 + (z1 - z0) * tt, 0, { cast: false });
+      }
+      addColliderRot((x0 + x1) / 2, (z0 + z1) / 2, 0.3, len, rot, 0.05);
+    };
+    fence(-234, -118, -118, -118);
+    fence(-234, 118, -118, 118);
+    fence(-234, -118, -234, 118);
+    fence(-118, -118, -118, -20);
+    fence(-118, 20, -118, 40);
+    fence(-118, 56, -118, 118);
+    fence(-196, 118, -196, 108);
+
+    // instanced trees (24) + grass/flowers, no shadow cost
+    const trees = [
+      [-225, -100, 1.1], [-220, -70, 1.0], [-228, 80, 1.2], [-215, 60, 0.9], [-205, -30, 1.1],
+      [-195, -100, 1.2], [-190, 80, 1.0], [-180, 100, 1.1], [-175, 70, 0.9], [-165, 30, 1.0],
+      [-160, 100, 1.2], [-155, 60, 1.0], [-145, -30, 1.1], [-140, -60, 0.9], [-135, 40, 1.1],
+      [-130, 90, 1.0], [-230, 40, 1.2], [-225, 110, 1.0], [-220, -110, 1.1], [-210, -90, 0.9],
+      [-200, 100, 1.1], [-185, -40, 1.0], [-170, 10, 0.9], [-160, -100, 1.1],
+    ];
+    const foliage = new THREE.InstancedMesh(new THREE.ConeGeometry(1.7, 5.2, 6), new THREE.MeshBasicMaterial({ color: 0x30412a }), trees.length);
+    const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.28, 2.2, 5), new THREE.MeshBasicMaterial({ color: 0x34291f }), trees.length);
+    foliage.castShadow = false; foliage.receiveShadow = false; trunks.castShadow = false; trunks.receiveShadow = false;
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+    trees.forEach(([x, z, s], i) => {
+      m4.compose(new THREE.Vector3(x, 4.4 * s, z), q, sc.set(s, s, s)); foliage.setMatrixAt(i, m4);
+      m4.compose(new THREE.Vector3(x, 1.1 * s, z), q, sc.set(s, s, s)); trunks.setMatrixAt(i, m4);
+      addCollider(x, z, 0.8 * s, 0.8 * s, 0.04);
+      if (i % 3 === 0) coverPoints.push({ x: x + 1.0, z: z + 0.7, h: false });
+    });
+    root.add(foliage, trunks);
+    const grassGeo = new THREE.PlaneGeometry(0.13, 0.46);
+    const grass = new THREE.InstancedMesh(grassGeo, new THREE.MeshBasicMaterial({ color: 0x5b6a3d, side: THREE.DoubleSide }), 380);
+    grass.castShadow = false; grass.receiveShadow = false;
+    const e = new THREE.Euler();
+    for (let i = 0; i < 380; i++) {
+      const x = -232 + frnd() * 112, z = -116 + frnd() * 232;
+      q.setFromEuler(e.set(0, frnd() * 6.28, 0));
+      m4.compose(new THREE.Vector3(x, 0.23, z), q, sc.set(1, 1, 1)); grass.setMatrixAt(i, m4);
+    }
+    root.add(grass);
+    const flowers = new THREE.InstancedMesh(new THREE.CircleGeometry(0.06, 5), new THREE.MeshBasicMaterial({ color: 0xc9a15e }), 110);
+    flowers.castShadow = false; flowers.receiveShadow = false;
+    for (let i = 0; i < 110; i++) {
+      const x = -232 + frnd() * 112, z = -116 + frnd() * 232;
+      q.setFromEuler(e.set(-Math.PI / 2, 0, 0));
+      m4.compose(new THREE.Vector3(x, 0.18, z), q, sc.set(1, 1, 1)); flowers.setMatrixAt(i, m4);
+    }
+    root.add(flowers);
+
+    // trail sign + dirt path from the city gate
+    meshBox(0.12, 2.2, 0.12, mats.wood, -120.5, 1.1, 45.5, 0, { cast: false });
+    meshBox(1.6, 0.7, 0.08, mats.signA, -120.5, 2.0, 45.5, 0, { cast: false });
+    const pathMat = new THREE.MeshBasicMaterial({ color: 0x756043 });
+    const path1 = new THREE.Mesh(new THREE.PlaneGeometry(82, 3.4), pathMat);
+    path1.rotation.x = -Math.PI / 2; path1.position.set(-157, 0.04, 46); root.add(path1);
+    for (const [x, z] of [[-180, 0], [-160, 50], [-200, -60], [-140, 20]]) spawnPoints.push({ x, z });
+    for (const [x, z] of [[-190, 24], [-200, 44], [-168, -62], [-150, -80], [-210, 6]]) coverPoints.push({ x: x + 0.6, z: z + 0.6, h: false });
   }
 
   function buildYardMarketStatic() {
@@ -1916,11 +2207,17 @@ export function createLevel(engine) {
     GND(P, 68, 132, mats.asphalt, 84, -32, 0.004, 3.4);
     // quay + water
     // low quay curb + railing so the water edge reads (instead of a solid wall)
-    B(P, 0.6, 0.22, 132, mats.concreteDark, 116, 0.11, -32, 0, { uv: 2.4, collide: true });
-    B(P, 0.8, 0.08, 132, mats.concrete, 116, 0.26, -32, 0, { uv: 1.8, cast: false });
-    for (let z = -94; z <= 30; z += 3.0) C(P, 0.035, 0.035, 1.05, 5, mats.rust, 116, 0.78, z, { cast: false });
-    for (const yy of [0.55, 1.08, 1.35]) B(P, 0.05, 0.05, 132, mats.rust, 116, yy, -32, 0, { uv: 0.8, cast: false });
-    for (let z = -94; z <= 30; z += 3) C(P, 0.028, 0.028, 1.25, 5, mats.rust, 116.02, 0.7, z, { cast: false });
+    // split at the dock gangway (z -14..-10)
+    B(P, 0.6, 0.22, 84, mats.concreteDark, 116, 0.11, -56, 0, { uv: 2.4, collide: true });
+    B(P, 0.6, 0.22, 44, mats.concreteDark, 116, 0.11, 12, 0, { uv: 2.4, collide: true });
+    B(P, 0.8, 0.08, 84, mats.concrete, 116, 0.26, -56, 0, { uv: 1.8, cast: false });
+    B(P, 0.8, 0.08, 44, mats.concrete, 116, 0.26, 12, 0, { uv: 1.8, cast: false });
+    for (let z = -94; z <= 30; z += 3.0) { if (z > -14 && z < -10) continue; C(P, 0.035, 0.035, 1.05, 5, mats.rust, 116, 0.78, z, { cast: false }); }
+    for (const [za, zb] of [[-94, -14], [-10, 30]]) {
+      for (const yy of [0.55, 1.08, 1.35]) B(P, 0.05, 0.05, zb - za, mats.rust, 116, yy, (za + zb) / 2, 0, { uv: 0.8, cast: false });
+    }
+    for (let z = -94; z <= 30; z += 3) { if (z > -14 && z < -10) continue; C(P, 0.028, 0.028, 1.25, 5, mats.rust, 116.02, 0.7, z, { cast: false }); }
+    for (const z of [-14, -10]) { B(P, 0.22, 1.5, 0.22, mats.metal, 116.0, 0.75, z, 0, { uv: 0.7, collide: true }); B(P, 0.7, 0.12, 0.7, mats.metalTan, 116.0, 1.52, z, 0, { cast: false }); }
     for (let z = -94; z <= 30; z += 6) {
       C(P, 0.18, 0.22, 0.9, 8, mats.rust, 114.6, 0.45, z);
       B(P, 0.7, 0.5, 0.7, mats.metal, 114.6, 0.25, z, 0, { uv: 0.8, collide: true });
@@ -2010,6 +2307,8 @@ export function createLevel(engine) {
       { x: 78, z: 22, h: true }, { x: 58, z: -16, h: false },
     );
     EXPANSION_OBJECTIVES.container_yard = { x: 98, z: -44, r: 6 };
+    EXPANSION_OBJECTIVES.dock = { x: 150, z: -12, r: 6 };
+    EXPANSION_OBJECTIVES.foothills = { x: -190, z: 24, r: 6 };
 
     /* ========================================================= connectors */
     // west: service street between the old map and the souk
@@ -5772,6 +6071,7 @@ export function createLevel(engine) {
   buildSouthYard();
   buildExpansion();
   buildBackdrop();
+  buildFoothills();
 
   // ---- fire escapes on the two closest multi-storey fronts
   function fireEscape(side, z, floors, fh) {
@@ -6098,6 +6398,7 @@ export function createLevel(engine) {
   function update(dt, camera) {
     time += dt;
     dustTime.value = time;
+    if (seaMatRef && seaMatRef.userData.shader) seaMatRef.userData.shader.uniforms.uSeaTime.value = time;
     // destructible debris
     for (let i = debris.length - 1; i >= 0; i--) {
       const p = debris[i];
@@ -6166,6 +6467,8 @@ export function createLevel(engine) {
     { id: 'old_souk', name: '老城集市', en: 'OLD SOUK', x0: -116, x1: -40, z0: -42, z1: 72 },
     { id: 'rail_depot', name: '北站货场', en: 'RAIL DEPOT', x0: -38, x1: 42, z0: -194, z1: -106 },
     { id: 'container_yard', name: '东港集装箱场', en: 'CONTAINER YARD', x0: 48, x1: 122, z0: -98, z1: 34 },
+    { id: 'dock', name: '东码头', en: 'DOCK', x0: 118, x1: 190, z0: -22, z1: -2, minY: 0.2 },
+    { id: 'foothills', name: '西侧山脚', en: 'FOOTHILLS', x0: -235, x1: -118, z0: -120, z1: 120 },
     { id: 'souk_gate', name: '集市门廊', en: 'SOUK GATE', x0: -40, x1: -22, z0: -11, z1: 34 },
     { id: 'rail_gate', name: '北站门廊', en: 'RAIL GATE', x0: -1, x1: 13, z0: -108, z1: -95 },
     { id: 'port_gate', name: '东港门廊', en: 'PORT GATE', x0: 44, x1: 50, z0: -85, z1: -75 },
@@ -6195,7 +6498,7 @@ export function createLevel(engine) {
 
   return {
     root, colliders, bulletTargets, spawnPoints, coverPoints, bvhStats, breachDoors, interactiveDoors, interactiveWindows,
-    bounds: { x0: -118, x1: 124, z0: -196, z1: 128 },
+    bounds: { x0: -234.8, x1: 190.4, z0: -220, z1: 150.4 },
     cqbZones, objectiveZones, regionAt, regions: REGIONS,
     stages: EXPANSION_STAGES, districts: EXPANSION_DISTRICTS,
     groundHeight, roofZones: ROOF_ZONES, roofSpawns: ROOF_SPAWNS, roofCovers: ROOF_COVERS,
