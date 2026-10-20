@@ -34,6 +34,10 @@
 /** Damage per second outside the ring, per phase index. */
 const DEFAULT_DPS = [1.0, 2.0, 3.5, 5.5, 8.0, 11.0, 14.0, 18.0];
 
+/** Number of ring phases a match runs. Exported so tests track the design,
+    not a magic number that silently drifts. */
+export const ZONE_PHASE_COUNT = 7;
+
 /**
  * Default phase plan for a site.
  *
@@ -48,8 +52,8 @@ const DEFAULT_DPS = [1.0, 2.0, 3.5, 5.5, 8.0, 11.0, 14.0, 18.0];
 export function defaultPhases(rectW = 72, rectH = 110) {
   // Radius needed to cover the rect from its centre: half the diagonal.
   const cover = Math.hypot(rectW, rectH) / 2;
-  const finalR = Math.max(12, Math.min(rectW, rectH) * 0.30);
-  const count = 6;
+  const finalR = Math.max(10, Math.min(rectW, rectH) * 0.07);
+  const count = 7;
   const phases = [];
   for (let i = 0; i < count; i += 1) {
     const t = (i + 1) / count;
@@ -59,8 +63,8 @@ export function defaultPhases(rectW = 72, rectH = 110) {
     // would leave rect corners outside the opening ring, spawning in the gas.
     const r = i === 0 ? Math.max(10, cover * 1.03) : cover + (finalR - cover) * (t * t * 0.7 + t * 0.3);
     phases.push({
-      wait: Math.max(18, 40 - i * 4),      // seconds the ring is announced
-      shrink: Math.max(12, 30 - i * 3),    // seconds to interpolate inward
+      wait: Math.max(8, 20 - i * 2),       // seconds the ring is announced
+      shrink: Math.max(6, 24 - i * 3),     // seconds to interpolate inward
       radius: Number(r.toFixed(2)),
       dps: DEFAULT_DPS[Math.min(i, DEFAULT_DPS.length - 1)],
     });

@@ -1261,6 +1261,7 @@ function updateMilestones(dt) {
    ========================================================================== */
 
 const VERSUS_TEAM_SIZE = 4;
+const FFA_SIZE = 8;
 const VERSUS_RESPAWN_MS = 5000;
 
 let versusBots = [];          // [{ e: Enemy, team, respawnAt }]
@@ -1279,21 +1280,30 @@ function versusTeamSpawn(team) {
 /** Team fill: pad each side up to VERSUS_TEAM_SIZE with AI soldiers. */
 function startVersusBots(teams, lobbyPlayers) {
   versusBots = [];
-  const counts = [0, 0];
-  for (const id of Object.keys(teams || {})) counts[teams[id]] += 1;
-  for (let team = 0; team < 2; team += 1) {
-    const fill = Math.max(0, VERSUS_TEAM_SIZE - counts[team]);
-    for (let i = 0; i < fill; i += 1) {
-      const sp = versusTeamSpawn(team);
-      sp.x += (Math.random() - 0.5) * 8;
-      sp.z += (Math.random() - 0.5) * 8;
-      const e = spawnEnemy({ x: sp.x, z: sp.z, y: sp.y });
-      if (!e) break;
-      e.team = team;
-      if (e._netId == null) e._netId = netEnemySeq++;
-      versusBots.push({ e, team, respawnAt: 0 });
-    }
+  const humans = Object.keys(teams || {}).length;
+  const fill = Math.max(0, FFA_SIZE - humans);
+  const zones = (level && level.objectiveZones) ? Object.values(level.objectiveZones) : [];
+  const site = G.playRect || (G.site && G.site.rect) || { x0: -30, x1: 30, z0: -30, z1: 30 };
+  const scx = (site.x0 + site.x1) / 2, scz = (site.z0 + site.z1) / 2;
+  for (let i = 0; i < fill; i += 1) {
+    const z = zones.length ? zones[(humans + i) % zones.length] : null;
+    const bx = z ? z.x : scx, bz = z ? z.z : scz;
+    const a = (i / Math.max(1, fill)) * Math.PI * 2 + Math.random() * 0.5;
+    const r = 6 + Math.random() * 16;
+    const e = spawnEnemy({ x: bx + Math.cos(a) * r, z: bz + Math.sin(a) * r, y: 0 });
+    if (!e) break;
+    e.team = humans + i;
+    // FFA fill bots need to actually trade shots: veteran tier + a mix of
+    // rifles/rushers, not the wave-1 training tier.
+    if (e.setDifficulty) e.setDifficulty(DIFF_TIERS[3]);
+    if (e.setArchetype && i % 3 === 1) e.setArchetype('rusher');
+    // FFA fill needs to trade kills in a reasonable time; the campaign's
+    // default 100 HP / 5-damage trade makes a bot duel last too long.
+    e.maxHp = 80; e.hp = 80; e.damageMult = 1.8;
+    if (e._netId == null) e._netId = netEnemySeq++;
+    versusBots.push({ e, team: e.team, respawnAt: 0 });
   }
+  G.ffaAlive = ffaAliveCount();
 }
 
 /** Nearest hostile actor for one AI soldier: humans first-class, plus fill
@@ -1326,28 +1336,55 @@ function botById(netId) {
   return null;
 }
 
-/** Host-side versus kill bookkeeping: team score + respawn scheduling. */
+/** FFA: every actor owns a unique slot; last alive wins. */
+function ffaAliveCount() {
+  let n = (G.hp > 0 && G.state !== 'dead' && G.state !== 'debrief') ? 1 : 0;
+  for (const r of net.remote.values()) if (r.alive) n += 1;
+  for (const b of versusBots) if (b.e && b.e.alive) n += 1;
+  return n;
+}
+
+function ffaSlotName(slot) {
+  if (slot == null || !Number.isFinite(Number(slot))) return '?';
+  const s = String(slot);
+  for (const [id, t] of Object.entries(net.teamAssignments || {})) {
+    if (String(t) !== s) continue;
+    if (String(id) === String(net.selfId)) return lanName();
+    const r = net.remote.get(String(id));
+    if (r) return r.name || 'OPERATOR';
+  }
+  return `BOT-${Number(s) + 1}`;
+}
+
+function checkFfaWin() {
+  if (!G.versusMode || G.ffaWinner) return;
+  G.ffaAlive = ffaAliveCount();
+  if (G.ffaAlive > 1) return;
+  let winner = null;
+  if (G.hp > 0 && G.state !== 'dead') winner = lanName();
+  for (const r of net.remote.values()) if (r.alive && !winner) winner = r.name || 'OPERATOR';
+  for (const b of versusBots) if (b.e && b.e.alive && !winner) winner = `BOT-${Number(b.team) + 1}`;
+  G.ffaWinner = winner || 'NO ONE';
+  if (hud) {
+    if (hud.toast) hud.toast(`${G.ffaWinner} 最后存活 · 获胜`, 6000);
+    if (hud.setObjective) hud.setObjective(`${G.ffaWinner} 最后存活`);
+  }
+  G.state = 'debrief';
+}
+
 function onVersusDeath(victimTeam, killerTeam, victimLabel) {
   if (!G.versusMode) return;
   if (Number.isFinite(killerTeam) && killerTeam !== victimTeam) {
-    G.teamScores[killerTeam] = (G.teamScores[killerTeam] || 0) + 1;
+    if (!G.ffaKills) G.ffaKills = {};
+    G.ffaKills[killerTeam] = (G.ffaKills[killerTeam] || 0) + 1;
   }
   if (hud && hud.addKillFeed) {
-    const who = killerTeam === 0 ? '蓝军' : '红军';
-    hud.addKillFeed(`${who} 击杀 ${victimLabel || '目标'}`);
+    hud.addKillFeed(`${ffaSlotName(killerTeam)} 淘汰 ${victimLabel || '目标'}`);
   }
-  checkVersusWin();
+  checkFfaWin();
 }
 
-function checkVersusWin() {
-  const target = 40;
-  if (G.teamScores[0] >= target || G.teamScores[1] >= target) {
-    const win = G.teamScores[0] >= target ? '蓝军' : '红军';
-    if (hud && hud.toast) hud.toast(`${win} 达到 ${target} 杀 · 获胜`, 5000);
-    if (hud && hud.setObjective) hud.setObjective(`${win} 获胜`);
-    G.state = 'debrief';
-  }
-}
+function checkVersusWin() { checkFfaWin(); }
 
 /* ---- ring: host authority + shared visuals -------------------------------- */
 
@@ -1420,7 +1457,7 @@ function applyZoneDamage(amount) {
   G.hp = Math.max(0, G.hp - amount);
   G.sinceDamage = 99;             // no passive regen inside the gas
   if (hud && hud.setHealth) hud.setHealth(G.hp, pipsFor(G.armor));
-  if (G.hp <= 0 && net.role !== 'client') {
+  if (G.hp <= 0 && net.role) {
     playerDie();
   }
 }
@@ -1455,12 +1492,14 @@ function updateZone(dt) {
     hud.setZoneDistance(Math.round(zs.distance));
   }
 
-  // objective line: team score + ring countdown, replaces "clear hostiles"
+  // FFA objective line: alive count + ring countdown.
+  const aliveNow = ffaAliveCount();
+  G.ffaAlive = aliveNow;
   if (hud && hud.setObjective) {
     const mins = Math.floor(zs.eta / 60);
     const secs = String(Math.floor(zs.eta % 60)).padStart(2, '0');
     const phase = zs.finished ? '最终圈' : (zs.shrinking ? '收缩中' : `缩圈 ${mins}:${secs}`);
-    hud.setObjective(`蓝 ${G.teamScores[0]} : ${G.teamScores[1]} 红 · ${phase}`);
+    hud.setObjective(`存活 ${aliveNow}/${FFA_SIZE} · ${phase}`);
   }
 }
 
@@ -1482,21 +1521,17 @@ function updateVersusBots(dt) {
         if (killed) onVersusBotDown(b, undefined);
       }
     }
-    if (!e.alive && b.respawnAt && now >= b.respawnAt) {
-      const sp = versusTeamSpawn(b.team);
-      e.spawn(sp.x + (Math.random() - 0.5) * 8, sp.z + (Math.random() - 0.5) * 8,
-        Math.atan2(-(controller.pos.x - sp.x), -(controller.pos.z - sp.z)), 0);
-      b.respawnAt = 0;
-    }
+    // FFA: no bot respawns.
   }
+  checkFfaWin();
 }
 
 /** AI bots are killed through takeDamage from other bots; route that through
     the versus bookkeeping and schedule the respawn (host only). */
 function onVersusBotDown(bot, killerTeam) {
   if (net.role !== 'host') return;
-  bot.respawnAt = Date.now() + VERSUS_RESPAWN_MS;
-  onVersusDeath(bot.team, killerTeam, bot.team === 0 ? '蓝军AI' : '红军AI');
+  bot.respawnAt = 0;
+  onVersusDeath(bot.team, killerTeam, `BOT-${Number(bot.team) + 1}`);
 }
 
 /* ---- player vs player ---------------------------------------------------- */
@@ -1530,20 +1565,18 @@ function versusApplyPlayerDamage(targetId, amount, killerTeam, headshot) {
     r.alive = false;
     if (r.avatar) r.avatar.alive = false;
     if (net.role === 'host') {
-      r.respawnAt = Date.now() + VERSUS_RESPAWN_MS;
       onVersusDeath(r.team, Number.isFinite(killerTeam) ? killerTeam : undefined,
         String(r.name || '玩家'));
     }
     if (hud && hud.addKillFeed) {
-      const who = Number.isFinite(killerTeam) ? (killerTeam === 0 ? '蓝军' : '红军') : '?';
-      hud.addKillFeed(`${who} 击倒 ${r.name || '玩家'}`);
+      hud.addKillFeed(`${ffaSlotName(killerTeam)} 击倒 ${r.name || '玩家'}`);
     }
   }
 }
 
 /** Host: respawn downed humans at their team spawn (snapshot carries it). */
 function updateVersusRespawns() {
-  if (!G.versusMode || net.role !== 'host') return;
+  if (!G.versusMode || G.versusMode || net.role !== 'host') return;
   const now = Date.now();
   for (const r of net.remote.values()) {
     if (r.alive || !r.respawnAt || now < r.respawnAt) continue;
@@ -3327,7 +3360,9 @@ function updateGrenades(dt) {
         if (!e.alive) continue;
         const d = e.root.position.distanceTo(g.mesh.position);
         if (d < 7.5) {
-          const died = e.takeDamage(180 * (1 - d / 7.5), g.mesh.position, new THREE.Vector3(0, 1, 0), 'torso');
+          // attackerTeam = thrower's team; friendly bots take reduced damage
+          // and no AI panic. Artillery stays teamless (environmental).
+          const died = e.takeDamage(180 * (1 - d / 7.5), g.mesh.position, new THREE.Vector3(0, 1, 0), 'torso', net.team);
           if (died) onEnemyKilled(e, false, 'grenade');
         }
       }
@@ -3754,6 +3789,13 @@ function playerDie() {
     audio.death();
     audio.setLowHealth(false);
     input.unlock();
+    if (G.versusMode) {
+      // FFA: no respawn. Keep the sim alive for the other actors; the winner
+      // overlay is driven by checkFfaWin/snapshot.
+      if (hud && hud.setHint) hud.setHint('已淘汰 · 观战');
+      checkFfaWin();
+      return;
+    }
     net.respawnT = 4.0;
     if (hud && hud.setHint) hud.setHint('阵亡 · 4 秒后重新部署');
     if (net.role === 'client' && lanSession) lanSession.sendEvent('down');
@@ -4337,11 +4379,14 @@ function applyLanSnapshot(snap) {
   }
   onLanSnapshotApplyPlayers(snap.players || []);
   if (snap.versus && !G.versusMode) {
-    // missed the start event: adopt versus defensively from the snapshot
+    // missed the start event: adopt versus defensively from the snapshot.
+    // The mirror MUST use the same rect as the host's zone (site rect, not
+    // level bounds) or client and host rings diverge.
     G.versusMode = true;
     net.team = net.team ?? 0;
-    netZoneMirror = createZone({ rect: (G.versusMode && level.bounds) ? { ...level.bounds } : (G.playRect || (G.site && G.site.rect) || { x0: -30, x1: 30, z0: -30, z1: 30 }) });
-    if (hud && hud.setMode) hud.setMode('VERSUS', '蓝军 vs 红军');
+    netZoneMirror = createZone({ rect: G.playRect || (G.site && G.site.rect) || { x0: -30, x1: 30, z0: -30, z1: 30 } });
+    ensureZoneVisual();
+    if (hud && hud.setMode) hud.setMode('FFA 8', 'LAST ALIVE');
   }
   if (G.versusMode) {
     if (Array.isArray(snap.vscores) && snap.vscores.length === 2) {
@@ -4441,7 +4486,10 @@ function applyLanFire(msg) {
       const mult = hit.object.userData.dmg || 1;
       const norm = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld).negate() : d.clone().negate();
       const falloff = w.falloff ? w.falloff(hit.distance) : 1;
-      const didKill = enemy.takeDamage(w.dmg * falloff * mult, hit.point, norm, part);
+      // The shooter is the remote client this fire event came from, not the
+      // local player — friendly-fire must use THEIR team.
+      const shooter = net.remote.get(String(msg.id));
+      const didKill = enemy.takeDamage(w.dmg * falloff * mult, hit.point, norm, part, shooter ? shooter.team : undefined);
       hitEnemy = enemy; headshot = part === 'head'; killed = killed || didKill;
       if (didKill) onEnemyKilled(enemy, headshot, 'bullet');
     } else {
@@ -4567,8 +4615,11 @@ function startLanHostGame(opts = {}) {
     ? opts.players
     : (lanSession.players || []);
   const teams = {};
-  lobbyPlayers.forEach((p, i) => { teams[String(p.id)] = i % 2; });
-  if (net.selfId != null && teams[String(net.selfId)] === undefined) teams[String(net.selfId)] = 0;
+  // FFA: every human gets a unique slot; bots fill the remaining slots.
+  lobbyPlayers.slice(0, FFA_SIZE).forEach((p, i) => { teams[String(p.id)] = i; });
+  if (net.selfId != null && teams[String(net.selfId)] === undefined) {
+    teams[String(net.selfId)] = Math.min(FFA_SIZE - 1, Object.keys(teams).length);
+  }
   if (versus) net.team = teams[String(net.selfId)] ?? 0;
   net.teamAssignments = teams;
 
@@ -4587,12 +4638,15 @@ function startLanHostGame(opts = {}) {
   }
 
   if (versus) {
-    // Versus runs team deathmatch + the shrinking ring; the PvE wave director
-    // and the milestone chain assume one hostile faction, so both stay off.
+    // FFA: combat tier and concurrent shooters must be match-level, not the
+    // wave-1 training tier, or 7 fill bots queue behind one firing slot.
+    G.diff = DIFF_TIERS[3];
+    firingSlots.max = 4;
+    firingSlots.at.length = 0;
     startZone();
     startVersusBots(teams, lobbyPlayers);
-    if (hud && hud.setMode) hud.setMode('VERSUS', '蓝军 vs 红军');
-    if (hud && hud.toast) hud.toast(`对抗模式 · 你是${net.team === 0 ? '蓝军' : '红军'}`, 3200);
+    if (hud && hud.setMode) hud.setMode('FFA 8', 'LAST ALIVE');
+    if (hud && hud.toast) hud.toast(`FFA 8 · 最后存活 · 你是 P${Number(net.team) + 1}`, 3200);
   } else {
     // Co-op previously started with G.operation = null, so the only thing the HUD
     // could report was "clear hostiles" — players had no idea what they were
@@ -4645,8 +4699,8 @@ function startLanClientGame(siteId = 'street', startMsg = null) {
     // Client mirrors the host's ring read-only; visuals + damage below.
     netZoneMirror = createZone({ rect: G.site.rect });
     ensureZoneVisual();
-    if (hud && hud.setMode) hud.setMode('VERSUS', '蓝军 vs 红军');
-    if (hud && hud.toast) hud.toast(`对抗模式 · 你是${net.team === 0 ? '蓝军' : '红军'}`, 3200);
+    if (hud && hud.setMode) hud.setMode('FFA 8', 'LAST ALIVE');
+    if (hud && hud.toast) hud.toast(`FFA 8 · 最后存活 · 你是 P${Number(net.team) + 1}`, 3200);
   }
   if (hud) {
     if (!versus && hud.setMode) hud.setMode('SURVIVAL', 'HOLD THE LINE');
