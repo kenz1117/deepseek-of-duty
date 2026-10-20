@@ -28,6 +28,20 @@ export class Perception {
     this.noises = [];
     /** lingering smoke clouds: { x, z, r, t } — these cut line of sight */
     this.smokes = [];
+    /**
+     * bullet-impact crumbs: where rounds are hitting walls, ground and props.
+     * 3D position + normal lets soldiers reason about "fire came from THAT
+     * direction" instead of just "fire came from somewhere". Lifetime is
+     * short (~6 s) so we keep only the most recent spatter; the list is
+     * bounded to keep the per-tick scan cheap.
+     */
+    this.impacts = [];
+    /**
+     * recent soldier deaths, broadcast to neighbours so the squad reacts.
+     * Kept small; each entry is consumed by the awareness sweep and then
+     * fades out on its own clock.
+     */
+    this.casualties = [];
     this.losChecks = 0;
     this.losHits = 0;
     this.time = 0;
@@ -44,10 +58,33 @@ export class Perception {
     this.noises.push({ x, z, r: radius, s: strength, life });
   }
 
-  /** Drop transient stimuli between runs (noise + smoke). */
+  /**
+   * Register a bullet-impact crumb. `nx,nz` is the impact normal in the XZ
+   * plane (unit vector pointing AWAY from the surface, i.e. back toward the
+   * shooter). Soldiers read this and lift awareness even when they did not
+   * see the muzzle flash — a sniper cracking a wall 0.4 m behind them is
+   * unmistakable.
+   */
+  impact(x, z, nx, nz, life = 6) {
+    if (this.impacts.length > 28) this.impacts.shift();
+    this.impacts.push({ x, z, nx, nz, life, max: life });
+  }
+
+  /**
+   * Broadcast a soldier death to neighbours. They hear/see their friend drop
+   * and that bumps awareness faster than a generic noise event.
+   */
+  casualty(x, z, radius = 22) {
+    if (this.casualties.length > 16) this.casualties.shift();
+    this.casualties.push({ x, z, r: radius, life: 2.4, max: 2.4 });
+  }
+
+  /** Drop transient stimuli between runs (noise + smoke + impacts + deaths). */
   clear() {
     this.noises.length = 0;
     this.smokes.length = 0;
+    this.impacts.length = 0;
+    this.casualties.length = 0;
   }
 
   update(dt) {
@@ -59,6 +96,14 @@ export class Perception {
     for (let i = this.smokes.length - 1; i >= 0; i--) {
       this.smokes[i].t -= dt;
       if (this.smokes[i].t <= 0) this.smokes.splice(i, 1);
+    }
+    for (let i = this.impacts.length - 1; i >= 0; i--) {
+      this.impacts[i].life -= dt;
+      if (this.impacts[i].life <= 0) this.impacts.splice(i, 1);
+    }
+    for (let i = this.casualties.length - 1; i >= 0; i--) {
+      this.casualties[i].life -= dt;
+      if (this.casualties[i].life <= 0) this.casualties.splice(i, 1);
     }
   }
 
@@ -109,7 +154,7 @@ export class Perception {
     let visible = false;
     if (inCone && e.losTimer <= 0) {
       e.losTimer = (e.archetype === 'sniper' ? 0.26 : 0.13) + Math.random() * 0.1;
-      visible = e.canSeePlayer(player, dist);
+      visible = e.canSeeTarget(player, dist);
       this.losChecks++;
       if (visible) this.losHits++;
       e.losCache = visible;
@@ -133,12 +178,79 @@ export class Perception {
       for (const n of this.noises) {
         const nd = Math.hypot(n.x - P.x, n.z - P.z);
         if (nd > n.r) continue;
-        const k = (1 - nd / n.r) * n.s;
-        if (k <= 0) continue;
-        e.awareness = Math.min(0.92, e.awareness + k * dt * 2.6);
-        if (k > 0.12) { heard = true; heardX = n.x; heardZ = n.z; }
+        // acoustic occlusion: a building between us and the noise cuts
+        // perceived loudness sharply. nav.lineWalkable returning true
+        // means the segment is open ground, which usually means it is also
+        // acoustically open. A blocked line means the noise has to pass
+        // through at least one wall.
+        let blocked = false;
+        if (ctx.nav && ctx.nav.lineWalkable) {
+          blocked = !ctx.nav.lineWalkable(n.x, n.z, P.x, P.z);
+        }
+        const baseK = (1 - nd / n.r) * n.s;
+        const occK = blocked ? baseK * 0.28 : baseK;
+        if (occK <= 0) continue;
+        e.awareness = Math.min(0.92, e.awareness + occK * dt * 2.6);
+        if (occK > 0.12) { heard = true; heardX = n.x; heardZ = n.z; }
       }
     }
+
+    // ---------------- bullet-impact awareness ----------------
+    // A round hitting the wall 1 m from a soldier is unambiguous: someone
+    // is shooting from the opposite side of that wall. Lift awareness and
+    // accumulate a rough bearing so the cover system can route the soldier
+    // away from that lane instead of back toward it.
+    let bumpDirX = 0, bumpDirZ = 0, bumpAny = false;
+    for (let i = 0; i < this.impacts.length; i++) {
+      const imp = this.impacts[i];
+      const dx2 = imp.x - P.x, dz2 = imp.z - P.z;
+      const d2 = Math.hypot(dx2, dz2);
+      // only local crumbs register; far splatter is too ambiguous to act on
+      if (d2 > 14) continue;
+      const prox = (1 - d2 / 14);
+      const freshness = imp.life / imp.max;
+      const k = prox * freshness;
+      // dot product tells us if the impact normal points back toward the
+      // shooter (fromShooter ≈ 1) or away (-1). Hits on the cover's
+      // back-face are twice as informative as hits on the front.
+      const dot = (dx2 * imp.nx + dz2 * imp.nz) / (d2 || 1);
+      const fromShooter = Math.max(0, -dot);
+      const lift = k * (0.18 + 0.22 * fromShooter);
+      e.awareness = Math.min(1, e.awareness + lift * dt * 6);
+      if (fromShooter > 0.2 && d2 > 0.5) {
+        bumpDirX += imp.nx * fromShooter * prox;
+        bumpDirZ += imp.nz * fromShooter * prox;
+        bumpAny = true;
+      }
+    }
+    if (bumpAny) {
+      e.fireBearingX = bumpDirX;
+      e.fireBearingZ = bumpDirZ;
+      e.fireBearingT = 0.8;
+    } else if ((e.fireBearingT || 0) > 0) {
+      e.fireBearingT = Math.max(0, e.fireBearingT - dt);
+      if (e.fireBearingT === 0) { e.fireBearingX = 0; e.fireBearingZ = 0; }
+    }
+
+    // ---------------- squad-casualty awareness ----------------
+    // Hearing a friend die nearby is louder and more alarming than a
+    // generic noise: the soldier is faster to engage but also more
+    // cautious about the next doorway.
+    for (let i = 0; i < this.casualties.length; i++) {
+      const c = this.casualties[i];
+      const cd = Math.hypot(c.x - P.x, c.z - P.z);
+      if (cd > c.r) continue;
+      const prox = (1 - cd / c.r);
+      const freshness = c.life / c.max;
+      const lift = prox * freshness * 0.55;
+      e.awareness = Math.min(1, e.awareness + lift * dt * 4);
+      e.comradeLostT = 3.5;
+      if (prox > 0.5 && freshness > 0.4 && (!e.investigate || e.lastSeenT > 1.5)) {
+        e.investigate = { x: c.x, z: c.z };
+        e.investigateT = 0;
+      }
+    }
+    if ((e.comradeLostT || 0) > 0) e.comradeLostT = Math.max(0, e.comradeLostT - dt);
 
     // ---------------- awareness ----------------
     if (visible) {
@@ -209,6 +321,7 @@ export class Perception {
     return {
       losChecks: this.losChecks, losHits: this.losHits,
       noises: this.noises.length, smokes: this.smokes.length,
+      impacts: this.impacts.length, casualties: this.casualties.length,
     };
   }
 }
