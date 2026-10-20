@@ -1037,6 +1037,189 @@ export function createLevel(engine) {
   }
 
   /* fences / lane / market / ramp / catwalk (all static -> merged) */
+
+  /* ===================================================================
+     BACKDROP — scenery only, entirely outside the playable bounds:
+     west grass/hills/120 m mountain, east sea + dock, north/south desert.
+     No colliders, no nav, no shadow casting, no bullet surfaces.
+     =================================================================== */
+  function buildBackdrop() {
+    const brnd = mulberry32(77123);
+    const inPlay = (x, z) => x > -118 && x < 118 && z > -196 && z < 128;
+    const H = (x, z) => {
+      if (x > 118) return -4;                 // sea floor
+      if (inPlay(x, z)) return -3;            // under the city ground
+      if (x < -118) {
+        const t = Math.min(1, (-118 - x) / 632);
+        const ridge = Math.sin(Math.PI * Math.min(1, t * 1.06));
+        let h = 120 * Math.pow(Math.max(0, ridge), 1.25);
+        h *= 0.84 + 0.13 * Math.sin(z * 0.013) + 0.05 * Math.sin(x * 0.021 + z * 0.017);
+        h += 10 * Math.sin(x * 0.013 + z * 0.009) * Math.min(1, t * 1.6);
+        h += (6 * Math.sin(x * 0.05 + z * 0.02) + 4 * Math.sin(z * 0.045)) * Math.min(1, t * 1.5);
+        h = Math.min(122, h);
+        return Math.max(0, h);
+      }
+      const edge = z < -196 ? (-196 - z) : (z - 128);
+      const t = Math.min(1, Math.max(0, edge / 45));
+      let h = (3 + 8 * Math.sin(x * 0.018 + z * 0.025) + 3 * Math.sin(x * 0.06)) * t;
+      if (x < -60) h += Math.max(0, (-60 - x) / 58) * 10 * t;
+      return Math.max(0, h);
+    };
+
+    const X0 = 25, W = 1550, D = 1000, SX = 72, SZ = 48;
+    const geo = new THREE.PlaneGeometry(W, D, SX, SZ);
+    geo.rotateX(-Math.PI / 2);
+    const pos = geo.attributes.position;
+    const colors = [];
+    const cGrass = new THREE.Color(0x3f4a2e);
+    const cDry = new THREE.Color(0x6b6047);
+    const cRock = new THREE.Color(0x5e574f);
+    const cHigh = new THREE.Color(0x8a847c);
+    const cSand = new THREE.Color(0x8a7a5c);
+    const cFloor = new THREE.Color(0x1b3038);
+    const cInside = new THREE.Color(0x24241f);
+    const fogC = new THREE.Color(0x8a7e70);
+    for (let i = 0; i < pos.count; i++) {
+      const wx = pos.getX(i) + X0, wz = pos.getZ(i);
+      const y = H(wx, wz);
+      pos.setY(i, y);
+      let c;
+      if (wx > 118) c = cFloor.clone();
+      else if (inPlay(wx, wz)) c = cInside.clone();
+      else if (wx < -118) {
+        if (y < 10) c = cGrass.clone().lerp(cDry, y / 10);
+        else if (y < 50) c = cDry.clone().lerp(cRock, (y - 10) / 40);
+        else c = cRock.clone().lerp(cHigh, Math.min(1, (y - 50) / 70));
+      } else {
+        c = cSand.clone().lerp(cDry, Math.min(1, y / 18));
+        if (y > 16) c.lerp(cRock, Math.min(1, (y - 16) / 20));
+      }
+      const n = 0.9 + brnd() * 0.18;
+      c.multiplyScalar(n);
+      const dist = Math.hypot(wx - 40, wz);
+      const haze = Math.min(0.4, Math.max(0, (dist - 200) / 700) * 0.4);
+      c.lerp(fogC, haze);
+      colors.push(c.r, c.g, c.b);
+    }
+    geo.computeVertexNormals();
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    const terrain = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      vertexColors: true, fog: false,
+    }));
+    terrain.position.set(X0, 0, 0);
+    terrain.castShadow = false; terrain.receiveShadow = false;
+    terrain.name = 'backdrop-terrain';
+    root.add(terrain);
+
+    // ---- sea ----
+    const seaGeo = new THREE.PlaneGeometry(682, 1200, 1, 1);
+    seaGeo.rotateX(-Math.PI / 2);
+    const sea = new THREE.Mesh(seaGeo, new THREE.MeshBasicMaterial({
+      color: 0x2f6470, fog: true,
+    }));
+    sea.position.set(459, -0.3, 0);
+    sea.castShadow = false; sea.receiveShadow = false;
+    sea.name = 'backdrop-sea';
+    root.add(sea);
+
+    const foamMat = new THREE.MeshBasicMaterial({
+      color: 0xd6e4e1, transparent: true, opacity: 0.42, depthWrite: false, fog: false,
+    });
+    const foamGeo = new THREE.PlaneGeometry(2.8, 132);
+    foamGeo.rotateX(-Math.PI / 2);
+    const foam = new THREE.Mesh(foamGeo, foamMat);
+    foam.position.set(119.5, -0.27, -32);
+    root.add(foam);
+    const foamGeo2 = new THREE.PlaneGeometry(70, 1.6);
+    foamGeo2.rotateX(-Math.PI / 2);
+    const foam2 = new THREE.Mesh(foamGeo2, foamMat);
+    foam2.position.set(155, -0.27, -2.1);
+    root.add(foam2);
+    const foam3 = new THREE.Mesh(foamGeo2, foamMat);
+    foam3.position.set(155, -0.27, -21.9);
+    root.add(foam3);
+
+    // ---- dock (scenic, outside bounds) ----
+    const dBox = (w, h, d, mat, x, y, z, rot = 0, uv = 1.4) =>
+      meshBox(w, h, d, mat, x, y, z, rot, { group: farGroup, uv, cast: false, recv: false });
+    const dCyl = (rt, rb, h, seg, mat, x, y, z) =>
+      meshCyl(rt, rb, h, seg, mat, x, y, z, { group: farGroup, cast: false, recv: false });
+    dBox(70, 0.6, 20, mats.concrete, 155, 0.5, -12, 0, 2.6);
+    dBox(70, 0.12, 0.35, mats.wood, 155, 0.86, -22, 0, 1.2);
+    dBox(70, 0.12, 0.35, mats.wood, 155, 0.86, -2, 0, 1.2);
+    for (let x = 124; x <= 186; x += 8) for (const z of [-20, -4]) dCyl(0.35, 0.42, 2.2, 8, mats.concreteDark, x, 0.1, z);
+    for (let x = 128; x <= 184; x += 14) for (const z of [-20.3, -3.7]) {
+      dCyl(0.32, 0.36, 0.9, 8, mats.rust, x, 1.25, z);
+      dCyl(0.5, 0.5, 0.12, 8, mats.metal, x, 1.72, z);
+    }
+    for (const x of [130, 158, 184]) {
+      dCyl(0.06, 0.08, 4.6, 6, mats.metal, x, 2.8, -20.8);
+      dBox(0.5, 0.18, 0.5, mats.windowLit, x, 5.15, -20.8);
+    }
+    dBox(2.0, 2.0, 2.0, mats.wood, 136, 1.8, -8, 0.12);
+    dBox(1.4, 1.6, 1.4, mats.wood, 138.5, 1.6, -7.4, -0.08);
+    dBox(2.2, 2.2, 2.2, mats.wood, 148, 1.9, -16, 0.05);
+    dBox(2.4, 2.4, 2.4, mats.metalTan, 178, 2.0, -11, 0.15);
+    dBox(1.6, 1.4, 1.6, mats.rust, 168, 1.5, -6, 0.2);
+    dBox(0.8, 8.0, 0.8, mats.metal, 176, 4.4, -18, 0);
+    dBox(7.0, 0.4, 0.4, mats.metal, 179, 8.2, -18, 0.55);
+    dBox(0.08, 3.4, 0.08, mats.metal, 182, 6.4, -18, 0, 0.8);
+    dBox(18, 4.0, 5.0, mats.plasterB, 174, 2.2, -19.0, 0, 1.8);
+    dBox(18.5, 0.35, 5.5, mats.metal, 174, 4.35, -19.0, 0, 1.4);
+    dBox(3.0, 2.6, 0.2, mats.metal, 174, 1.5, -16.4, 0, 1.0);
+    dBox(8, 0.22, 1.8, mats.wood, 193, 0.92, -10, 0, 1.0);
+    for (let x = 190; x <= 196; x += 2) dBox(0.1, 1.1, 0.1, mats.metal, x, 1.35, -10, 0, 0.6);
+
+    // distant ship / buoy silhouettes (unfogged so they read as a horizon)
+    const silMat = new THREE.MeshLambertMaterial({ color: 0x394044, flatShading: true, fog: false });
+    const silGroup = new THREE.Group();
+    const sil = (w, h, d, x, y, z, ry = 0) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), silMat);
+      m.position.set(x, y, z); m.rotation.y = ry; m.castShadow = false; m.receiveShadow = false; silGroup.add(m);
+    };
+    sil(26, 3.0, 6, 320, 0.5, -90, 0.12); sil(9, 3.0, 5, 318, 2.9, -90, 0.12); sil(0.4, 7, 0.4, 318, 7.8, -90);
+    sil(20, 2.4, 5, 470, 0.2, 80, -0.2); sil(7, 2.4, 4, 468, 2.3, 80, -0.2);
+    sil(30, 3.4, 7, 680, 0.6, -180, 0.05); sil(11, 3.2, 5, 678, 3.4, -180, 0.05);
+    for (const [x, z] of [[205, -60], [238, 28], [270, -120]]) {
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 1.2, 6), silMat);
+      b.position.set(x, -0.1, z); b.castShadow = false; b.receiveShadow = false; silGroup.add(b);
+    }
+    const silMerged = mergeStatic(silGroup, { castShadow: false, receiveShadow: false });
+    root.add(silMerged);
+
+    // transition tree / rock silhouettes
+    const treeMat = new THREE.MeshBasicMaterial({ color: 0x2b3724, fog: false });
+    const trunkMat = new THREE.MeshBasicMaterial({ color: 0x2a231b, fog: false });
+    const rockMat = new THREE.MeshBasicMaterial({ color: 0x4e4842, fog: false });
+    const treeGroup = new THREE.Group(), trunkGroup = new THREE.Group(), rockGroup = new THREE.Group();
+    const treeGeo = new THREE.ConeGeometry(2.2, 6.6, 6);
+    const trunkGeo = new THREE.CylinderGeometry(0.22, 0.32, 2.2, 5);
+    const rockGeo = new THREE.DodecahedronGeometry(1.0, 0);
+    for (let i = 0; i < 44; i++) {
+      const x = -124 - brnd() * 110, z = -430 + brnd() * 860;
+      const y = H(x, z);
+      const s = 0.6 + brnd() * 0.8;
+      const t = new THREE.Mesh(treeGeo, treeMat);
+      t.position.set(x, y + 4.8 * s, z); t.scale.setScalar(s);
+      t.castShadow = false; t.receiveShadow = false; treeGroup.add(t);
+      const tr = new THREE.Mesh(trunkGeo, trunkMat);
+      tr.position.set(x, y + 1.1 * s, z); tr.scale.setScalar(s);
+      tr.castShadow = false; tr.receiveShadow = false; trunkGroup.add(tr);
+    }
+    for (let i = 0; i < 30; i++) {
+      const x = -124 - brnd() * 170, z = -440 + brnd() * 880;
+      const y = H(x, z);
+      const s = 0.7 + brnd() * 1.9;
+      const r = new THREE.Mesh(rockGeo, rockMat);
+      r.position.set(x, y + 0.45 * s, z); r.scale.set(s * (0.8 + brnd() * 0.5), s * 0.6, s);
+      r.rotation.set(brnd() * 2, brnd() * 6, brnd() * 2);
+      r.castShadow = false; r.receiveShadow = false; rockGroup.add(r);
+    }
+    root.add(mergeStatic(treeGroup, { castShadow: false, receiveShadow: false }));
+    root.add(mergeStatic(trunkGroup, { castShadow: false, receiveShadow: false }));
+    root.add(mergeStatic(rockGroup, { castShadow: false, receiveShadow: false }));
+  }
+
   function buildYardMarketStatic() {
     // ---------- ground: yard + back lane
     meshPlane(10.6, 10.4, mats.dirt, 22.0, 0.012, -11.05, { rx: -Math.PI / 2, uvScale: 2.6, recv: true });
@@ -1736,16 +1919,16 @@ export function createLevel(engine) {
     B(P, 0.6, 0.22, 132, mats.concreteDark, 116, 0.11, -32, 0, { uv: 2.4, collide: true });
     B(P, 0.8, 0.08, 132, mats.concrete, 116, 0.26, -32, 0, { uv: 1.8, cast: false });
     for (let z = -94; z <= 30; z += 3.0) C(P, 0.035, 0.035, 1.05, 5, mats.rust, 116, 0.78, z, { cast: false });
-    for (const yy of [0.55, 1.08]) B(P, 0.05, 0.05, 132, mats.rust, 116, yy, -32, 0, { uv: 0.8, cast: false });
-    meshPlane(10, 132, mats.puddle, 121, -0.18, -32, { rx: -Math.PI / 2, uvScale: 8, group: P, recv: true });
+    for (const yy of [0.55, 1.08, 1.35]) B(P, 0.05, 0.05, 132, mats.rust, 116, yy, -32, 0, { uv: 0.8, cast: false });
+    for (let z = -94; z <= 30; z += 3) C(P, 0.028, 0.028, 1.25, 5, mats.rust, 116.02, 0.7, z, { cast: false });
     for (let z = -94; z <= 30; z += 6) {
       C(P, 0.18, 0.22, 0.9, 8, mats.rust, 114.6, 0.45, z);
       B(P, 0.7, 0.5, 0.7, mats.metal, 114.6, 0.25, z, 0, { uv: 0.8, collide: true });
     }
     // ship hull beyond the quay
-    B(P, 12, 6.5, 44, mats.metal, 122, 1.4, -4, 0, { uv: 3.0 });
-    B(P, 10, 3.2, 20, mats.plasterB, 122, 5.8, -4, 0, { uv: 2.4 });
-    B(P, 3, 3, 3, mats.rust, 122, 7.5, -4, 0, { uv: 1.2 });
+    B(P, 12, 6.5, 44, mats.metal, 197, 1.4, -12, 0, { uv: 3.0 });
+    B(P, 10, 3.2, 20, mats.plasterB, 197, 5.8, -12, 0, { uv: 2.4 });
+    B(P, 3, 3, 3, mats.rust, 197, 7.5, -12, 0, { uv: 1.2 });
     for (let z = -24; z <= 16; z += 8) B(P, 0.3, 1.6, 0.3, mats.metal, 116.2, 5.2, z, 0, { cast: false });
     // perimeter
     B(P, 0.5, 3.4, 14, mats.concreteDark, 48, 1.7, -91, 0, { collide: true, uv: 2.6 });
@@ -5588,6 +5771,7 @@ export function createLevel(engine) {
   buildEastDock();
   buildSouthYard();
   buildExpansion();
+  buildBackdrop();
 
   // ---- fire escapes on the two closest multi-storey fronts
   function fireEscape(side, z, floors, fh) {
