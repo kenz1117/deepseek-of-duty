@@ -16,6 +16,9 @@ import { createStreaks } from './systems/streaks.js';
 import { createArtillery } from './systems/artillery.js';
 import { createLeaderboard } from './net/leaderboard.js';
 import { createNavGrid } from './systems/navgrid.js';
+import { createLanLobby } from './ui/lanLobby.js';
+import { createLanClient } from './net/lanClient.js';
+import { createNetAvatar } from './entities/netRemote.js';
 import { Perception } from './systems/ai/perception.js';
 import { AIDirector } from './systems/ai/director.js';
 import { createBarks } from './systems/barks.js';
@@ -109,6 +112,13 @@ const G = {
 };
 
 let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap, interact, intelSys;
+let lanLobby = null, lanSession = null;
+const net = {
+  role: null, selfId: null, name: 'OPERATOR', hostId: null,
+  remote: new Map(), enemies: new Map(),
+  inputT: 0, snapT: 0, tick: 0, seq: 0, started: false, respawnT: 0, lastError: null,
+};
+let netEnemySeq = 1;
 let perception = null, aiDirector = null, barks = null, equipment = null;
 let codex = { intel: [] };
 let mothAlly = null;
@@ -326,7 +336,7 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(() => requestAn
    drive it from the headless screenshot harness.
    ========================================================================= */
 
-const ATM_ORDER = ['dusk', 'noon', 'storm', 'bluehour'];
+const ATM_ORDER = ['dusk', 'noon', 'storm', 'bluehour', 'night'];
 
 function magCap(w) {
   return Math.max(1, Math.round(w.magSize * G.upgrades.mag));
@@ -1321,6 +1331,16 @@ async function boot() {
     leaderboard.flushOutbox().catch(() => {});
     if (hud.bindSettings) hud.bindSettings(G.settings, onSettingChange);
     if (hud.bindModeSelect) hud.bindModeSelect(G.settings.runMode, onModeSelect);
+    lanLobby = createLanLobby({
+      onHost: (data) => joinLan(data),
+      onJoin: (data) => joinLan(data),
+      onStart: () => startLanHostGame(),
+      onLeave: () => leaveLanLobby(),
+    });
+    try {
+      const lanUrl = new URLSearchParams(location.search).get('lan');
+      if (lanUrl && lanLobby) lanLobby.open();
+    } catch (e) { /* no query support */ }
     bindPrimarySelect();
     renderOps();
     document.querySelectorAll('[data-ops-tab]').forEach((b) => {
@@ -1359,7 +1379,14 @@ async function boot() {
       scene: engine.scene, level, fx, audio, hud, camera: engine.camera,
       smokeTexture: engine.mats.sprites.smoke,
       glowTexture: engine.mats.sprites.glow,
-      damagePlayer: (amount, from) => applyPlayerDamage(amount, from),
+      targetId: null,
+  damagePlayer: (amount, from) => {
+    if (net.role === 'host' && enemyCtx.targetId && String(enemyCtx.targetId) !== String(net.selfId)) {
+      applyLanRemoteDamage(enemyCtx.targetId, amount, from);
+    } else {
+      applyPlayerDamage(amount, from);
+    }
+  },
       onFlash: (intensity) => applyFlashbang(intensity),
       onSmoke: (x, z, r, d) => { if (perception) perception.addSmoke(x, z, r, d); },
       onBark: (type, pos) => {
@@ -1972,6 +1999,7 @@ function spawnEnemy(pos) {
     const zone = level.roofZones.find((r) => pos.x >= r.x0 && pos.x <= r.x1 && pos.z >= r.z0 && pos.z <= r.z1);
     if (zone) e.setBounds(zone);
   }
+  e._netId = netEnemySeq++;
   e.root.visible = true;
   if (SHOT_MODE) e.state = 'engage';
 }
@@ -2151,6 +2179,22 @@ function fireShot() {
   const sideDeg = RECOIL_SIDE[ri % RECOIL_SIDE.length] * w.recoil * adsMul;
   controller.kick(upDeg * DEG_TO_KICK, sideDeg * DEG_TO_KICK);
   controller.addShake(0.09);
+  if (net.role === 'client') {
+    engine.camera.getWorldDirection(_dir);
+    const o = engine.camera.position;
+    if (lanSession) {
+      lanSession.sendFire({
+        seq: ++net.seq,
+        ox: +o.x.toFixed(2), oy: +o.y.toFixed(2), oz: +o.z.toFixed(2),
+        dx: +_dir.x.toFixed(4), dy: +_dir.y.toFixed(4), dz: +_dir.z.toFixed(4),
+        weapon: w.id,
+      });
+    }
+    _end.copy(o).addScaledVector(_dir, 120);
+    fx.tracer(o, _end);
+    return;
+  }
+
   const spread = playerSpread();
   const pellets = w.pellets || 1;
   const targets = level.bulletTargets.slice();
@@ -2335,6 +2379,10 @@ function closeMissionOverlay() {
 }
 
 function returnToMenu() {
+  if (net.role || net.started) {
+    leaveLanSession();
+    if (lanLobby) { lanLobby.setPlayers([]); lanLobby.setHost(false); lanLobby.setStatus('idle', ''); }
+  }
   if (voice) voice.stop();
   if (videoIntro) videoIntro.finish();
   if (cinema && cinema.playing) cinema.skip();
@@ -2863,6 +2911,7 @@ function resubmitWithCallsign(name) {
 
 /** Called once when the operator dies: totals, dailies, board, results page. */
 function finishRun() {
+  if (net.role) return;
   const s = G.stats;
   if (!s) return;
   if (!s.score) s.score = G.score;
@@ -2924,6 +2973,19 @@ function redeploy() {
 
 function playerDie() {
   if (G.state === 'dead') return;
+  if (net.role) {
+    G.hp = 0;
+    G.state = 'dead';
+    controller.die();
+    viewmodel.state.dead = true;
+    audio.death();
+    audio.setLowHealth(false);
+    input.unlock();
+    net.respawnT = 4.0;
+    if (hud && hud.setHint) hud.setHint('阵亡 · 4 秒后重新部署');
+    if (net.role === 'client' && lanSession) lanSession.sendEvent('down');
+    return;
+  }
   G.hp = 0;
   G.state = 'dead';
   controller.die();
@@ -3201,6 +3263,483 @@ function updateSunOcclusion(dt) {
   sunOccluded = _sunRay.intersectObjects(level.bulletTargets, false).length > 0;
 }
 
+
+/* ====================================================================== LAN */
+/* Host-authoritative co-op: the host simulates enemies and waves, clients
+   send input/fire and render snapshots. This is a LAN trust model (see
+   server/README.md §11) — no anti-cheat, no persistence, no host migration
+   of world state. */
+
+function lanName() {
+  try { return loadCallsign() || 'OPERATOR'; } catch (e) { return 'OPERATOR'; }
+}
+
+function lanDisposeActors() {
+  for (const r of net.remote.values()) { try { r.avatar.dispose(); } catch (e) { } }
+  net.remote.clear();
+  for (const e of net.enemies.values()) {
+    try { engine.scene.remove(e.root); if (e.dispose) e.dispose(); } catch (err) { }
+  }
+  net.enemies.clear();
+  // remote enemy visuals also live in the shared array
+  for (let i = enemies.length - 1; i >= 0; i--) if (enemies[i].netRemote) enemies.splice(i, 1);
+}
+
+function leaveLanSession() {
+  if (lanSession) { try { lanSession.close(); } catch (e) { } }
+  lanSession = null;
+  if (net.started) {
+    net.started = false;
+    net.role = null;
+    lanDisposeActors();
+  }
+  net.role = null; net.selfId = null; net.hostId = null;
+  net.tick = 0; net.seq = 0; net.respawnT = 0;
+}
+
+function leaveLanLobby() {
+  leaveLanSession();
+  if (lanLobby) { lanLobby.setPlayers([]); lanLobby.setHost(false); lanLobby.setStatus('idle', ''); }
+}
+
+async function joinLan(data) {
+  if (!data) return;
+  leaveLanSession();
+  net.name = data.name || lanName();
+  if (lanLobby) lanLobby.setStatus('connecting', 'CONNECTING · 正在连接 LAN 服务器…');
+  lanSession = createLanClient({
+    url: data.server || data.url,
+    room: data.room || 'ALPHA',
+    name: net.name,
+    onLobby: onLanLobby,
+    onSnapshot: onLanSnapshot,
+    onEvent: onLanEvent,
+    onStatus: onLanStatus,
+  });
+  const res = await lanSession.connect();
+  if (!res || !res.ok) {
+    if (lanLobby) lanLobby.setStatus('error', `ERROR · ${(res && res.error) || '连接失败'}`);
+    lanSession = null;
+    return;
+  }
+  net.selfId = res.id;
+  net.hostId = res.host;
+  onLanLobby(lanSession.players);
+}
+
+function onLanLobby(players) {
+  if (!lanLobby) return;
+  const isHost = Boolean(lanSession && lanSession.isHost);
+  lanLobby.setPlayers(players || [], { selfId: net.selfId, isHost });
+  lanLobby.setHost(isHost);
+  if (!net.started) {
+    lanLobby.setStatus(isHost ? 'hosting' : 'joined', isHost
+      ? 'HOST · 等待玩家，按 START 开始'
+      : 'JOINED · 等待房主开始');
+  }
+  if (net.started && net.role === 'host') syncLanAvatars(players || []);
+}
+
+function onLanStatus(status) {
+  if (!status || !lanLobby) return;
+  if (status.state === 'error' || status.state === 'closed') {
+    lanLobby.setStatus('error', `ERROR · ${status.error || '连接已断开'}`);
+  } else if (status.state === 'reconnecting') {
+    lanLobby.setStatus('connecting', `RECONNECT · 第 ${status.attempt || 1} 次重连…`);
+  }
+}
+
+function onLanSnapshot(snap) {
+  if (!snap || net.role === 'host') return;
+  if (!net.started) {
+    if (!lanSession) return;
+    startLanClientGame();
+  }
+  if (net.role === 'client') {
+    try { applyLanSnapshot(snap); }
+    catch (e) { net.lastError = String(e && e.stack || e); }
+  }
+}
+
+function onLanEvent(msg) {
+  if (!msg) return;
+  if (msg.t === 'input' && net.role === 'host') {
+    applyLanInput(msg);
+    return;
+  }
+  if (msg.t === 'fire' && net.role === 'host') {
+    applyLanFire(msg);
+    return;
+  }
+  if (msg.t !== 'event') return;
+  if (msg.kind === 'start' && net.role === 'client' && !net.started) {
+    startLanClientGame();
+    return;
+  }
+  if (msg.target && String(msg.target) !== String(net.selfId)) return;
+  if (msg.kind === 'damage' && G.state === 'playing') {
+    const from = Array.isArray(msg.from) ? new THREE.Vector3(msg.from[0], msg.from[1], msg.from[2]) : null;
+    applyPlayerDamage(msg.amount || 0, from);
+  } else if (msg.kind === 'down' && G.state === 'playing') {
+    G.hp = 0;
+    playerDie();
+  } else if (msg.kind === 'respawn') {
+    respawnLanLocal();
+  } else if (msg.kind === 'hit' && hud && hud.hit) {
+    hud.hit(!!msg.headshot, !!msg.killed);
+    if (audio) audio.hitmarker(!!msg.headshot);
+  } else if (msg.kind === 'shot' && Array.isArray(msg.from) && Array.isArray(msg.to) && fx) {
+    fx.tracer(new THREE.Vector3(msg.from[0], msg.from[1], msg.from[2]), new THREE.Vector3(msg.to[0], msg.to[1], msg.to[2]));
+  }
+}
+
+function syncLanAvatars(players) {
+  if (!engine || !net.started) return;
+  const seen = new Set();
+  for (const p of players || []) {
+    if (String(p.id) === String(net.selfId)) continue;
+    const id = String(p.id);
+    seen.add(id);
+    let r = net.remote.get(id);
+    if (!r) {
+      r = {
+        id, name: p.name || 'OPERATOR', hp: 100, alive: true,
+        x: 1.2 + 2.2 * (net.remote.size + 1), z: 33.5, y: 0, yaw: 0, pitch: 0, speed: 0,
+        avatar: createNetAvatar({ scene: engine.scene, mats: engine.mats, name: p.name || 'OPERATOR', variant: net.remote.size % 3 }),
+      };
+      net.remote.set(id, r);
+    } else if (p.name && r.name !== p.name) {
+      r.name = p.name;
+    }
+  }
+  for (const [id, r] of net.remote) {
+    if (seen.has(id)) continue;
+    try { r.avatar.dispose(); } catch (e) { }
+    net.remote.delete(id);
+  }
+}
+
+function applyLanInput(msg) {
+  const r = net.remote.get(String(msg.id));
+  if (!r) return;
+  const x = Number(msg.x), z = Number(msg.z);
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+  // generous LAN validation: reject teleports and non-walkable positions
+  const step = Math.hypot(x - r.x, z - r.z);
+  if (step > 12 && !nav.isWalkableAt(x, z, msg.y || 0)) return;
+  if (!nav.isWalkableAt(x, z, msg.y || 0) && r.alive) return;
+  r.x = x; r.z = z; r.y = Number(msg.y) || 0;
+  r.yaw = Number(msg.yaw) || 0; r.pitch = Number(msg.pitch) || 0;
+  r.hp = Number(msg.hp) || 0;
+  r.alive = msg.alive !== false && r.hp > 0;
+  r.speed = 0;
+  r.avatar.alive = r.alive;
+}
+
+function onLanSnapshotApplyPlayers(players) {
+  syncLanAvatars(players);
+  for (const p of players || []) {
+    const r = net.remote.get(String(p.id));
+    if (!r) continue;
+    r.x = Number(p.x) || 0; r.y = Number(p.y) || 0; r.z = Number(p.z) || 0;
+    r.yaw = Number(p.yaw) || 0; r.pitch = Number(p.pitch) || 0;
+    r.hp = Number(p.hp) || 0;
+    r.alive = p.alive !== false && r.hp > 0;
+    r.avatar.alive = r.alive;
+  }
+}
+
+function getOrCreateNetEnemy(data) {
+  const id = String(data.id);
+  let e = net.enemies.get(id);
+  if (!e) {
+    e = new Enemy(engine.scene, engine.mats, level.colliders);
+    e.netRemote = true;
+    e.setArchetype(data.type || 'rifleman');
+    e.spawn(Number(data.x) || 0, Number(data.z) || 0, Number(data.yaw) || 0, Number(data.y) || 0);
+    e.root.visible = true;
+    e.netTarget = new THREE.Vector3(e.root.position.x, e.root.position.y, e.root.position.z);
+    net.enemies.set(id, e);
+    enemies.push(e);
+  }
+  e.netTarget.set(Number(data.x) || 0, Number(data.y) || 0, Number(data.z) || 0);
+  e.netYaw = Number(data.yaw) || 0;
+  e.hp = Number(data.hp) || 0;
+  const wantAlive = data.alive !== false;
+  if (!wantAlive && e.alive) {
+    e.die(new THREE.Vector3(e.root.position.x, e.root.position.y + 1.2, e.root.position.z));
+  } else if (wantAlive && !e.alive) {
+    // a recycled id — respawn the visual rather than reviving a corpse
+    e.spawn(Number(data.x) || 0, Number(data.z) || 0, Number(data.yaw) || 0, Number(data.y) || 0);
+  }
+  e.root.visible = true;
+  return e;
+}
+
+function applyLanSnapshot(snap) {
+  if (!snap || net.role !== 'client') return;
+  G.wave = Number(snap.wave) || G.wave;
+  G.kills = Number(snap.kills) || 0;
+  G.score = Number(snap.score) || G.kills * 100;
+  if (hud) {
+    hud.setWave(G.wave);
+    hud.setScore(G.score, G.kills);
+  }
+  onLanSnapshotApplyPlayers(snap.players || []);
+  const seen = new Set();
+  const list = Array.isArray(snap.enemies) ? snap.enemies : [];
+  for (const d of list) {
+    if (!d || d.id == null) continue;
+    seen.add(String(d.id));
+    getOrCreateNetEnemy(d);
+  }
+  for (const [id, e] of net.enemies) {
+    if (seen.has(id)) continue;
+    e.root.visible = false;
+  }
+  G.waveRemaining = list.filter((e) => e && e.alive !== false).length;
+  G.waveTotal = Math.max(G.waveTotal, G.waveRemaining);
+  if (hud && hud.setWaveProgress) hud.setWaveProgress(G.waveTotal ? 1 - G.waveRemaining / G.waveTotal : 1);
+}
+
+function nearestLanTarget(pos) {
+  let best = {
+    id: net.selfId || 'local',
+    x: controller.pos.x, y: controller.pos.y, z: controller.pos.z,
+    hp: G.hp, alive: G.hp > 0, speed: controller.state.speed,
+  };
+  let bestD = Math.hypot(pos.x - best.x, pos.z - best.z);
+  for (const r of net.remote.values()) {
+    if (!r.alive || r.hp <= 0) continue;
+    const d = Math.hypot(pos.x - r.x, pos.z - r.z);
+    if (d < bestD) { bestD = d; best = { id: r.id, x: r.x, y: r.y, z: r.z, hp: r.hp, alive: true, speed: r.speed || 0 }; }
+  }
+  return best;
+}
+
+function applyLanRemoteDamage(id, amount, from) {
+  const r = net.remote.get(String(id));
+  if (!r || !r.alive) return;
+  r.hp = Math.max(0, r.hp - amount);
+  if (lanSession) {
+    lanSession.broadcastEvent('damage', {
+      target: id, amount,
+      from: from ? [from.x, from.y, from.z] : null,
+    });
+  }
+  if (r.hp <= 0) {
+    r.alive = false;
+    r.avatar.alive = false;
+    if (lanSession) lanSession.broadcastEvent('down', { target: id });
+  }
+}
+
+function applyLanFire(msg) {
+  if (!lanSession || net.role !== 'host') return;
+  const w = WEAPONS.find((x) => x.id === msg.weapon) || WEAPONS[0];
+  const ox = Number(msg.ox), oy = Number(msg.oy), oz = Number(msg.oz);
+  if (![ox, oy, oz].every(Number.isFinite)) return;
+  const dir = new THREE.Vector3(Number(msg.dx), Number(msg.dy), Number(msg.dz));
+  if (dir.lengthSq() < 1e-6) return;
+  dir.normalize();
+  const targets = level.bulletTargets.slice();
+  for (const e of enemies) if (e.alive) targets.push(...e.hitboxes);
+  const pellets = w.pellets || 1;
+  let end = null;
+  let hitEnemy = null, headshot = false, killed = false;
+  const origin = new THREE.Vector3(ox, oy, oz);
+  for (let p = 0; p < pellets; p++) {
+    const d = dir.clone();
+    if (p > 0) {
+      d.x += (Math.random() - 0.5) * (w.spread || 0.02) * 1.6;
+      d.y += (Math.random() - 0.5) * (w.spread || 0.02) * 1.6;
+      d.z += (Math.random() - 0.5) * (w.spread || 0.02) * 1.6;
+      d.normalize();
+    }
+    raycaster.set(origin, d);
+    raycaster.far = 160;
+    const hits = raycaster.intersectObjects(targets, false);
+    const hit = hits.find((h) => h.object.visible || h.object.userData.enemy || h.object.userData.rayOnly);
+    net.lastFire = hit ? { d: +hit.distance.toFixed(2), enemy: !!hit.object.userData.enemy, part: hit.object.userData.part, name: hit.object.name, visible: hit.object.visible, total: hits.length } : { miss: true, total: hits.length };
+    if (!end) end = hit ? hit.point.clone() : origin.clone().addScaledVector(d, 120);
+    if (!hit) continue;
+    if (p === 0) end = hit.point.clone();
+    const enemy = hit.object.userData.enemy;
+    if (enemy && enemy.alive) {
+      const part = hit.object.userData.part;
+      const mult = hit.object.userData.dmg || 1;
+      const norm = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld).negate() : d.clone().negate();
+      const falloff = w.falloff ? w.falloff(hit.distance) : 1;
+      const didKill = enemy.takeDamage(w.dmg * falloff * mult, hit.point, norm, part);
+      hitEnemy = enemy; headshot = part === 'head'; killed = killed || didKill;
+      if (didKill) onEnemyKilled(enemy, headshot, 'bullet');
+    } else {
+      const mat = hit.object.userData.srcMat || hit.object.material;
+      let kind = 'concrete';
+      if (mat === engine.mats.metal || mat === engine.mats.metalTan || mat === engine.mats.rust || mat === engine.mats.shop) kind = 'metal';
+      else if (mat === engine.mats.wood || mat === engine.mats.woodDark) kind = 'wood';
+      if (fx) fx.impact(hit.point, hit.face ? hit.face.normal : d.clone().negate(), kind);
+    }
+  }
+  if (end && fx) fx.tracer(origin, end);
+  if (hitEnemy && lanSession) {
+    lanSession.broadcastEvent('hit', { target: msg.id, headshot, killed });
+  }
+  if (end && lanSession) {
+    lanSession.broadcastEvent('shot', { from: [ox, oy, oz], to: [end.x, end.y, end.z] });
+  }
+}
+
+function sendLanSnapshot() {
+  if (!lanSession || net.role !== 'host') return;
+  const players = [{
+    id: net.selfId, name: net.name,
+    x: +controller.pos.x.toFixed(2), y: +controller.pos.y.toFixed(2), z: +controller.pos.z.toFixed(2),
+    yaw: +controller.yaw.toFixed(3), pitch: +controller.pitch.toFixed(3),
+    hp: Math.round(G.hp), alive: G.hp > 0, speed: +controller.state.speed.toFixed(2),
+  }];
+  for (const r of net.remote.values()) {
+    players.push({
+      id: r.id, name: r.name,
+      x: +r.x.toFixed(2), y: +(r.y || 0).toFixed(2), z: +r.z.toFixed(2),
+      yaw: +r.yaw.toFixed(3), pitch: +r.pitch.toFixed(3),
+      hp: Math.round(r.hp), alive: r.alive, speed: r.speed || 0,
+    });
+  }
+  const es = [];
+  for (const e of enemies) {
+    if (!e.root.visible || e.netRemote || !e._netId) continue;
+    es.push({
+      id: e._netId, type: e.archetype,
+      x: +e.root.position.x.toFixed(2), y: +e.root.position.y.toFixed(2), z: +e.root.position.z.toFixed(2),
+      yaw: +e.root.rotation.y.toFixed(3),
+      hp: Math.round(e.hp), alive: e.alive,
+    });
+  }
+  lanSession.broadcastSnapshot({
+    tick: ++net.tick, players, enemies: es,
+    wave: G.wave, kills: G.kills, score: G.score,
+    objective: G.objective ? { type: G.objective.type, done: !!G.objective.done } : null,
+  });
+}
+
+function startLanHostGame() {
+  if (!lanSession || !lanSession.isHost) return;
+  if (net.started) return;
+  net.role = 'host';
+  net.selfId = lanSession.id;
+  net.started = true;
+  if (lanLobby) lanLobby.close();
+  campaignActive = false;
+  G.settings.runMode = 'survival';
+  G.operation = null;
+  G.tutorial.done = true;
+  G.tutorial.active = false;
+  startGame(false, true);
+  G.state = 'playing';
+  if (lanSession) lanSession.broadcastEvent('start', { wave: 1 });
+  if (lanLobby) lanLobby.setPlayers(lanSession.players || []);
+  syncLanAvatars(lanSession.players || []);
+  if (hud && hud.toast) hud.toast('LAN CO-OP · 等待队友');
+}
+
+function startLanClientGame() {
+  if (net.started) return;
+  if (audio) { audio.init(); if (audio.resume) audio.resume(); audio.setMasterVolume(G.settings.master); }
+  net.role = 'client';
+  net.selfId = lanSession ? lanSession.id : net.selfId;
+  net.started = true;
+  if (lanLobby) lanLobby.close();
+  campaignActive = false;
+  G.settings.runMode = 'survival';
+  G.operation = null;
+  G.tutorial.done = true;
+  G.tutorial.active = false;
+  resetGame();
+  G.state = 'playing';
+  menuEl.classList.add('hidden');
+  hudEl.classList.remove('hidden');
+  viewmodel.root.visible = true;
+  controller.revive(3.4, 33.6);
+  controller.setLook(-0.03, -0.015);
+  G.wave = 1;
+  G.reserve = Math.max(G.reserve, 240);
+  hideObjectiveUI();
+  if (hud) {
+    if (hud.setMode) hud.setMode('SURVIVAL', 'HOLD THE LINE');
+    hud.setWave(1); hud.setScore(0, 0); hud.setHint('LAN · 同步中…');
+  }
+  if (input) input.lock();
+  net.inputT = 0;
+}
+
+function respawnLanLocal() {
+  if (G.state === 'playing') return;
+  G.hp = G.maxHp;
+  G.armor = G.maxArmor;
+  G.reserve = Math.max(G.reserve, 240);
+  G.state = 'playing';
+  controller.revive(3.4, 33.6);
+  controller.setLook(-0.03, -0.015);
+  viewmodel.state.dead = false;
+  if (hud) { hud.setHealth(G.hp, pipsFor(G.armor)); hud.setHint(''); }
+}
+
+function netTick(dt) {
+  if (!lanSession || !net.started) return;
+  if (net.role === 'host') {
+    net.snapT += dt;
+    if (net.snapT >= 0.05) { net.snapT = 0; sendLanSnapshot(); }
+    for (const r of net.remote.values()) {
+      r.avatar.apply({ x: r.x, y: r.y, z: r.z, yaw: r.yaw, pitch: r.pitch, alive: r.alive, aim: 0.6 }, dt);
+      if (r.avatar.alive) r.avatar.group.visible = Math.hypot(r.x - controller.pos.x, r.z - controller.pos.z) > 0.85;
+    }
+  } else if (net.role === 'client') {
+    net.inputT += dt;
+    if (net.inputT >= 0.05) {
+      net.inputT = 0;
+      lanSession.sendInput({
+        seq: ++net.seq,
+        x: +controller.pos.x.toFixed(2), y: +controller.pos.y.toFixed(2), z: +controller.pos.z.toFixed(2),
+        yaw: controller.yaw, pitch: controller.pitch,
+        hp: Math.round(G.hp), alive: G.hp > 0 && G.state !== 'dead',
+        weapon: currentWeapon().id,
+      });
+    }
+    for (const r of net.remote.values()) {
+      r.avatar.apply({ x: r.x, y: r.y, z: r.z, yaw: r.yaw, pitch: r.pitch, alive: r.alive, aim: 0.6 }, dt);
+      if (r.avatar.alive) r.avatar.group.visible = Math.hypot(r.x - controller.pos.x, r.z - controller.pos.z) > 0.85;
+    }
+    for (const e of net.enemies.values()) {
+      if (!e.root.visible) continue;
+      if (e.alive) {
+        const t = e.netTarget;
+        if (t) {
+          const a = Math.min(1, dt * 14);
+          const moved = Math.hypot(t.x - e.root.position.x, t.z - e.root.position.z);
+          e.root.position.x += (t.x - e.root.position.x) * a;
+          e.root.position.y += (t.y - e.root.position.y) * a;
+          e.root.position.z += (t.z - e.root.position.z) * a;
+          let dy = (e.netYaw || 0) - e.root.rotation.y;
+          while (dy > Math.PI) dy -= Math.PI * 2;
+          while (dy < -Math.PI) dy += Math.PI * 2;
+          e.root.rotation.y += dy * Math.min(1, dt * 12);
+          e.walkAmp += ((moved > 0.03 ? 0.7 : 0) - e.walkAmp) * Math.min(1, dt * 8);
+          e.animT = (e.animT || 0) + dt * (moved > 0.03 ? 7 : 1.2);
+        }
+        e.aimBlend = 0.8;
+        e.applyBodyPose();
+      } else {
+        e.updateDeath(dt);
+      }
+    }
+  }
+  if (G.state === 'dead' && net.role) {
+    net.respawnT -= dt;
+    if (net.respawnT <= 0) respawnLanLocal();
+  }
+}
+
 function updateGame(dt) {
   G.time += dt;
   const playing = G.state === 'playing';
@@ -3220,7 +3759,7 @@ function updateGame(dt) {
     updateWeaponSwap(dt);
     tryFire(dt);
     updateReload(dt);
-    updateGrenades(dt);
+    if (net.role !== 'client') updateGrenades(dt);
 
     // health regen
     G.sinceDamage += dt;
@@ -3229,9 +3768,11 @@ function updateGame(dt) {
       hud.setHealth(G.hp, pipsFor(G.armor));
       if (G.hp > 40) audio.setLowHealth(false);
     }
-    updateObjective(dt);
-    updateWaves(dt);
-    updateTutorial(dt);
+    if (net.role !== 'client') {
+      updateObjective(dt);
+      updateWaves(dt);
+      updateTutorial(dt);
+    }
     updateBeacon(dt);
 
     // AI v2: sprinting boots are a noise event; crouch-walking is silent
@@ -3266,9 +3807,10 @@ function updateGame(dt) {
   enemyCtx.playerAlive = alive;
   enemyCtx.playerSpeed = controller.state.speed;
   // AI v2: tick the shared senses, then hand out squad roles once per 0.3 s
+  if (net.role !== 'client') {
   if (perception) perception.update(dt);
   if (aiDirector && nav) aiDirector.tick(dt, enemies, controller.pos, G.diff);
-  if (equipment && !SHOT_MODE) {
+  if (equipment && !SHOT_MODE && !(net.role === 'host' && net.remote.size > 0)) {
     equipment.update(dt, {
       playerPos: controller.pos,
       playerSpeed: controller.state.speed,
@@ -3277,12 +3819,22 @@ function updateGame(dt) {
       tier: G.diff,
     });
   }
+  }
   if (G.flashA > 0) {
     G.flashA = Math.max(0, G.flashA - dt * 0.8);
     if (hud && hud.setFlash) hud.setFlash(G.flashA);
   }
   for (const e of enemies) {
     if (!e.root.visible) continue;
+    if (net.role === 'client' && e.netRemote) continue;
+    if (net.role === 'host' && net.remote.size) {
+      const tgt = nearestLanTarget(e.root.position);
+      enemyCtx.targetId = tgt.id;
+      enemyCtx.playerPos.set(tgt.x, tgt.y, tgt.z);
+      enemyCtx.playerGroundY = tgt.y;
+      enemyCtx.playerAlive = tgt.alive;
+      enemyCtx.playerSpeed = tgt.speed;
+    }
     if (G.freezeEnemies && SHOT_MODE) {
       // hold pose but keep sprite/lights alive
       e.weaponFlashT = Math.max(0, e.weaponFlashT - dt);
@@ -3321,6 +3873,16 @@ function updateGame(dt) {
     }
     if (e.setDetailVisible) e.setDetailVisible(dx * dx + dz * dz < 24 * 24);
   }
+
+  if (net.role === 'host') {
+    enemyCtx.targetId = net.selfId || 'local';
+    enemyCtx.playerPos.copy(controller.pos);
+    enemyCtx.playerGroundY = controller.pos.y;
+    enemyCtx.playerAlive = G.hp > 0;
+    enemyCtx.playerSpeed = controller.state.speed;
+  }
+
+  netTick(dt);
 
   // pickups / artillery / killstreak counter keep ticking through death so the
   // results beat does not freeze the world
@@ -3413,6 +3975,10 @@ window.__game = {
   get ai() { return { perception, director: aiDirector, barks }; },
   get equipment() { return equipment; },
   get barks() { return barks; },
+  get net() { return net; },
+  get lan() { return lanSession; },
+  get lanLobby() { return lanLobby; },
+  startLanHostGame, startLanClientGame, leaveLanSession, applyLanFire,
   aiStats: () => {
     const live = enemies.filter((e) => e.root.visible);
     return {

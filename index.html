@@ -193,7 +193,12 @@
           <div class="mode-select" id="mode-select" role="group" aria-label="任务模式">
             <div class="mode-select-head">
               <span class="ms-title">MODE <em>模式</em></span>
-              <span class="mode-select-current" id="mode-select-current">CAMPAIGN</span>
+              <div class="ms-head-right">
+                <span class="mode-select-current" id="mode-select-current">CAMPAIGN</span>
+                <button id="lan-open" class="lan-entry" type="button" title="LAN CO-OP · 局域网合作">
+                  <i class="lan-entry-dot" aria-hidden="true"></i><span>LAN</span><em>CO-OP</em>
+                </button>
+              </div>
             </div>
             <div class="mode-select-pills" id="mode-select-pills">
               <button type="button" data-mode="campaign" class="active" aria-pressed="true" title="剧情推进：按 OP01→OP10 推进战役">CAMPAIGN</button>
@@ -314,6 +319,71 @@
     </div>
   </div>
 
+
+
+  <!-- ============ LAN CO-OP LOBBY ============ -->
+  <div id="lan-lobby" class="overlay hidden" aria-hidden="true">
+    <div class="ll-panel" role="dialog" aria-modal="true" aria-labelledby="lan-title" tabindex="-1">
+      <header class="ll-head">
+        <div>
+          <div class="overlay-tag"><i></i>LAN CO-OP · 局域网联机</div>
+          <h2 class="ll-title" id="lan-title">CO-OP<span>LOBBY</span></h2>
+          <p class="ll-sub">2–4 人合作生存 · 房主权威 · 20 Hz 同步</p>
+        </div>
+        <button id="lan-close" class="set-close" type="button" aria-label="关闭 LAN 大厅"><i></i><i></i></button>
+      </header>
+
+      <div class="ll-body">
+        <section class="ll-net">
+          <h3 class="ll-sec-title"><span class="num">01</span>CONNECTION <em>连接</em><i class="hrule"></i></h3>
+          <div class="ll-field">
+            <label for="lan-server">服务器地址 <em>SERVER</em></label>
+            <input id="lan-server" type="text" maxlength="96" autocomplete="off" spellcheck="false"
+              placeholder="ws://192.168.1.20:8790" aria-label="LAN 服务器地址" />
+          </div>
+          <div class="ll-grid">
+            <div class="ll-field">
+              <label for="lan-room">房间码 <em>ROOM</em></label>
+              <input id="lan-room" type="text" maxlength="8" autocomplete="off" spellcheck="false"
+                placeholder="ALPHA" aria-label="房间码" />
+            </div>
+            <div class="ll-field">
+              <label for="lan-name">呼号 <em>CALLSIGN</em></label>
+              <input id="lan-name" type="text" maxlength="12" autocomplete="off" spellcheck="false"
+                placeholder="OPERATOR-0000" aria-label="呼号" />
+            </div>
+          </div>
+          <div class="ll-actions">
+            <button id="lan-host" class="ll-btn" type="button"><span>HOST</span><em>创建房间</em></button>
+            <button id="lan-join" class="ll-btn" type="button"><span>JOIN</span><em>加入房间</em></button>
+          </div>
+          <p class="ll-help">同一局域网 · 先运行 <kbd>npm run lan</kbd> · 房主按 START 开始</p>
+        </section>
+
+        <section class="ll-squad">
+          <header class="ll-squad-head">
+            <h3 class="ll-sec-title"><span class="num">02</span>SQUAD <em>小队</em><i class="hrule"></i></h3>
+            <span class="ll-count" id="lan-count">0/4</span>
+          </header>
+          <ul id="lan-player-list" class="ll-player-list" aria-label="LAN 玩家列表"></ul>
+          <div id="lan-status" class="ll-status" data-state="idle" role="status" aria-live="polite">
+            <i class="ll-status-dot" aria-hidden="true"></i>
+            <span id="lan-status-text">STANDBY · 输入地址后 HOST 或 JOIN</span>
+          </div>
+        </section>
+      </div>
+
+      <footer class="ll-foot">
+        <div class="ll-me"><span class="ll-me-dot" aria-hidden="true"></span><b id="lan-you">OPERATOR-0000</b><em>本机呼号</em></div>
+        <div class="ll-foot-actions">
+          <button id="lan-leave" class="ll-btn ll-ghost" type="button"><span>LEAVE</span><em>离开</em></button>
+          <button id="lan-start" class="ll-btn ll-primary" type="button" disabled title="仅房主可以开始行动">
+            <span>START</span><em>开始行动</em>
+          </button>
+        </div>
+      </footer>
+    </div>
+  </div>
 
   <!-- ============ PRE-MISSION BRIEFING / TUTORIAL ============ -->
   <div id="prestart" class="overlay hidden" aria-hidden="true">

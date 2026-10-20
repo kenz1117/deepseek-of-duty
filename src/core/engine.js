@@ -59,6 +59,14 @@ export const ATMOSPHERES = {
     sky: { horizon: [0.26, 0.28, 0.30], zenith: [0.085, 0.10, 0.125], sunColor: [0.72, 0.78, 0.85], sunIntensity: 0.55, cloud: 1.0 },
     grade: { contrast: 1.14, saturation: 0.78, lift: [0.014, 0.017, 0.022], gain: [1.0, 1.0, 1.02], vignette: 0.52, grain: 0.045 },
   },
+  night: {
+    label: 'NIGHT',
+    sunDir: [0.04, 0.10, -0.994],
+    sunColor: 0x7f96c8, sunIntensity: 0.38, fill: 0.30, hemi: 0.42, env: 0.62,
+    fog: [0x0a0f18, 0.0145], exposure: 1.62, bloom: 0.62,
+    sky: { horizon: [0.035, 0.05, 0.085], zenith: [0.004, 0.009, 0.024], sunColor: [0.34, 0.46, 0.78], sunIntensity: 0.20, cloud: 0.85 },
+    grade: { contrast: 1.16, saturation: 0.86, lift: [0.014, 0.020, 0.034], gain: [0.96, 1.0, 1.10], vignette: 0.58, grain: 0.038 },
+  },
   bluehour: {
     label: 'BLUE HOUR',
     sunDir: [0.08, 0.11, -0.99],

@@ -79,6 +79,105 @@ export const SCENES = {
     ],
   },
 
+  /* OP 11 — the old souk: minaret, awnings, narrow lanes. Silent camera tour. */
+  souk_intro: {
+    duration: 9.0,
+    fadeIn: 0.7,
+    fadeOut: 0.8,
+    actors: [
+      { variant: 0, archetype: 'rifleman', x: -84.0, z: 26.0, yaw: 1.4, pose: 'walk', walk: true },
+      { variant: 1, archetype: 'rifleman', x: -80.0, z: 18.0, yaw: 2.2, pose: 'aim' },
+    ],
+    camera: [
+      { t: 0, pos: [-104, 4.6, 54], look: [-74, 3.2, 12] },
+      { t: 4.5, pos: [-94, 2.6, 44], look: [-74, 2.3, 14] },
+      { t: 9.0, pos: [-86, 1.9, 36], look: [-76, 1.8, 18] },
+    ],
+    lines: [
+      { t: 0.6, speaker: 'VEGA', text: '老城。五百年的巷子，两米宽的门洞。车队把货藏在铺面后面。', silent: true },
+      { t: 5.0, speaker: '灰狼', text: '屋顶有人。我从棚子下面走。', silent: true },
+    ],
+  },
+
+  /* OP 12 — the railhead at night. */
+  rail_intro: {
+    duration: 9.0,
+    fadeIn: 0.7,
+    fadeOut: 0.8,
+    actors: [
+      { variant: 2, archetype: 'rifleman', x: 2.0, z: -160.0, yaw: 0.2, pose: 'walk', walk: true },
+      { variant: 0, archetype: 'rifleman', x: -3.0, z: -150.0, yaw: 0.8, pose: 'aim' },
+    ],
+    camera: [
+      { t: 0, pos: [0, 5.2, -188], look: [0, 3.0, -150] },
+      { t: 4.5, pos: [0.5, 3.0, -176], look: [0, 2.4, -142] },
+      { t: 9.0, pos: [0.2, 2.0, -164], look: [0.4, 1.8, -138] },
+    ],
+    lines: [
+      { t: 0.6, speaker: 'VEGA', text: '北站。整夜都在卸货，站台比街面高四米。', silent: true },
+      { t: 5.0, speaker: 'MOTH', text: '热源在集装箱后面。站台上有一个。', silent: true },
+    ],
+  },
+
+  /* OP 13 — container yard in the storm. */
+  port_intro: {
+    duration: 9.0,
+    fadeIn: 0.7,
+    fadeOut: 0.8,
+    actors: [
+      { variant: 1, archetype: 'rifleman', x: 88.0, z: -60.0, yaw: -0.8, pose: 'aim' },
+      { variant: 0, archetype: 'rifleman', x: 92.0, z: -52.0, yaw: -0.6, pose: 'walk', walk: true },
+    ],
+    camera: [
+      { t: 0, pos: [68, 6.5, -94], look: [96, 4.0, -44] },
+      { t: 4.5, pos: [76, 3.4, -82], look: [98, 2.8, -44] },
+      { t: 9.0, pos: [84, 2.1, -70], look: [100, 2.0, -46] },
+    ],
+    lines: [
+      { t: 0.6, speaker: 'VEGA', text: '港区。集装箱之间只有几条缝，手雷会比子弹先到。', silent: true },
+      { t: 5.0, speaker: '灰狼', text: '吊臂上有反光。我先上高台。', silent: true },
+    ],
+  },
+
+  /* OP 14 — the last crane at dawn. */
+  finale2_intro: {
+    duration: 10.0,
+    fadeIn: 0.8,
+    fadeOut: 1.0,
+    actors: [
+      { variant: 2, archetype: 'shield', x: 98.0, z: -44.0, yaw: Math.PI, pose: 'aim', scale: 1.2 },
+      { variant: 0, archetype: 'rifleman', x: 92.0, z: -48.0, yaw: Math.PI, pose: 'aim' },
+    ],
+    camera: [
+      { t: 0, pos: [86, 5.8, -74], look: [98, 2.2, -44] },
+      { t: 5.0, pos: [92, 3.0, -60], look: [98, 2.0, -44] },
+      { t: 10.0, pos: [96, 2.0, -52], look: [98, 1.9, -44] },
+    ],
+    lines: [
+      { t: 0.6, speaker: 'VEGA', text: '萨利姆在吊臂下面。他把最后的货和人全压在这一场。', silent: true },
+      { t: 5.4, speaker: 'VEGA', text: '卡里姆的频道还在响——是萨利姆在用他的频率。别听。', silent: true },
+    ],
+  },
+
+  ending2: {
+    duration: 12.0,
+    fadeIn: 1.0,
+    fadeOut: 1.8,
+    actors: [
+      { variant: 0, archetype: 'rifleman', x: 94.0, z: -36.0, yaw: -2.4, pose: 'walk', walk: true },
+    ],
+    camera: [
+      { t: 0, pos: [96, 7.5, -44], look: [122, 2.0, -20] },
+      { t: 6.0, pos: [100, 4.2, -38], look: [122, 1.8, -24] },
+      { t: 12.0, pos: [104, 2.2, -30], look: [122, 1.6, -18] },
+    ],
+    lines: [
+      { t: 0.8, speaker: 'VEGA', text: '吊臂停了。船离港的时候，天刚亮。', silent: true },
+      { t: 5.4, speaker: '灰狼', text: '这座城结束了。', silent: true },
+      { t: 8.0, speaker: 'VEGA', text: '暂时。下一座城更大。', silent: true },
+    ],
+  },
+
   /* OP 05/07/09 — the armoured boss steps off the APC. */
 
   boss_reveal: {
@@ -240,7 +339,7 @@ export function createCinema({ engine, viewmodel, hud, voice }) {
     if (el.speaker) el.speaker.textContent = line.speaker || 'VEGA';
     if (el.text) el.text.textContent = line.text || '';
     const played = voice && line.voice ? voice.play(line.voice) : false;
-    if (!played) speak(`${line.speaker || 'VEGA'}。${line.text || ''}`);
+    if (!played && !line.silent) speak(`${line.speaker || 'VEGA'}。${line.text || ''}`);
   }
 
   function play(id, done) {

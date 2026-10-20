@@ -278,7 +278,7 @@ export function createNavGrid(level, opts = {}) {
     heapPush(startId);
 
     let expanded = 0;
-    const limit = maxNodes || 14000;
+    const limit = maxNodes || 60000;
     while (heap.length > 0 && expanded < limit) {
       const cur = heapPop();
       if (cur === goalId) return rebuild(cur);

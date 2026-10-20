@@ -1,29 +1,113 @@
 /* =========================================================================
    Tactical minimap.
 
-   North-up, player-centred, 150 px square showing ~84 m around the player.
+   North-up, player-centred, 150 px square. Range cycles 42 m / 70 m; the
+   wider setting is persisted so the expanded Season 3 map reads well.
    Walls come from level.colliders (the same boxes the player collides with),
    so the map can never drift from the real level. Enemies are only revealed
    when they are close, actively firing, or the UAV is up.
    ========================================================================= */
 
-const RANGE = 42;          // metres from centre to edge
+const RANGES = [42, 70];   // metres from centre to edge
+const RANGE_KEY = 'dod.minimapRange';
 const DRAW_HZ = 10;
 
 export function createMinimap({ level }) {
   const wrap = document.getElementById('minimap-wrap');
   const canvas = document.getElementById('minimap');
   const regionEl = document.getElementById('mm-region');
-  if (!wrap || !canvas) return { update() {}, toggle() {}, get visible() { return false; } };
+  if (!wrap || !canvas) return {
+    update() {}, toggle() {}, setVisible() {}, draw() {},
+    cycleZoom() { return 42; }, get range() { return 42; },
+    get visible() { return false; },
+  };
   const ctx = canvas.getContext('2d');
   const W = canvas.width;
   const H = canvas.height;
-  const scale = W / (RANGE * 2);
+  let zoomBtn = document.getElementById('mm-zoom');
+  if (!zoomBtn) {
+    zoomBtn = document.createElement('button');
+    zoomBtn.id = 'mm-zoom';
+    zoomBtn.className = 'mm-zoom';
+    zoomBtn.type = 'button';
+    zoomBtn.setAttribute('aria-label', '切换小地图范围 42 米 / 70 米');
+    zoomBtn.title = '小地图范围 42m / 70m';
+    wrap.appendChild(zoomBtn);
+  }
+  let range = RANGES[0];
+  try {
+    const saved = Number(localStorage.getItem(RANGE_KEY));
+    if (RANGES.includes(saved)) range = saved;
+  } catch (e) { /* ignore */ }
+  let scale = W / (range * 2);
+  let lastState = { x: 0, z: 0, heading: 0, enemies: [], uav: false };
+  let lastTime = 0;
 
-  // pre-filter the collider list once: low kerbs and decals do not belong
+  // DOM overlays kept outside the canvas so the scale stays crisp at 166 px.
+  let scaleEl = document.getElementById('mm-scale');
+  if (!scaleEl) {
+    scaleEl = document.createElement('span');
+    scaleEl.id = 'mm-scale';
+    scaleEl.className = 'mm-scale';
+    scaleEl.setAttribute('aria-hidden', 'true');
+    const line = document.createElement('i');
+    const label = document.createElement('b');
+    scaleEl.append(line, label);
+    wrap.appendChild(scaleEl);
+  }
+  const scaleLine = scaleEl.querySelector('i');
+  const scaleLabel = scaleEl.querySelector('b');
+  let objDistEl = document.getElementById('mm-objdist');
+  if (!objDistEl) {
+    objDistEl = document.createElement('span');
+    objDistEl.id = 'mm-objdist';
+    objDistEl.className = 'mm-objdist';
+    objDistEl.hidden = true;
+    wrap.appendChild(objDistEl);
+  }
+  let scaleKey = '';
+
+  function updateScaleBar() {
+    const cssW = wrap.clientWidth || 166;
+    const meters = range >= 70 ? 20 : 10;
+    const px = Math.max(8, Math.round((cssW / (range * 2)) * meters));
+    const key = `${range}:${cssW}:${meters}`;
+    if (key === scaleKey) return;
+    scaleKey = key;
+    if (scaleLine) scaleLine.style.width = `${px}px`;
+    if (scaleLabel) scaleLabel.textContent = `${meters}m`;
+  }
+
+  function updateObjectiveDistance(obj, px, pz) {
+    if (!objDistEl) return;
+    if (range < 70 || !obj || !obj.zone) {
+      objDistEl.hidden = true;
+      return;
+    }
+    const dist = Math.round(Math.hypot(obj.zone.x - px, obj.zone.z - pz));
+    objDistEl.hidden = false;
+    objDistEl.textContent = `OBJ ${dist}m`;
+    objDistEl.classList.toggle('is-done', !!obj.done);
+  }
+
+  function paintZoom() {
+    if (zoomBtn) zoomBtn.textContent = `${range}m`;
+    updateScaleBar();
+  }
+  paintZoom();
+
+  // pre-filter the collider list once: low kerbs and decals do not belong.
+  // tiny footprint / tiny height junk is also dropped in the 70m view only.
   const walls = (level && level.colliders ? level.colliders : [])
     .filter((c) => (c.top == null ? 10 : c.top) >= 1.2)
-    .map((c) => ({ x0: c.x0, x1: c.x1, z0: c.z0, z1: c.z1, tall: (c.top == null ? 10 : c.top) >= 6 }));
+    .map((c) => {
+      const top = c.top == null ? 10 : c.top;
+      return {
+        x0: c.x0, x1: c.x1, z0: c.z0, z1: c.z1,
+        tall: top >= 6,
+        tiny: (c.x1 - c.x0) < 1.2 && (c.z1 - c.z0) < 1.2,
+      };
+    });
 
   let on = true;
   try { on = localStorage.getItem('dod.minimap') !== '0'; } catch (e) { /* ignore */ }
@@ -40,7 +124,19 @@ export function createMinimap({ level }) {
 
   function toggle() { setVisible(!on); return on; }
 
+  function cycleZoom() {
+    const i = RANGES.indexOf(range);
+    range = RANGES[(i + 1) % RANGES.length];
+    scale = W / (range * 2);
+    try { localStorage.setItem(RANGE_KEY, String(range)); } catch (e) { /* ignore */ }
+    paintZoom();
+    if (on) draw(lastState, lastTime);
+    return range;
+  }
+
   function draw(s, time) {
+    lastState = s;
+    lastTime = time;
     const px = s.x;
     const pz = s.z;
     const toX = (x) => W / 2 + (x - px) * scale;
@@ -50,46 +146,92 @@ export function createMinimap({ level }) {
     ctx.fillStyle = 'rgba(6,10,13,0.72)';
     ctx.fillRect(0, 0, W, H);
 
-    // 10 m grid
-    ctx.strokeStyle = 'rgba(150,180,190,0.10)';
-    ctx.lineWidth = 1;
-    const gx0 = Math.floor((px - RANGE) / 10) * 10;
-    const gz0 = Math.floor((pz - RANGE) / 10) * 10;
-    for (let gx = gx0; gx <= px + RANGE; gx += 10) {
-      const x = toX(gx);
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    // grid: 42m keeps the original single 10m grid; 70m gets a brighter
+    // 10m grid + 20m major lines so the larger view still has a sense of scale.
+    function drawGrid(step, stroke, width) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = width;
+      const gx0 = Math.floor((px - range) / step) * step;
+      const gz0 = Math.floor((pz - range) / step) * step;
+      for (let gx = gx0; gx <= px + range; gx += step) {
+        const x = toX(gx);
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+      }
+      for (let gz = gz0; gz <= pz + range; gz += step) {
+        const y = toY(gz);
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+      }
     }
-    for (let gz = gz0; gz <= pz + RANGE; gz += 10) {
-      const y = toY(gz);
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    if (range >= 70) {
+      drawGrid(10, 'rgba(150,180,190,0.18)', 1);
+      drawGrid(20, 'rgba(150,180,190,0.30)', 1.4);
+    } else {
+      drawGrid(10, 'rgba(150,180,190,0.13)', 1);
     }
 
-    // walls
-    for (const c of walls) {
-      const x = toX(c.x0);
-      const y = toY(c.z0);
-      const w = (c.x1 - c.x0) * scale;
-      const h = (c.z1 - c.z0) * scale;
-      if (x > W || y > H || x + w < 0 || y + h < 0) continue;
-      ctx.fillStyle = c.tall ? 'rgba(126,138,146,0.55)' : 'rgba(96,106,112,0.4)';
-      ctx.fillRect(x, y, Math.max(1, w), Math.max(1, h));
+    updateScaleBar();
+
+    // walls: 42m keeps the legacy single pass. 70m is tiered by height and
+    // widens high walls to 2-3 screen pixels so containers/platforms read as
+    // solid masses instead of 1px dashes.
+    if (range >= 70) {
+      const cssK = (wrap.clientWidth || 166) / W; // canvas px -> CSS px
+      const minHigh = Math.max(3, 2.5 / Math.max(cssK, 0.2));
+      const minLow = Math.max(1, 1.0 / Math.max(cssK, 0.2));
+      const drawWall = (c, minPx, fill) => {
+        const x = toX(c.x0);
+        const y = toY(c.z0);
+        const w = (c.x1 - c.x0) * scale;
+        const h = (c.z1 - c.z0) * scale;
+        if (x > W || y > H || x + w < 0 || y + h < 0) return;
+        ctx.fillStyle = fill;
+        ctx.fillRect(x, y, Math.max(minPx, w), Math.max(minPx, h));
+      };
+      // low / walkable-cover / ground colliders first, translucent
+      for (const c of walls) {
+        if (c.tall || c.tiny) continue;
+        drawWall(c, minLow, 'rgba(106,118,126,0.24)');
+      }
+      // tall walls on top, solid 2-3 CSS px minimum
+      for (const c of walls) {
+        if (!c.tall) continue;
+        drawWall(c, minHigh, 'rgba(176,190,198,0.80)');
+      }
+    } else {
+      for (const c of walls) {
+        const x = toX(c.x0);
+        const y = toY(c.z0);
+        const w = (c.x1 - c.x0) * scale;
+        const h = (c.z1 - c.z0) * scale;
+        if (x > W || y > H || x + w < 0 || y + h < 0) continue;
+        ctx.fillStyle = c.tall ? 'rgba(126,138,146,0.55)' : 'rgba(96,106,112,0.4)';
+        ctx.fillRect(x, y, Math.max(1, w), Math.max(1, h));
+      }
     }
 
     // objective zone
     const obj = s.objective;
+    updateObjectiveDistance(obj, px, pz);
     if (obj && obj.zone) {
       const zx = toX(obj.zone.x);
       const zy = toY(obj.zone.z);
-      const zr = Math.max(3, obj.zone.r * scale);
+      const wide = range >= 70;
+      const zr = Math.max(wide ? 5 : 3, obj.zone.r * scale);
       const inView = zx > -zr && zx < W + zr && zy > -zr && zy < H + zr;
       if (inView) {
         ctx.beginPath();
         ctx.arc(zx, zy, zr, 0, Math.PI * 2);
-        ctx.strokeStyle = obj.done ? 'rgba(157,255,168,0.85)' : 'rgba(255,178,94,0.85)';
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = obj.done ? 'rgba(157,255,168,0.9)' : 'rgba(255,178,94,0.9)';
+        ctx.lineWidth = wide ? 3 : 2;
         ctx.stroke();
-        ctx.fillStyle = obj.done ? 'rgba(157,255,168,0.12)' : 'rgba(255,178,94,0.12)';
+        ctx.fillStyle = obj.done ? 'rgba(157,255,168,0.14)' : 'rgba(255,178,94,0.14)';
         ctx.fill();
+        if (wide) {
+          ctx.beginPath();
+          ctx.arc(zx, zy, Math.max(2, zr * 0.32), 0, Math.PI * 2);
+          ctx.fillStyle = obj.done ? 'rgba(157,255,168,0.9)' : 'rgba(255,178,94,0.9)';
+          ctx.fill();
+        }
       } else {
         // clamp the objective marker to the map edge so it still points the way
         let dx = zx - W / 2;
@@ -98,8 +240,8 @@ export function createMinimap({ level }) {
         const k = (W / 2 - 10) / len;
         dx *= k; dy *= k;
         ctx.beginPath();
-        ctx.arc(W / 2 + dx, H / 2 + dy, 5, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255,178,94,0.9)';
+        ctx.arc(W / 2 + dx, H / 2 + dy, wide ? 6 : 5, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,178,94,0.95)';
         ctx.fill();
       }
     }
@@ -180,11 +322,22 @@ export function createMinimap({ level }) {
     draw(s, (s.time || 0) + step);
   }
 
+  if (zoomBtn) {
+    zoomBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      cycleZoom();
+    });
+    zoomBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+  }
+
   return {
     update,
     toggle,
     setVisible,
+    cycleZoom,
     draw: (s) => draw(s, 0),
     get visible() { return on; },
+    get range() { return range; },
   };
 }

@@ -376,9 +376,10 @@ export function createLevel(engine) {
     addSkid([[6.0, 6], [5.2, 2], [4.6, -2]], 0.3);
     addSkid([[-1.2, -36], [-1.6, -40], [-1.0, -44]], 0.34);
 
-    // world bounds (players)
-    addColliderRect(-30, -22, -96, 80);
-    addColliderRect(-30, 30, -98, -96);  // north backstop behind the checkpoint wall
+    // world bounds (players) — Season 3: the west strip opens to the souk
+    // connector, and the north backstop gets a 12 m rail-depot gate.
+    addColliderRect(-30, 0, -98, -96);
+    addColliderRect(12, 30, -98, -96);
     addColliderRect(-30, 30, 82, 100);   // south backstop sits behind the depot yard wall
   }
 
@@ -895,6 +896,10 @@ export function createLevel(engine) {
   const HQ_STAIR = { x0: 12.45, x1: 13.95, z0: -74.4, z1: -71.0, rise: 3.2 };
   // east dock loading ramp up to the 1.2 m platform
   const DOCK_RAMP = { x0: 43.2, x1: 44.4, z0: -83.2, z1: -86.5, rise: 1.2 };
+  // Season 3: rail depot elevated platform 0 -> 4.2
+  const EXPANSION_RAMPS = [
+    { x0: 28.0, x1: 30.0, z0: -136.0, z1: -144.0, rise: 4.2, id: 'rail' },
+  ];
   const ROOF_ZONES = [
     { x0: 17.75, x1: 23.4, z0: -13.4, z1: -7.9, y: 3.2 },  // market roof deck (west edge reaches the catwalk)
     { x0: 22.7, x1: 26.0, z0: -8.6, z1: -7.9, y: 3.2 },    // ramp top landing (0.7 m overlap with the deck)
@@ -953,7 +958,7 @@ export function createLevel(engine) {
   function groundHeight(x, z, y = 0) {
     let best = 0;
     const ceiling = y + 0.6;
-    for (const r of [RAMP, SOUTH_RAMP, HQ_STAIR, DOCK_RAMP]) {
+    for (const r of [RAMP, SOUTH_RAMP, HQ_STAIR, DOCK_RAMP, ...EXPANSION_RAMPS]) {
       const rz0 = Math.min(r.z0, r.z1), rz1 = Math.max(r.z0, r.z1);
       if (x < r.x0 || x > r.x1 || z < rz0 || z > rz1) continue;
       const t = Math.max(0, Math.min(1, (z - r.z0) / (r.z1 - r.z0)));
@@ -1302,6 +1307,1061 @@ export function createLevel(engine) {
     meshBox(0.3, 0.05, 0.05, mats.rust, 17.05, 3.55, -10.2, 0, { uv: 0.5, cast: false });
     meshBox(0.22, 0.13, 0.17, mats.metalTan, 17.2, 3.44, -10.2, 0, { uv: 0.6 });
     lightPool(17.45, -10.2, 1.5, 0.18);
+  }
+
+
+  /* =====================================================================
+     SEASON 3 — map expansion: old souk (west), rail depot (north),
+     container yard (east). Each district is built into its own group and
+     merged separately at the end so its bounding volume stays local
+     (frustum culling keeps the street render cost flat).
+     ===================================================================== */
+  const EXPANSION_GROUPS = {
+    souk: new THREE.Group(),
+    rail: new THREE.Group(),
+    port: new THREE.Group(),
+  };
+  const EXPANSION_STAGES = {
+    souk: { x: -96, z: 46, yaw: 0.6 },
+    rail: { x: 0, z: -180, yaw: 0 },
+    port: { x: 80, z: -80, yaw: -1.2 },
+  };
+  const EXPANSION_OBJECTIVES = {};
+  const RAIL_PLATFORM = { x0: -30, x1: 30, z0: -152, z1: -144, y: 4.2 };
+  const EXPANSION_DISTRICTS = [
+    {
+      id: 'old_souk', name: '老城集市', en: 'OLD SOUK',
+      rect: { x0: -116, x1: -40, z0: -42, z1: 72 },
+      stage: EXPANSION_STAGES.souk, objective: { x: -74, z: 12, r: 6 },
+    },
+    {
+      id: 'rail_depot', name: '北站货场', en: 'RAIL DEPOT',
+      rect: { x0: -38, x1: 42, z0: -194, z1: -106 },
+      stage: EXPANSION_STAGES.rail, objective: { x: 4, z: -142, r: 7 },
+    },
+    {
+      id: 'container_yard', name: '东港集装箱场', en: 'CONTAINER YARD',
+      rect: { x0: 48, x1: 122, z0: -98, z1: 34 },
+      stage: EXPANSION_STAGES.port, objective: { x: 98, z: -44, r: 6 },
+    },
+  ];
+
+  function buildExpansion() {
+    const S = EXPANSION_GROUPS.souk;
+    const R = EXPANSION_GROUPS.rail;
+    const P = EXPANSION_GROUPS.port;
+
+    const B = (g, w, h, d, mat, x, y, z, rot = 0, o = {}) => meshBox(w, h, d, mat, x, y, z, rot, { ...o, group: g });
+    const C = (g, rt, rb, h, seg, mat, x, y, z, o = {}) => meshCyl(rt, rb, h, seg, mat, x, y, z, { ...o, group: g });
+    const GND = (g, w, d, mat, x, z, y = 0.006, uv = 3) => meshPlane(w, d, mat, x, y, z, { rx: -Math.PI / 2, uvScale: uv, recv: true, group: g });
+    const WIN = (g, w, h, mat, x, y, z, ry) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+      m.position.set(x, y, z);
+      m.rotation.y = ry;
+      m.castShadow = false; m.receiveShadow = true;
+      g.add(m);
+      return m;
+    };
+    const SIGN = (g, w, h, mat, x, y, z, ry) => WIN(g, w, h, mat, x, y, z, ry);
+
+    /* base dirt under everything (2 tris; the old dirt plane only covered the street) */
+    meshPlane(300, 360, mats.dirt, 3, -0.09, -34, { rx: -Math.PI / 2, uvScale: 6, recv: true, cast: false });
+
+    /* ================================================================ SOUK */
+    // ground + alley paving
+    GND(S, 76, 114, mats.dirt, -78, 15, 0.004, 3.6);
+    for (const [x0, x1, z0, z1] of [
+      [-80, -72, -42, 72], [-104, -97, -42, 72], [-56.5, -49, -42, 72],
+      [-116, -40, 16, 24], [-116, -40, -12, -5], [-116, -40, 46, 54],
+      [-62, -40, -12, 32], [-104, -88, 40, 56],
+    ]) {
+      B(S, x1 - x0, 0.035, z1 - z0, mats.concreteDark, (x0 + x1) / 2, 0.018, (z0 + z1) / 2, 0, { uv: 4.0, cast: false });
+    }
+    // perimeter city wall
+    for (const [x0, x1, z0, z1, h] of [
+      [-116.6, -116, -42, 72, 9], [-116, -40, 72, 72.6, 9], [-116, -40, -42.6, -42, 9],
+    ]) {
+      B(S, x1 - x0, h, z1 - z0, mats.plasterB, (x0 + x1) / 2, h / 2, (z0 + z1) / 2, 0, { collide: true, uv: 3.0 });
+      B(S, x1 - x0 + 0.2, 0.3, z1 - z0 + 0.2, mats.concrete, (x0 + x1) / 2, h + 0.15, (z0 + z1) / 2, 0, { uv: 2.0, cast: false });
+    }
+    // east wall with the two 6 m+ gates (z -8..2, z 18..30)
+    for (const [za, zb] of [[-42, -8], [2, 18], [30, 72]]) {
+      B(S, 0.6, 8.4, zb - za, mats.plasterB, -40, 4.2, (za + zb) / 2, 0, { collide: true, uv: 2.8 });
+      B(S, 0.8, 0.28, zb - za + 0.2, mats.concrete, -40, 8.55, (za + zb) / 2, 0, { uv: 2.0, cast: false });
+    }
+    for (const [za, zb] of [[-8, 2], [18, 30]]) {
+      for (const z of [za, zb]) B(S, 0.8, 8.4, 0.35, mats.plasterB, -40, 4.2, z, 0, { collide: true, uv: 2.0 });
+      B(S, 0.9, 0.9, zb - za, mats.concreteDark, -40, 7.95, (za + zb) / 2, 0, { uv: 2.0, cast: false });
+      B(S, 0.7, 0.16, zb - za, mats.concrete, -40, 0.08, (za + zb) / 2, 0, { uv: 1.6, cast: false });
+      // gate arch/awning
+      B(S, 2.4, 0.1, zb - za + 0.6, mats.awning, -41.2, 4.4, (za + zb) / 2, 0, { rz: 0.1, cast: false });
+    }
+
+    // shophouse blocks
+    const blocks = [
+      [-116, -104, -42, -12, 7.6, 0], [-97, -80, -42, -12, 8.4, 1], [-72, -62, -42, -12, 7.2, 2],
+      [-116, -104, -5, 16, 6.9, 1], [-97, -80, -5, 16, 7.8, 2], [-72, -62, -5, 16, 8.1, 0],
+      [-116, -104, 24, 40, 7.3, 2], [-88, -80, 24, 40, 6.7, 1], [-72, -62, 24, 32, 7.6, 0],
+      [-116, -104, 56, 72, 7.1, 1], [-88, -80, 56, 72, 7.9, 2], [-72, -62, 32, 72, 7.4, 1],
+      [-62, -40, -42, -12, 7.5, 0], [-62, -40, 32, 72, 7.7, 2],
+    ];
+    const wallMats = [mats.plasterA, mats.plasterB, mats.plasterC];
+    function facadeX(g, x, z0, z1, dir, h, tone) {
+      const len = z1 - z0, cz = (z0 + z1) / 2;
+      const wm = wallMats[tone % 3];
+      B(g, 0.12, 2.5, Math.min(len * 0.78, 7.2), mats.wood, x + dir * 0.06, 1.25, cz, 0, { uv: 1.3 });
+      WIN(g, Math.min(len * 0.45, 3.0), 1.5, mats.windowLitDim, x + dir * 0.14, 1.4, cz - len * 0.08, dir * Math.PI / 2);
+      {
+        const ww = Math.min(len * 0.45, 3.0), zc = cz - len * 0.08;
+        for (const oz of [-ww / 3, 0, ww / 3]) B(g, 0.06, 1.5, 0.06, mats.wood, x + dir * 0.19, 1.4, zc + oz, 0, { cast: false });
+        for (const yy of [0.78, 1.36, 2.02]) B(g, 0.06, 0.06, ww, mats.wood, x + dir * 0.19, yy, zc, 0, { cast: false });
+        for (const oz of [-ww / 2 - 0.06, ww / 2 + 0.06]) B(g, 0.09, 1.7, 0.09, mats.wood, x + dir * 0.17, 1.4, zc + oz, 0, { cast: false });
+      }
+      B(g, 0.1, 0.16, Math.min(len * 0.5, 3.4), mats.metalTan, x + dir * 0.12, 2.62, cz, 0, { uv: 0.8, cast: false });
+      B(g, 1.15, 0.08, Math.min(len * 0.86, 8), mats.awning, x + dir * 0.62, 2.72, cz, 0, { rz: dir * 0.14, cast: false });
+      B(g, 0.06, 0.26, Math.min(len * 0.86, 8), mats.burlap, x + dir * 1.16, 2.6, cz, 0, { uv: 0.8, cast: false });
+      for (let k = 0; k < 3; k++) {
+        const zz = z0 + len * (0.2 + k * 0.3);
+        WIN(g, 0.85, 1.05, mats.windowGlass, x + dir * 0.16, h * 0.58, zz, dir * Math.PI / 2);
+        B(g, 0.1, 1.2, 1.0, wm, x + dir * 0.07, h * 0.58, zz, 0, { uv: 0.9, cast: false });
+        B(g, 0.1, 0.12, 1.2, mats.concrete, x + dir * 0.16, h * 0.58 - 0.62, zz, 0, { uv: 0.6, cast: false });
+      }
+      B(g, 0.9, 0.1, Math.min(len * 0.55, 5.2), mats.metalTan, x + dir * 0.42, h * 0.43, cz, 0, { cast: false });
+      for (let k = 0; k < 4; k++) B(g, 0.04, 0.72, 0.04, mats.rust, x + dir * 0.84, h * 0.43 + 0.36, cz - 2 + k * 1.32, 0, { cast: false });
+      B(g, 0.06, 0.06, Math.min(len * 0.55, 5.2), mats.rust, x + dir * 0.84, h * 0.43 + 0.74, cz, 0, { cast: false });
+    }
+    function facadeZ(g, z, x0, x1, dir, h, tone) {
+      const len = x1 - x0, cx = (x0 + x1) / 2;
+      const wm = wallMats[tone % 3];
+      B(g, Math.min(len * 0.78, 7.2), 2.5, 0.12, mats.wood, cx, 1.25, z + dir * 0.06, 0, { uv: 1.3 });
+      WIN(g, Math.min(len * 0.45, 3.0), 1.5, mats.windowLitDim, cx - len * 0.08, 1.4, z + dir * 0.14, dir > 0 ? 0 : Math.PI);
+      {
+        const ww = Math.min(len * 0.45, 3.0), xc = cx - len * 0.08;
+        for (const ox of [-ww / 3, 0, ww / 3]) B(g, 0.06, 1.5, 0.06, mats.wood, xc + ox, 1.4, z + dir * 0.19, 0, { cast: false });
+        for (const yy of [0.78, 1.36, 2.02]) B(g, ww, 0.06, 0.06, mats.wood, xc, yy, z + dir * 0.19, 0, { cast: false });
+        for (const ox of [-ww / 2 - 0.06, ww / 2 + 0.06]) B(g, 0.09, 1.7, 0.09, mats.wood, xc + ox, 1.4, z + dir * 0.17, 0, { cast: false });
+      }
+      B(g, Math.min(len * 0.5, 3.4), 0.16, 0.1, mats.metalTan, cx, 2.62, z + dir * 0.12, 0, { uv: 0.8, cast: false });
+      B(g, Math.min(len * 0.86, 8), 0.08, 1.15, mats.awning, cx, 2.72, z + dir * 0.62, 0, { rx: -dir * 0.14, cast: false });
+      B(g, Math.min(len * 0.86, 8), 0.26, 0.06, mats.burlap, cx, 2.6, z + dir * 1.16, 0, { uv: 0.8, cast: false });
+      for (let k = 0; k < 3; k++) {
+        const xx = x0 + len * (0.2 + k * 0.3);
+        WIN(g, 0.85, 1.05, mats.windowGlass, xx, h * 0.58, z + dir * 0.16, dir > 0 ? 0 : Math.PI);
+        B(g, 1.0, 1.2, 0.1, wm, xx, h * 0.58, z + dir * 0.07, 0, { uv: 0.9, cast: false });
+        B(g, 1.2, 0.12, 0.1, mats.concrete, xx, h * 0.58 - 0.62, z + dir * 0.16, 0, { uv: 0.6, cast: false });
+      }
+      B(g, Math.min(len * 0.55, 5.2), 0.1, 0.9, mats.metalTan, cx, h * 0.43, z + dir * 0.42, 0, { cast: false });
+      for (let k = 0; k < 4; k++) B(g, 0.04, 0.72, 0.04, mats.rust, cx - 2 + k * 1.32, h * 0.43 + 0.36, z + dir * 0.84, 0, { cast: false });
+      B(g, Math.min(len * 0.55, 5.2), 0.06, 0.06, mats.rust, cx, h * 0.43 + 0.74, z + dir * 0.84, 0, { cast: false });
+    }
+    for (const [x0, x1, z0, z1, h, tone] of blocks) {
+      const cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+      B(S, x1 - x0, h, z1 - z0, wallMats[tone % 3], cx, h / 2, cz, 0, { collide: true, uv: 2.8 });
+      B(S, x1 - x0 + 0.3, 0.36, z1 - z0 + 0.3, mats.concreteDark, cx, h + 0.18, cz, 0, { uv: 2.2, cast: false });
+      facadeX(S, x1, z0, z1, 1, h, tone);
+      facadeX(S, x0, z0, z1, -1, h, tone);
+      facadeZ(S, z1, x0, x1, 1, h, tone);
+      facadeZ(S, z0, x0, x1, -1, h, tone);
+      // roof clutter
+      B(S, 0.85, 0.7, 1.1, mats.metal, cx - (x1 - x0) * 0.22, h + 0.55, cz + (z1 - z0) * 0.2, 0.2, { uv: 1.2 });
+      B(S, 1.2, 0.9, 1.2, mats.metalTan, cx + (x1 - x0) * 0.2, h + 0.65, cz - (z1 - z0) * 0.18, -0.3, { uv: 1.2 });
+      C(S, 0.65, 0.7, 1.3, 10, mats.metal, cx + (x1 - x0) * 0.28, h + 1.05, cz + (z1 - z0) * 0.28);
+      C(S, 0.03, 0.03, 2.6, 4, mats.rust, cx, h + 1.6, cz + (z1 - z0) * 0.1, { cast: false });
+      B(S, 0.8, 0.9, 0.1, mats.metalTan, cx - (x1 - x0) * 0.18, h + 0.6, cz - (z1 - z0) * 0.2, 0, { uv: 0.8 });
+    }
+
+    // two enterable shops on the east plaza (x -58..-50)
+    function soukShop(g, x0, x1, z0, z1) {
+      const h = 3.4, t = 0.3, door = 2.2, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+      B(g, x1 - x0, 0.12, z1 - z0, mats.concrete, cx, 0.06, cz, 0, { uv: 1.6, cast: false });
+      B(g, x1 - x0 + 0.4, 0.26, z1 - z0 + 0.4, mats.concreteDark, cx, h + 0.13, cz, 0, { uv: 1.6 });
+      B(g, x1 - x0, 0.16, z1 - z0, mats.wood, cx, h + 0.34, cz, 0, { uv: 1.4, cast: false });
+      // west / north / south walls are solid; east wall takes the door
+      B(g, t, h, z1 - z0, wallMats[0], x0 + t / 2, h / 2, cz, 0, { collide: true, uv: 1.6 });
+      B(g, x1 - x0, h, t, wallMats[2], cx, h / 2, z0 + t / 2, 0, { collide: true, uv: 1.6 });
+      B(g, x1 - x0, h, t, wallMats[1], cx, h / 2, z1 - t / 2, 0, { collide: true, uv: 1.6 });
+      const span = z1 - z0 - 2 * t;
+      const gap = (span - door) / 2;
+      B(g, t, h, gap, wallMats[1], x1 - t / 2, h / 2, z0 + t + gap / 2, 0, { collide: true, uv: 1.4 });
+      B(g, t, h, gap, wallMats[1], x1 - t / 2, h / 2, z1 - t - gap / 2, 0, { collide: true, uv: 1.4 });
+      B(g, t, h - 2.3, door, wallMats[1], x1 - t / 2, 2.3 + (h - 2.3) / 2, cz, 0, { uv: 1.2 });
+      B(g, 0.5, 0.16, door + 0.5, mats.wood, x1 + 0.1, 2.32, cz, 0, { uv: 0.8, cast: false });
+      B(g, 0.7, 0.05, door + 0.4, mats.metal, x1 + 0.35, 0.03, cz, 0, { uv: 0.6, cast: false });
+      // interior: counter, shelf, lit bulb
+      B(g, 0.8, 1.0, 2.4, mats.wood, x0 + 1.0, 0.62, cz, 0, { uv: 1.0, collide: true });
+      B(g, 2.6, 0.08, 0.7, mats.wood, cx, 1.6, z0 + 1.1, 0, { uv: 0.8, cast: false });
+      B(g, 0.9, 0.06, 0.5, mats.metalTan, cx + 0.6, 2.2, z0 + 1.0, 0, { uv: 0.6, cast: false });
+      B(g, 0.5, 0.12, 0.5, mats.metalTan, cx, 2.7, cz, 0, { uv: 0.5, cast: false });
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), mats.windowLit);
+      lamp.position.set(cx, 2.62, cz); g.add(lamp);
+      B(g, 0.7, 0.5, 0.9, mats.wood, x1 - 1.4, 0.55, z0 + 1.4, 0.2, { uv: 0.8, collide: true });
+      SIGN(g, 2.0, 0.45, mats.signC, x1 + 0.24, h + 0.55, cz, Math.PI / 2);
+    }
+    soukShop(S, -58, -50, -4, 3.4);
+    soukShop(S, -58, -50, 4.6, 12);
+
+    // courtyard: minaret, fountain, palms, arcade
+    const minX = -110, minZ = 48;
+    B(S, 4.2, 1.2, 4.2, mats.concreteDark, minX, 0.6, minZ, 0, { uv: 1.8, collide: true });
+    B(S, 3.2, 16.5, 3.2, mats.plasterB, minX, 8.85, minZ, 0, { uv: 2.4, collide: true });
+    B(S, 3.6, 0.3, 3.6, mats.concrete, minX, 17.3, minZ, 0, { uv: 1.6, cast: false });
+    B(S, 1.5, 2.6, 1.5, mats.plasterB, minX, 18.7, minZ, 0, { uv: 1.4 });
+    C(S, 0.1, 1.3, 1.6, 10, mats.metalTan, minX, 20.4, minZ);
+    C(S, 0.06, 0.06, 1.4, 5, mats.rust, minX, 21.4, minZ, { cast: false });
+    WIN(S, 0.8, 1.4, mats.windowLitDim, minX + 1.42, 8.4, minZ, Math.PI / 2);
+    WIN(S, 1.0, 0.5, mats.windowLitDim, minX, 16.2, minZ + 1.62, 0);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      B(S, 0.22, 0.5, 0.22, mats.plasterC, minX + Math.cos(a) * 1.7, 17.7, minZ + Math.sin(a) * 1.7, 0, { uv: 0.6, cast: false });
+    }
+    // fountain
+    C(S, 2.6, 2.8, 0.7, 14, mats.concrete, -95, 0.35, 50);
+    C(S, 2.1, 2.1, 0.08, 14, mats.puddle, -95, 0.55, 50, { cast: false });
+    C(S, 0.4, 0.55, 1.5, 8, mats.plasterC, -95, 1.1, 50);
+    addCollider(-95, 50, 5.0, 5.0, 0.1);
+    // arcade along the courtyard's east side
+    for (let i = 0; i < 4; i++) {
+      const zz = 41 + i * 4.0;
+      B(S, 0.7, 4.2, 0.7, mats.plasterB, -88, 2.1, zz, 0, { uv: 1.2, collide: true });
+      B(S, 0.5, 0.9, 3.4, mats.plasterC, -88, 4.4, zz + 1.7, 0, { uv: 1.2 });
+    }
+    // palms
+    function soukPalm(g, x, z, s = 1) {
+      C(g, 0.14 * s, 0.2 * s, 4.6 * s, 6, mats.wood, x, 2.3 * s, z);
+      for (let i = 0; i < 7; i++) {
+        const a = (i / 7) * Math.PI * 2 + 0.3;
+        const fr = new THREE.Mesh(new THREE.PlaneGeometry(0.55 * s, 2.6 * s), mats.frond);
+        fr.position.set(x + Math.cos(a) * 0.7 * s, 4.5 * s, z + Math.sin(a) * 0.7 * s);
+        fr.rotation.set(-0.5, a, 0.25);
+        fr.castShadow = true; g.add(fr);
+      }
+    }
+    soukPalm(S, -101, 44, 1.05);
+    soukPalm(S, -90, 53, 0.95);
+    soukPalm(S, -108, 44, 1.0);
+    soukPalm(S, -93, 42, 0.9);
+
+    // market stalls in the plaza / alleys
+    function stall(g, x, z, rot = 0) {
+      B(g, 2.4, 0.9, 1.3, mats.wood, x, 0.45, z, rot, { uv: 1.0, collide: true });
+      B(g, 2.5, 0.08, 1.45, mats.metalTan, x, 0.94, z, rot, { uv: 0.8, cast: false });
+      for (const dx of [-1.05, 1.05]) {
+        C(g, 0.04, 0.04, 2.4, 5, mats.metal, x + dx * Math.cos(rot), 2.05, z - dx * Math.sin(rot), { cast: false });
+      }
+      B(g, 2.9, 0.06, 1.7, mats.awning, x, 2.6, z, rot, { rz: 0.06, cast: false });
+      B(g, 0.35, 0.28, 0.35, mats.burlap, x - 0.5, 1.1, z, rot, { uv: 0.5, cast: false });
+      B(g, 0.3, 0.24, 0.3, mats.polymerTan, x + 0.45, 1.08, z + 0.15, rot, { uv: 0.5, cast: false });
+    }
+    stall(S, -76, 0.5, 0.1);
+    stall(S, -76, 20, -0.05);
+    stall(S, -54, 14, 0.4);
+    stall(S, -45, -9.5, 0);
+    stall(S, -100, 28, 0.2);
+    stall(S, -68, 48, -0.3);
+    // crates / barrels (plain, no helpers that write to statics)
+    for (const [x, z, s] of [[-73, 8, 0.9], [-52, -2, 0.8], [-99, 33, 1.0], [-45, 24, 0.85], [-64, 40, 0.9]]) {
+      B(S, s, s, s, mats.wood, x, s / 2, z, 0.2, { uv: 0.8, collide: true });
+      B(S, s * 0.9, 0.08, s * 0.9, mats.wood, x, s + 0.02, z, 0.2, { cast: false });
+    }
+    for (const [x, z] of [[-77, -10], [-98, 18], [-44, 6], [-70, 34]]) {
+      C(S, 0.34, 0.34, 0.95, 10, mats.rust, x, 0.48, z);
+      addCollider(x, z, 0.75, 0.75, 0.04);
+    }
+
+    // souk spawns/covers
+    spawnPoints.push(
+      { x: -96, z: 46 }, { x: -74, z: 10 }, { x: -46, z: -2 }, { x: -110, z: 20 },
+      { x: -90, z: 20 }, { x: -76, z: 52 },
+    );
+    coverPoints.push(
+      { x: -74.6, z: 0.5, h: false }, { x: -52.6, z: 14, h: false }, { x: -95, z: 46, h: true },
+      { x: -53, z: 6, h: true }, { x: -84, z: 20, h: false }, { x: -43.6, z: -9.5, h: false },
+    );
+    EXPANSION_OBJECTIVES.old_souk = { x: -74, z: 12, r: 6 };
+
+    /* ============================================================== RAIL */
+    GND(R, 82, 90, mats.asphalt, 2, -150, 0.004, 3.2);
+    // tracks (ballast + rails + sleepers)
+    for (const tz of [-168, -160]) {
+      B(R, 80, 0.12, 4.0, mats.concreteDark, 2, 0.03, tz, 0, { uv: 3.0, cast: false });
+      for (const off of [-0.72, 0.72]) B(R, 80, 0.14, 0.12, mats.metal, 2, 0.12, tz + off, 0, { uv: 1.0, cast: false });
+      for (let x = -36; x <= 40; x += 0.9) B(R, 2.5, 0.08, 0.22, mats.wood, x, 0.08, tz, 0, { uv: 0.6, cast: false });
+    }
+    // two flatcars / wagons as cover
+    for (const [x, z, rot] of [[-18, -168, 0], [16, -160, 0]]) {
+      B(R, 11.5, 1.1, 2.7, mats.metal, x, 0.95, z, rot, { uv: 1.6, collide: true });
+      B(R, 11.8, 0.18, 2.9, mats.rust, x, 1.55, z, rot, { uv: 1.2, cast: false });
+      for (const dx of [-4.2, 4.2]) for (const dz of [-0.9, 0.9]) {
+        C(R, 0.32, 0.32, 0.24, 10, mats.rubber, x + dx, 0.34, z + dz, { rz: Math.PI / 2 });
+      }
+    }
+    // warehouse 20 x 28 with two 6 m doors
+    const wx0 = -26, wx1 = -6, wz0 = -190, wz1 = -162, wh = 8.5;
+    B(R, wx1 - wx0, 0.14, wz1 - wz0, mats.concrete, (wx0 + wx1) / 2, 0.07, (wz0 + wz1) / 2, 0, { uv: 2.4, cast: false });
+    B(R, wx1 - wx0, wh, 0.35, mats.plasterB, (wx0 + wx1) / 2, wh / 2, wz0, 0, { collide: true, uv: 2.8 });
+    B(R, wx1 - wx0, wh, 0.35, mats.plasterB, (wx0 + wx1) / 2, wh / 2, wz1, 0, { collide: true, uv: 2.8 });
+    B(R, 0.35, wh, wz1 - wz0, mats.plasterB, wx0, wh / 2, (wz0 + wz1) / 2, 0, { collide: true, uv: 2.8 });
+    // east wall with a 6 m door z -182..-176
+    for (const [za, zb] of [[wz0, -182], [-176, wz1]]) B(R, 0.35, wh, zb - za, mats.plasterB, wx1, wh / 2, (za + zb) / 2, 0, { collide: true, uv: 2.4 });
+    B(R, 0.35, wh - 4.6, 6, mats.plasterB, wx1, 4.6 + (wh - 4.6) / 2, -179, 0, { uv: 1.8 });
+    for (const z of [-182, -176]) B(R, 0.5, 4.6, 0.4, mats.metalTan, wx1, 2.3, z, 0, { uv: 1.0 });
+    B(R, wx1 - wx0 + 0.4, 0.3, wz1 - wz0 + 0.4, mats.concreteDark, (wx0 + wx1) / 2, wh + 0.15, (wz0 + wz1) / 2, 0, { uv: 2.4, cast: false });
+    // interior racks + crates
+    for (const [x, z, w, d, h] of [[-24, -186, 2.2, 1.0, 4.0], [-24, -180, 2.2, 1.0, 4.0], [-24, -174, 2.2, 1.0, 4.0],
+      [-13, -186, 1.0, 2.2, 3.4], [-8.5, -168, 1.4, 3.0, 2.2]]) {
+      B(R, w, h, d, mats.metal, x, h / 2, z, 0, { uv: 1.2, collide: true });
+    }
+    for (const [x, z, s] of [[-20, -170, 1.1], [-18, -168.5, 0.8], [-10, -178, 1.0], [-14, -182, 0.9], [-9.5, -172, 0.75]]) {
+      B(R, s, s, s, mats.wood, x, s / 2, z, 0.3, { uv: 0.8, collide: true });
+    }
+    for (const [x, z] of [[-22, -176], [-8, -166], [-15, -186], [-11, -184]]) {
+      WIN(R, 1.3, 0.3, mats.windowLitDim, x, 7.7, z, 0);
+      C(R, 0.02, 0.02, 0.5, 4, mats.rubber, x, 7.9, z, { cast: false });
+    }
+    // interior light strips (emissive)
+    for (const z of [-184, -176, -168]) {
+      B(R, 17, 0.06, 0.5, mats.windowLitDim, -16, 8.2, z, 0, { cast: false });
+    }
+    // rails outside: buffer stops
+    for (const tz of [-168, -160]) {
+      B(R, 0.4, 1.4, 3.6, mats.concreteDark, -37, 0.7, tz, 0, { uv: 1.2, collide: true });
+      B(R, 0.3, 1.0, 1.0, mats.rust, -36.6, 0.9, tz, 0, { uv: 0.6 });
+    }
+    // elevated platform y=4.2
+    B(R, 60, 0.26, 8, mats.concrete, 0, 4.07, -148, 0, { uv: 3.0 });
+    B(R, 60, 0.12, 8, mats.metal, 0, 3.92, -148, 0, { uv: 2.0, cast: false });
+    for (let x = -28; x <= 28; x += 8) {
+      for (const z of [-151, -145]) {
+        B(R, 0.5, 4.0, 0.5, mats.concreteDark, x, 2.0, z, 0, { uv: 1.0, collide: true });
+      }
+    }
+    // canopy over the platform
+    for (let x = -28; x <= 28; x += 8) for (const z of [-151, -145]) {
+      B(R, 0.18, 3.2, 0.18, mats.metal, x, 5.8, z, 0, { uv: 0.8, cast: false });
+    }
+    B(R, 58, 0.22, 8, mats.metal, 0, 7.5, -148, 0, { uv: 2.6, cast: false });
+    for (let x = -27; x <= 27; x += 6) B(R, 0.1, 0.1, 7.6, mats.rust, x, 7.3, -148, 0, { uv: 0.6, cast: false });
+    // platform furniture
+    for (const x of [-22, -4, 14, 26]) {
+      B(R, 2.2, 0.5, 0.6, mats.wood, x, 4.55, -151, 0, { uv: 0.8, collide: true });
+      B(R, 0.9, 0.9, 0.7, mats.metalTan, x + 1.6, 4.85, -145, 0, { uv: 0.8, collide: true });
+      WIN(R, 1.1, 0.16, mats.windowLitDim, x, 7.35, -148, 0);
+    }
+    // platform edge railings (visual only)
+    for (const z of [-152.0, -144.0]) {
+      B(R, 60, 0.06, 0.06, mats.rust, 0, 5.1, z, 0, { uv: 0.6, cast: false });
+      for (let x = -29; x <= 29; x += 2.4) B(R, 0.04, 0.9, 0.04, mats.rust, x, 4.65, z, 0, { cast: false });
+    }
+    // ramp 0 -> 4.2 (x 28..30, z -136..-144)
+    const railAng = Math.atan2(4.2, 8);
+    B(R, 2.0, 0.14, 8.12, mats.metal, 29, 2.1 - 0.06 * Math.cos(railAng), -140, 0, { rx: railAng, uv: 1.0 });
+    for (let i = 0; i < 11; i++) {
+      const t = i / 10, z = -136 - t * 8, h = 4.2 * t;
+      B(R, 1.9, 0.04, 0.08, mats.rust, 29, h + 0.05, z, 0, { uv: 0.5, cast: false, rx: railAng });
+    }
+    for (const x of [28.0, 30.0]) {
+      B(R, 0.06, 0.06, 8.1, mats.rust, x, 2.7, -140, 0, { rx: railAng, uv: 0.5, cast: false });
+      for (let i = 0; i < 5; i++) {
+        const t = i / 4, z = -136 - t * 8, h = 4.2 * t;
+        B(R, 0.05, 1.0, 0.05, mats.rust, x, h + 0.55, z, 0, { cast: false });
+      }
+    }
+    for (let i = 0; i < 4; i++) {
+      const t = i / 3, z = -136.8 - t * 7.2, h = 4.2 * t;
+      B(R, 0.1, h + 0.1, 0.1, mats.metal, 28.2, (h + 0.1) / 2, z, 0, { cast: false });
+    }
+    // containers north/east/west
+    function railBox(x, z, stack, rot = 0) {
+      for (let i = 0; i < stack; i++) {
+        B(R, 6.0, 2.5, 2.4, i % 2 ? mats.metalTan : mats.metal, x, 1.27 + i * 2.55, z, rot, { uv: 1.4, collide: true });
+        for (let k = 0; k < 4; k++) B(R, 5.8, 0.12, 0.08, mats.rust, x, 0.4 + k * 0.6, z + 1.22 * (rot ? 0 : 1), rot, { uv: 0.5, cast: false });
+      }
+    }
+    for (const [x, z, s, r] of [[-34, -178, 2, 0], [-34, -172, 1, 0], [-34, -120, 2, 0], [-34, -114, 1, 0],
+      [34, -186, 2, 0], [34, -180, 1, 0], [34, -124, 2, 0], [36, -118, 1, 0]]) railBox(x, z, s, r);
+    // signal gantry + water tower
+    for (const x of [36, 40]) B(R, 0.35, 9.5, 0.35, mats.metal, x, 4.75, -176, 0, { uv: 0.8, collide: true });
+    B(R, 4.6, 0.3, 0.3, mats.metal, 38, 9.4, -176, 0, { uv: 1.0, cast: false });
+    for (const x of [37, 39]) WIN(R, 0.5, 0.5, mats.windowLit, x, 8.9, -175.8, 0);
+    C(R, 2.4, 2.6, 1.6, 12, mats.metal, 30, 7.2, -168);
+    for (const [dx, dz] of [[-1.4, -1.4], [1.4, -1.4], [-1.4, 1.4], [1.4, 1.4]]) B(R, 0.2, 7.2, 0.2, mats.rust, 30 + dx, 3.6, -168 + dz, 0, { cast: false });
+    // yard props
+    for (const [x, z] of [[16, -176], [20, -166], [-2, -166], [-2, -112], [22, -112], [-30, -130]]) {
+      C(R, 0.35, 0.35, 1.0, 10, mats.rust, x, 0.5, z);
+      addCollider(x, z, 0.8, 0.8, 0.04);
+    }
+    for (const [x, z] of [[10, -158], [26, -134], [-20, -158], [-2, -150]]) {
+      B(R, 1.2, 1.0, 1.2, mats.wood, x, 0.5, z, 0.3, { uv: 0.8, collide: true });
+    }
+    // perimeter walls with the south gate 0..12
+    for (const [xa, xb] of [[-38, 0], [12, 42]]) {
+      B(R, xb - xa, 3.6, 0.5, mats.concreteDark, (xa + xb) / 2, 1.8, -106, 0, { collide: true, uv: 2.6 });
+      B(R, xb - xa, 0.16, 0.7, mats.concrete, (xa + xb) / 2, 3.7, -106, 0, { uv: 2.0, cast: false });
+    }
+    B(R, 0.5, 3.6, 88, mats.concreteDark, -38, 1.8, -150, 0, { collide: true, uv: 2.6 });
+    B(R, 0.5, 3.6, 88, mats.concreteDark, 42, 1.8, -150, 0, { collide: true, uv: 2.6 });
+    B(R, 81, 3.6, 0.5, mats.concreteDark, 2, 1.8, -194, 0, { collide: true, uv: 2.6 });
+    for (const x of [0, 12]) B(R, 0.35, 3.8, 0.35, mats.concreteDark, x, 1.9, -106, 0, { uv: 0.8, collide: true });
+    B(R, 12.4, 0.8, 0.5, mats.concreteDark, 6, 3.5, -106, 0, { uv: 2.0, cast: false });
+    // rail spawns/covers (ground + platform)
+    spawnPoints.push(
+      { x: 0, z: -180 }, { x: 28, z: -120 }, { x: -30, z: -112 }, { x: 4, z: -136 }, { x: -16, z: -176 },
+    );
+    coverPoints.push(
+      { x: -22, z: -170, h: true }, { x: -10, z: -184, h: false }, { x: 12, z: -156, h: true },
+      { x: 34, z: -130, h: false }, { x: -3.2, z: -166, h: false },
+    );
+    ROOF_ZONES.push({ ...RAIL_PLATFORM });
+    ROOF_SPAWNS.push({ x: 24, z: -148, y: 4.2 }, { x: -24, z: -148, y: 4.2 });
+    ROOF_COVERS.push({ x: 10, z: -148, y: 4.2, h: true }, { x: -8, z: -148, y: 4.2, h: false });
+    spawnPoints.push({ x: 24, z: -148, y: 4.2 }, { x: -24, z: -148, y: 4.2 });
+    coverPoints.push({ x: 10, z: -148, y: 4.2, h: true }, { x: -8, z: -148, y: 4.2, h: false });
+    EXPANSION_OBJECTIVES.rail_depot = { x: 4, z: -142, r: 7 };
+
+    /* ============================================================== PORT */
+    GND(P, 68, 132, mats.asphalt, 84, -32, 0.004, 3.4);
+    // quay + water
+    // low quay curb + railing so the water edge reads (instead of a solid wall)
+    B(P, 0.6, 0.22, 132, mats.concreteDark, 116, 0.11, -32, 0, { uv: 2.4, collide: true });
+    B(P, 0.8, 0.08, 132, mats.concrete, 116, 0.26, -32, 0, { uv: 1.8, cast: false });
+    for (let z = -94; z <= 30; z += 3.0) C(P, 0.035, 0.035, 1.05, 5, mats.rust, 116, 0.78, z, { cast: false });
+    for (const yy of [0.55, 1.08]) B(P, 0.05, 0.05, 132, mats.rust, 116, yy, -32, 0, { uv: 0.8, cast: false });
+    meshPlane(10, 132, mats.puddle, 121, -0.18, -32, { rx: -Math.PI / 2, uvScale: 8, group: P, recv: true });
+    for (let z = -94; z <= 30; z += 6) {
+      C(P, 0.18, 0.22, 0.9, 8, mats.rust, 114.6, 0.45, z);
+      B(P, 0.7, 0.5, 0.7, mats.metal, 114.6, 0.25, z, 0, { uv: 0.8, collide: true });
+    }
+    // ship hull beyond the quay
+    B(P, 12, 6.5, 44, mats.metal, 122, 1.4, -4, 0, { uv: 3.0 });
+    B(P, 10, 3.2, 20, mats.plasterB, 122, 5.8, -4, 0, { uv: 2.4 });
+    B(P, 3, 3, 3, mats.rust, 122, 7.5, -4, 0, { uv: 1.2 });
+    for (let z = -24; z <= 16; z += 8) B(P, 0.3, 1.6, 0.3, mats.metal, 116.2, 5.2, z, 0, { cast: false });
+    // perimeter
+    B(P, 0.5, 3.4, 14, mats.concreteDark, 48, 1.7, -91, 0, { collide: true, uv: 2.6 });
+    B(P, 0.5, 3.4, 110, mats.concreteDark, 48, 1.7, -21, 0, { collide: true, uv: 2.6 });
+    for (const z of [-84, -76]) B(P, 0.35, 3.6, 0.35, mats.concreteDark, 48, 1.8, z, 0, { uv: 0.8, collide: true });
+    B(P, 0.5, 0.8, 8.4, mats.concreteDark, 48, 3.4, -80, 0, { uv: 2.0, cast: false });
+    B(P, 68, 3.4, 0.5, mats.concreteDark, 82, 1.7, -98, 0, { collide: true, uv: 2.6 });
+    B(P, 68, 3.4, 0.5, mats.concreteDark, 82, 1.7, 34, 0, { collide: true, uv: 2.6 });
+    // container maze
+    const PORT_PAL = [mats.metal, mats.metalTan, mats.rust, mats.shop, mats.polymerTan];
+    function portBox(x, z, stack, rot = 0) {
+      const ci = Math.abs(Math.round(x * 0.17 + z * 0.11));
+      for (let i = 0; i < stack; i++) {
+        const m = PORT_PAL[(ci + i) % PORT_PAL.length];
+        B(P, 12.0, 2.6, 2.6, m, x, 1.32 + i * 2.65, z, rot, { uv: 1.8, collide: true });
+        // corrugated long faces
+        for (let k = 0; k < 8; k++) {
+          const off = -5.2 + k * 1.48;
+          B(P, 0.08, 2.32, 0.06, mats.rust, x + (rot ? 1.32 : off), 1.32 + i * 2.65, z + (rot ? off : 1.32), 0, { uv: 0.4, cast: false });
+          B(P, 0.08, 2.32, 0.06, mats.rust, x + (rot ? -1.32 : off), 1.32 + i * 2.65, z + (rot ? off : -1.32), 0, { uv: 0.4, cast: false });
+        }
+        // door end: four locking bars + corner castings
+        for (let k = 0; k < 4; k++) B(P, 0.06, 2.2, 0.05, mats.rust, x + (rot ? 0 : 5.98), 1.3 + i * 2.65, z + (rot ? 5.98 : -0.9 + k * 0.6), 0, { uv: 0.4, cast: false });
+        for (const dx of [-5.9, 5.9]) for (const dz of [-1.2, 1.2]) B(P, 0.16, 0.16, 0.16, mats.metalTan, x + dx, 0.16 + i * 2.65, z + dz, 0, { cast: false });
+      }
+    }
+    const rows = [-70, -56, -42, -28, -14];
+    const rowXs = [58, 72, 86, 100];
+    for (let ri = 0; ri < rows.length; ri++) {
+      for (let xi = 0; xi < rowXs.length; xi++) {
+        const x = rowXs[xi], z = rows[ri];
+        if (ri === 0 && z === -70 && (x === 72 || x === 86)) continue;   // stage lane
+        if (ri === 2 && x === 100) continue;                           // objective gap
+        portBox(x, z, (ri + xi) % 3 === 0 ? 2 : 1);
+      }
+    }
+    // 20ft feeder boxes
+    for (const [x, z] of [[64, -84], [92, -84], [54, -20], [110, 2], [62, 18]]) {
+      B(P, 6.1, 2.4, 2.4, mats.metal, x, 1.2, z, 0, { uv: 1.6, collide: true });
+    }
+    // gantry crane
+    for (const x of [92, 108]) for (const z of [-60, -36]) {
+      B(P, 1.1, 21, 1.1, mats.metal, x, 10.5, z, 0, { uv: 2.0, collide: true });
+      B(P, 2.2, 0.4, 2.2, mats.concreteDark, x, 0.2, z, 0, { uv: 1.2, cast: false });
+    }
+    B(P, 18, 1.1, 1.1, mats.metal, 100, 21, -60, 0, { uv: 1.6, cast: false });
+    B(P, 18, 1.1, 1.1, mats.metal, 100, 21, -36, 0, { uv: 1.6, cast: false });
+    B(P, 1.0, 1.0, 25, mats.rust, 100, 21.9, -48, 0, { uv: 2.0, cast: false });
+    B(P, 2.4, 1.8, 3.2, mats.metalTan, 100, 20.3, -48, 0, { uv: 1.0 });
+    for (let i = 0; i < 5; i++) B(P, 0.08, 4.5, 0.08, mats.rust, 99.4 + i * 0.3, 18.5, -48, 0, { cast: false });
+    B(P, 6.1, 2.6, 2.6, mats.metal, 100, 15.4, -48, 0, { uv: 1.4 });
+    // warehouse 24 x 20, two south doors
+    const px0 = 60, px1 = 84, pz0 = 8, pz1 = 28, ph = 9;
+    B(P, px1 - px0, 0.14, pz1 - pz0, mats.concrete, (px0 + px1) / 2, 0.07, (pz0 + pz1) / 2, 0, { uv: 2.6, cast: false });
+    B(P, px1 - px0, ph, 0.35, mats.plasterB, (px0 + px1) / 2, ph / 2, pz1, 0, { collide: true, uv: 3.0 });
+    B(P, 0.35, ph, pz1 - pz0, mats.plasterB, px0, ph / 2, (pz0 + pz1) / 2, 0, { collide: true, uv: 2.8 });
+    B(P, 0.35, ph, pz1 - pz0, mats.plasterB, px1, ph / 2, (pz0 + pz1) / 2, 0, { collide: true, uv: 2.8 });
+    B(P, px1 - px0 + 0.5, 0.3, pz1 - pz0 + 0.5, mats.concreteDark, (px0 + px1) / 2, ph + 0.15, (pz0 + pz1) / 2, 0, { uv: 2.4, cast: false });
+    // south doors: two 5 m openings (wall built as segments)
+    for (const [xa, xb] of [[60, 64], [70, 74], [80, 84]]) B(P, xb - xa, ph, 0.4, mats.plasterB, (xa + xb) / 2, ph / 2, pz0, 0, { collide: true, uv: 2.0 });
+    for (const [xa, xb] of [[64, 70], [74, 80]]) {
+      B(P, xb - xa, ph - 4.4, 0.4, mats.plasterB, (xa + xb) / 2, 4.4 + (ph - 4.4) / 2, pz0, 0, { uv: 1.6 });
+      for (const x of [xa, xb]) B(P, 0.4, 4.4, 0.5, mats.metalTan, x, 2.2, pz0, 0, { uv: 1.0, collide: true });
+    }
+    for (const [x, z] of [[63, 12], [73, 12]]) B(P, 0.8, 0.3, 0.8, mats.concreteDark, x, 4.2, z, 0, { uv: 1.0 });
+    // interior racks
+    for (let i = 0; i < 4; i++) {
+      B(P, 2.0, 4.2, 14, mats.metal, 64 + i * 5.2, 2.1, 20, 0, { uv: 2.0, collide: true });
+      B(P, 2.4, 0.2, 14.4, mats.rust, 64 + i * 5.2, 4.3, 20, 0, { uv: 1.6, cast: false });
+    }
+    for (const [x, z] of [[62, 25], [78, 25], [82, 12], [60.5, 10]]) B(P, 1.0, 0.9, 1.0, mats.wood, x, 0.45, z, 0.2, { uv: 0.8, collide: true });
+    for (const z of [12, 18, 24]) B(P, 22, 0.06, 0.5, mats.windowLitDim, 72, 8.6, z, 0, { cast: false });
+    // port spawns/covers
+    spawnPoints.push(
+      { x: 80, z: -80 }, { x: 60, z: -88 }, { x: 108, z: 24 }, { x: 72, z: 18 }, { x: 54, z: -60 },
+    );
+    coverPoints.push(
+      { x: 70, z: -40, h: true }, { x: 93, z: -28, h: true }, { x: 104, z: -58, h: false },
+      { x: 78, z: 22, h: true }, { x: 58, z: -16, h: false },
+    );
+    EXPANSION_OBJECTIVES.container_yard = { x: 98, z: -44, r: 6 };
+
+    /* ========================================================= connectors */
+    // west: service street between the old map and the souk
+    B(S, 18.2, 0.06, 44, mats.dirt, -31.1, 0.02, 11, 0, { uv: 3.0, cast: false });
+    B(S, 16.0, 3.0, 0.5, mats.concreteDark, -30, 1.5, -10.5, 0, { collide: true, uv: 2.2 });
+    B(S, 16.0, 3.0, 0.5, mats.concreteDark, -30, 1.5, 32.5, 0, { collide: true, uv: 2.2 });
+    // north: gate corridor checkpoint -> rail
+    B(R, 12, 0.06, 12, mats.asphalt, 6, 0.02, -102, 0, { uv: 2.4, cast: false });
+    for (const x of [0, 12]) B(R, 0.4, 3.4, 12, mats.concreteDark, x, 1.7, -102, 0, { collide: true, uv: 2.2 });
+    // east: dock -> port gate corridor
+    B(P, 6, 0.06, 8, mats.asphalt, 47, 0.02, -80, 0, { uv: 2.0, cast: false });
+    for (const z of [-84, -76]) B(P, 6, 3.4, 0.4, mats.concreteDark, 47, 1.7, z, 0, { collide: true, uv: 2.0 });
+
+    /* =====================================================================
+       ART PASS — dense props, signage and landmarks. Everything below is
+       visual only (no colliders), so gate/stage/nav contracts stay intact.
+       ===================================================================== */
+    const rope = (g, x0, y0, z0, x1, y1, z1, r = 0.014, mat = mats.rubber) => {
+      const dx = x1 - x0, dy = y1 - y0, dz = z1 - z0;
+      const len = Math.hypot(dx, dy, dz) || 0.01;
+      const m = meshCyl(r, r, len, 3, mat, (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2, { group: g, cast: false });
+      m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(dx, dy, dz).normalize());
+      return m;
+    };
+    const lantern = (g, x, y, z, s = 1) => {
+      B(g, 0.018, 0.42 * s, 0.018, mats.rubber, x, y + 0.21 * s, z, 0, { cast: false });
+      B(g, 0.17 * s, 0.05 * s, 0.17 * s, mats.metalTan, x, y, z, 0, { uv: 0.4, cast: false });
+      const bl = new THREE.Mesh(new THREE.SphereGeometry(0.1 * s, 8, 6), mats.windowLit);
+      bl.position.set(x, y - 0.09 * s, z); g.add(bl);
+      B(g, 0.12 * s, 0.05 * s, 0.12 * s, mats.metalTan, x, y - 0.2 * s, z, 0, { cast: false });
+    };
+    const cloth = (g, w, h, mat, x, y, z, ry = 0) => B(g, w, h, 0.015, mat, x, y, z, ry, { uv: 0.7, cast: false });
+    const pot = (g, x, z, s = 0.5, mat = mats.polymerTan, y0 = 0) => {
+      B(g, 0.5 * s, 0.06 * s, 0.5 * s, mat, x, y0 + 0.03 * s, z, 0, { cast: false });
+      C(g, 0.16 * s, 0.25 * s, 0.52 * s, 10, mat, x, y0 + 0.26 * s, z);
+      C(g, 0.21 * s, 0.21 * s, 0.06 * s, 10, mats.rust, x, y0 + 0.55 * s, z, { cast: false });
+    };
+    const sack = (g, x, z, s = 0.5, mat = mats.burlap, y0 = 0) => meshRound(0.52 * s, 0.34 * s, 0.44 * s, 0.08, mat, x, y0 + 0.18 * s, z, 0.2, { group: g, uv: 0.6 });
+    const crateD = (g, x, z, s = 0.7, rot = 0.2) => {
+      B(g, s, s, s, mats.wood, x, s / 2, z, rot, { uv: 0.9 });
+      B(g, s * 0.92, 0.05, s * 0.92, mats.wood, x, s + 0.02, z, rot, { cast: false });
+      B(g, s * 0.1, s + 0.02, s * 0.1, mats.wood, x - s * 0.45, s / 2, z, rot, { cast: false });
+    };
+    const signZ = (g, x, y, z, ry, w, h, mat) => {
+      B(g, w + 0.14, h + 0.14, 0.05, mats.wood, x, y, z, ry, { uv: 0.8, cast: false });
+      WIN(g, w, h, mat, x + Math.sin(ry) * 0.04, y, z + Math.cos(ry) * 0.04, ry);
+    };
+    const arch = (g, x, z, span, rot = 0, h = 3.4) => {
+      for (const s of [-1, 1]) B(g, 0.6, h, 0.6, mats.plasterB, x + s * span / 2 * Math.cos(rot), h / 2, z - s * span / 2 * Math.sin(rot), rot, { uv: 1.2 });
+      B(g, span + 0.9, 0.5, 0.65, mats.plasterC, x, h + 0.1, z, rot, { uv: 1.2 });
+      for (const s of [-1, 1]) B(g, 0.8, 0.32, 0.68, mats.concrete, x + s * span / 2 * Math.cos(rot), h - 0.28, z - s * span / 2 * Math.sin(rot), rot, { cast: false });
+      B(g, 0.45, 0.55, 0.66, mats.concrete, x, h + 0.55, z, rot, { uv: 0.8, cast: false });
+    };
+    const stallArt = (g, x, z, rot = 0, w = 3.4, d = 2.1) => {
+      B(g, w, 0.88, d * 0.6, mats.wood, x, 0.44, z, rot, { uv: 1.0 });
+      B(g, w + 0.2, 0.08, d * 0.72, mats.metalTan, x, 0.92, z, rot, { uv: 0.8, cast: false });
+      for (const s of [-1, 1]) C(g, 0.04, 0.04, 2.5, 5, mats.metal, x + s * (w / 2 - 0.12) * Math.cos(rot), 1.25, z - s * (w / 2 - 0.12) * Math.sin(rot), { cast: false });
+      const n = 7, sw = w / n;
+      for (let i = 0; i < n; i++) {
+        const off = -w / 2 + sw * (i + 0.5);
+        B(g, sw + 0.015, 0.05, d * 0.9, i % 2 ? mats.awning : mats.shop, x + off * Math.cos(rot), 2.5, z - off * Math.sin(rot), rot, { rz: 0.1, cast: false });
+      }
+      B(g, w, 0.24, 0.05, mats.burlap, x + Math.sin(rot) * d * 0.45, 2.36, z + Math.cos(rot) * d * 0.45, rot, { cast: false });
+      for (let i = 0; i < 3; i++) pot(g, x + (i - 1) * 0.72 * Math.cos(rot), z - (i - 1) * 0.72 * Math.sin(rot), 0.42, mats.polymerTan, 0.94);
+      sack(g, x + 1.0 * Math.cos(rot), z - 1.0 * Math.sin(rot), 0.5, mats.burlap, 0.94);
+      sack(g, x + 1.05 * Math.cos(rot), z - 1.05 * Math.sin(rot) + 0.35, 0.38, mats.sandbag, 0.94);
+      pot(g, x - 1.2 * Math.cos(rot), z + 1.2 * Math.sin(rot), 0.32, mats.rust, 0.94);
+      pot(g, x + 0.2 * Math.cos(rot), z - 0.2 * Math.sin(rot), 0.3, mats.rust, 0.94);
+      sack(g, x - 0.6 * Math.cos(rot), z + 0.6 * Math.sin(rot) + 0.3, 0.36, mats.burlap, 0.94);
+      crateD(g, x - 1.05 * Math.cos(rot), z + 1.05 * Math.sin(rot), 0.58, rot);
+    };
+    const rug = (g, x, z, w, d, mat, rot = 0) => {
+      B(g, w, 0.02, d, mat, x, 0.025, z, rot, { cast: false });
+      for (let i = 0; i < 3; i++) B(g, w * 0.18, 0.022, d, i % 2 ? mats.burlap : mat, x - w * 0.3 + i * w * 0.3, 0.027, z, rot, { cast: false });
+    };
+
+    /* ---------- souk: courtyard market ---------- */
+    stallArt(S, -90.5, 43.5, 0.16);
+    stallArt(S, -100.8, 44.0, -0.22);
+    stallArt(S, -90.2, 53.6, 0.04);
+    for (const [x, z, s] of [[-87.5, 41.5, 0.75], [-86.8, 42.2, 0.6], [-102.8, 46.0, 0.85], [-102.2, 45.2, 0.55]]) crateD(S, x, z, s, 0.3);
+    for (const [x, z] of [[-88.6, 44.8], [-89.2, 45.5], [-101.4, 42.0], [-102.0, 42.6], [-91.2, 52.0]]) sack(S, x, z, 0.55);
+    for (const [x, z, s] of [[-88.0, 46.5, 0.5], [-101.8, 43.3, 0.55], [-90.8, 54.5, 0.45]]) pot(S, x, z, s);
+    rug(S, -96.5, 43.0, 3.6, 2.2, mats.awning, 0.1);
+    rug(S, -99.2, 44.2, 2.8, 1.8, mats.burlap, 0.1);
+    rug(S, -98.4, 45.6, 3.2, 2.0, mats.awning, 0.04);
+    pot(S, -98.0, 43.2, 0.42);
+    sack(S, -98.8, 43.0, 0.5);
+    rug(S, -93.0, 52.0, 3.0, 2.0, mats.burlap, -0.2);
+    // well at the courtyard's north-west corner
+    C(S, 1.35, 1.5, 0.95, 14, mats.concrete, -100.5, 0.47, 47.2);
+    C(S, 1.1, 1.1, 0.06, 14, mats.puddle, -100.5, 0.96, 47.2, { cast: false });
+    for (const a of [0, Math.PI / 2, Math.PI, Math.PI * 1.5]) {
+      C(S, 0.06, 0.07, 2.2, 5, mats.wood, -100.5 + Math.cos(a) * 1.35, 1.1, 47.2 + Math.sin(a) * 1.35, { cast: false });
+    }
+    B(S, 3.2, 0.08, 2.2, mats.wood, -100.5, 2.2, 47.2, 0.1, { uv: 0.8, cast: false });
+    rope(S, -101.0, 2.15, 47.2, -101.0, 1.1, 47.2, 0.02, mats.burlap);
+    B(S, 0.32, 0.28, 0.32, mats.metal, -101.0, 1.0, 47.2, 0, { uv: 0.5, cast: false });
+    // fountain canopy + buckets
+    for (const a of [0.2, 2.3, 4.2]) {
+      C(S, 0.05, 0.05, 2.4, 5, mats.wood, -95 + Math.cos(a) * 2.3, 2.0, 50 + Math.sin(a) * 2.3, { cast: false });
+    }
+    B(S, 4.4, 0.07, 4.4, mats.awning, -95, 3.25, 50, 0.15, { uv: 0.9, cast: false });
+    B(S, 4.6, 0.2, 0.05, mats.burlap, -95, 3.12, 52.2, 0, { cast: false });
+    // minaret landmark details (balcony, arched openings, dome, crescent, lamps)
+    B(S, 4.4, 0.26, 4.4, mats.concrete, -110, 17.5, 48, 0, { uv: 1.4, cast: false });
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      B(S, 0.18, 0.8, 0.18, mats.plasterC, -110 + Math.cos(a) * 1.9, 17.95, 48 + Math.sin(a) * 1.9, 0, { cast: false });
+    }
+    for (let i = 0; i < 4; i++) {
+      const zz = 46.6 + (i % 2) * 2.6, xx = -111.4 + Math.floor(i / 2) * 2.8;
+      WIN(S, 0.8, 1.6, mats.windowLitDim, xx, 13.0, zz, Math.PI / 2);
+      WIN(S, 0.6, 1.1, mats.windowLitDim, -110, 9.4, 46.55 + (i % 2) * 2.9, 0);
+    }
+    // lower courses, door, windows on the courtyard (east) face
+    for (const yy of [4.4, 8.1]) B(S, 3.5, 0.18, 3.5, mats.concrete, -110, yy, 48, 0, { uv: 1.6, cast: false });
+    B(S, 1.9, 3.2, 0.06, mats.wood, -108.34, 1.7, 48, Math.PI / 2, { uv: 1.0, cast: false });
+    WIN(S, 1.7, 3.0, mats.interior, -108.3, 1.65, 48, Math.PI / 2);
+    for (const zz of [47.05, 48.95]) B(S, 0.12, 3.3, 0.18, mats.concrete, -108.28, 1.7, zz, 0, { cast: false });
+    B(S, 2.1, 0.28, 0.22, mats.concrete, -108.28, 3.35, 48, Math.PI / 2, { uv: 0.8, cast: false });
+    B(S, 0.7, 0.5, 0.16, mats.signC, -108.28, 3.9, 48, Math.PI / 2, { uv: 0.6, cast: false });
+    WIN(S, 0.7, 1.1, mats.windowLitDim, -108.3, 6.2, 48, Math.PI / 2);
+    WIN(S, 0.8, 1.3, mats.windowLitDim, -108.3, 10.4, 48, Math.PI / 2);
+    for (const zz of [-0.22, 0.22]) B(S, 0.05, 1.3, 0.05, mats.wood, -108.26, 10.4, 48 + zz, 0, { cast: false });
+    B(S, 1.0, 0.5, 0.1, mats.signB, -108.28, 5.0, 48, Math.PI / 2, { uv: 0.6, cast: false });
+    for (const zz of [-0.2, 0.2]) B(S, 0.05, 1.1, 0.05, mats.wood, -108.26, 6.2, 48 + zz, 0, { cast: false });
+    const mgl = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), mats.windowLit);
+    mgl.position.set(-108.15, 2.9, 49.8); S.add(mgl);
+    C(S, 1.45, 1.95, 2.2, 12, mats.metalTan, -110, 18.9, 48);
+    C(S, 0.2, 1.4, 0.9, 12, mats.metalTan, -110, 20.4, 48, { cast: false });
+    const crescent = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.075, 5, 10, Math.PI * 1.25), mats.metalTan);
+    crescent.position.set(-110, 21.3, 48); crescent.rotation.z = -Math.PI * 0.35;
+    S.add(crescent);
+    for (const a of [0.3, 2.2, 4.1, 5.9]) lantern(S, -110 + Math.cos(a) * 2.0, 17.9, 48 + Math.sin(a) * 2.0, 0.9);
+    // laundry + lantern spans + overhead cables
+    rope(S, -62, 3.3, 27, -41, 3.1, 26, 0.012, mats.burlap);
+    for (let i = 0; i < 4; i++) cloth(S, 1.5, 1.3, i % 2 ? mats.burlap : mats.awning, -59 + i * 5.1, 2.7, 26.5 + (i % 2) * 0.3, Math.PI / 2 + 0.15);
+    rope(S, -104, 3.6, 54, -88, 3.2, 44, 0.012);
+    for (let i = 1; i <= 5; i++) lantern(S, -104 + i * 2.6, 3.35 - Math.sin(i / 6 * Math.PI) * 0.25, 54 - i * 1.7, 1.0);
+    rope(S, -88, 3.4, 44, -80, 3.8, 20, 0.012);
+    for (let i = 1; i <= 4; i++) lantern(S, -88 + i * 1.7, 3.45, 44 - i * 5.2, 0.9);
+    rope(S, -72, 4.6, 40, -62, 4.4, 58, 0.012);
+    rope(S, -80, 5.2, -2, -72, 5.0, 14, 0.012);
+    // arches over the plaza / courtyard
+    arch(S, -62, 24, 5.0, 0);
+    arch(S, -62, -4, 5.0, 0);
+    arch(S, -89.0, 32.0, 4.2, Math.PI / 2);
+    WIN(S, 2.2, 2.6, mats.interior, -88.08, 1.4, 32.0, -Math.PI / 2);
+    cloth(S, 4.2, 1.1, mats.awning, -89.15, 5.1, 32.0, -Math.PI / 2);
+    // shop signs + plaza boards
+    signZ(S, -49.85, 4.2, 8.3, Math.PI / 2, 2.4, 0.7, mats.signC);
+    signZ(S, -49.85, 4.2, -0.3, Math.PI / 2, 2.4, 0.7, mats.signB);
+    signZ(S, -40.2, 5.0, 16.0, -Math.PI / 2, 3.0, 0.9, mats.signA);
+    signZ(S, -60.0, 4.0, 30.5, 0, 2.2, 0.6, mats.signB);
+    B(S, 0.08, 3.6, 0.08, mats.wood, -60.0, 1.8, 30.5, 0, { cast: false });
+    // wall trim / grime / posters on the courtyard-facing blocks
+    const wallDecoZ = (x, z0, z1, dir) => {
+      B(S, 0.16, 0.9, z1 - z0, mats.concreteDark, x, 0.45, (z0 + z1) / 2, 0, { uv: 1.8, cast: false });
+      B(S, 0.02, 1.2, z1 - z0, mats.grime, x + dir * 0.02, 1.5, (z0 + z1) / 2, 0, { cast: false });
+      for (let i = 0; i < 2; i++) {
+        const zz = z0 + (z1 - z0) * (0.25 + i * 0.45);
+        WIN(S, 0.75, 0.95, i ? mats.signC : mats.paper, x + dir * 0.03, 1.9, zz, dir > 0 ? Math.PI / 2 : -Math.PI / 2);
+        B(S, 0.05, 1.05, 0.85, mats.concrete, x + dir * 0.01, 1.9, zz, 0, { uv: 0.6, cast: false });
+      }
+    };
+    wallDecoZ(-88.05, 26, 38, -1);
+    wallDecoZ(-80.05, 26, 38, 1);
+    wallDecoZ(-88.05, 58, 70, -1);
+    wallDecoZ(-72.05, 34, 52, -1);
+    wallDecoZ(-104.05, 26, 38, 1);
+    const wallDecoX = (z, x0, x1, dir) => {
+      B(S, x1 - x0, 0.9, 0.16, mats.concreteDark, (x0 + x1) / 2, 0.45, z + dir * 0.05, 0, { uv: 1.8, cast: false });
+      B(S, x1 - x0, 1.2, 0.02, mats.grime, (x0 + x1) / 2, 1.5, z + dir * 0.08, 0, { cast: false });
+      for (let i = 0; i < 2; i++) {
+        const xx = x0 + (x1 - x0) * (0.3 + i * 0.4);
+        WIN(S, 0.75, 0.95, i ? mats.signC : mats.paper, xx, 1.9, z + dir * 0.1, dir > 0 ? 0 : Math.PI);
+        B(S, 0.85, 1.05, 0.04, mats.concrete, xx, 1.9, z + dir * 0.06, 0, { uv: 0.6, cast: false });
+      }
+    };
+    wallDecoX(40, -116, -104, 1);
+    wallDecoX(56, -116, -104, -1);
+    arch(S, -110, 44, 4.0, 0);
+    WIN(S, 2.2, 2.8, mats.interior, -110, 1.5, 44.1, Math.PI);
+    wallDecoZ(-40.3, 2, 16, -1);
+    // posters near the gates
+    for (const [x, z, ry] of [[-39.7, 6, -Math.PI / 2], [-39.7, 12, -Math.PI / 2], [-39.7, 32, -Math.PI / 2], [-61.8, 22, Math.PI / 2]]) {
+      WIN(S, 0.8, 1.1, mats.paper, x, 2.1, z, ry);
+      WIN(S, 0.6, 0.8, mats.signC, x + 0.01, 3.4, z + 1.1, ry);
+    }
+
+    /* ---------- rail: rolling stock + yard clutter ---------- */
+    const trainCar = (g, x, z, len, kind) => {
+      const h = kind === 'loco' ? 3.4 : 3.0;
+      B(g, len, h, 2.7, kind === 'loco' ? mats.rust : mats.metal, x, 0.75 + h / 2, z, 0, { uv: 1.8 });
+      B(g, len + 0.3, 0.18, 2.9, mats.concreteDark, x, 0.75 + h + 0.09, z, 0, { cast: false });
+      for (let i = 0; i < Math.floor(len / 1.7); i++) B(g, 0.09, h * 0.82, 2.76, mats.rust, x - len / 2 + 0.9 + i * 1.7, 0.75 + h / 2, z, 0, { cast: false });
+      for (const dx of [-len / 2 + 1.8, len / 2 - 1.8]) for (const dz of [-0.95, 0.95]) {
+        C(g, 0.4, 0.4, 0.3, 10, mats.rubber, x + dx, 0.42, z + dz, { rz: Math.PI / 2, cast: false });
+      }
+      if (kind !== 'loco') {
+        for (const dz of [-1.36, 1.36]) {
+          B(g, 3.2, 2.3, 0.06, mats.metalTan, x, 0.75 + h / 2, z + dz, 0, { uv: 1.0, cast: false });
+          for (const dx of [-1.7, 1.7]) B(g, 0.09, 2.4, 0.08, mats.rust, x + dx, 0.75 + h / 2, z + dz, 0, { cast: false });
+          WIN(g, 1.4, 0.3, mats.paper, x - 1.0, 0.75 + h * 0.8, z + dz + (dz > 0 ? 0.04 : -0.04), dz > 0 ? 0 : Math.PI);
+          for (const dx of [-len / 2 + 0.35, len / 2 - 0.35]) for (let k = 0; k < 5; k++) {
+            B(g, 0.4, 0.05, 0.05, mats.rust, x + dx, 0.85 + k * 0.5, z + 1.39, 0, { cast: false });
+          }
+        }
+      }
+      if (kind === 'loco') {
+        B(g, 3.4, 2.0, 2.9, mats.rust, x + len / 2 - 2.0, 1.9 + 1.0, z, 0, { uv: 1.4 });
+        WIN(g, 2.5, 0.8, mats.windowLitDim, x + len / 2 - 2.0, 3.2, z + 1.47, 0);
+        WIN(g, 2.5, 0.8, mats.windowLitDim, x + len / 2 - 2.0, 3.2, z - 1.47, Math.PI);
+        B(g, 0.5, 0.7, 0.5, mats.metal, x + len / 2 - 0.6, 6.2, z, 0, { uv: 0.6 });
+        lantern(g, x + len / 2 - 0.6, 6.9, z, 1.1);
+      }
+      return h;
+    };
+    trainCar(R, -30, -160, 11.0, 'loco');
+    trainCar(R, 28, -168, 12.0, 'box');
+    trainCar(R, 34, -160, 7.0, 'box');
+    trainCar(R, 12, -168, 12.0, 'box');
+    trainCar(R, 24, -160, 11.0, 'loco');
+    // container stacks in the yard
+    const railStack = (g, x, z, stack, len = 6.0) => {
+      for (let i = 0; i < stack; i++) {
+        const m = i % 2 ? mats.metalTan : mats.metal;
+        B(g, len, 2.5, 2.4, m, x, 1.28 + i * 2.55, z, 0, { uv: 1.6 });
+        for (let k = 0; k < 4; k++) B(g, len - 0.2, 0.1, 0.07, mats.rust, x, 0.42 + k * 0.55, z + 1.22, 0, { cast: false });
+        B(g, 0.1, 2.1, 0.1, mats.metal, x + len / 2 - 0.2, 1.3 + i * 2.55, z + 1.24, 0, { cast: false });
+      }
+    };
+    railStack(R, -28, -174, 3);
+    railStack(R, 26, -176, 2);
+    railStack(R, 8, -186, 2);
+    railStack(R, -20, -118, 2);
+    // forklift near the warehouse
+    B(R, 2.2, 1.3, 1.4, mats.metalTan, 10, 1.0, -176, 0.3, { uv: 1.2 });
+    B(R, 1.1, 1.2, 1.3, mats.metal, 9.2, 2.2, -177, 0.3, { uv: 1.0 });
+    B(R, 0.18, 3.2, 0.18, mats.metal, 11.0, 2.1, -174.8, 0, { cast: false });
+    B(R, 0.18, 3.2, 0.18, mats.metal, 11.0, 2.1, -177.2, 0, { cast: false });
+    B(R, 0.16, 0.16, 0.16, mats.metal, 11.0, 3.7, -176, 0, { cast: false });
+    for (const dz of [-0.55, 0.55]) C(R, 0.36, 0.36, 0.26, 10, mats.rubber, 10.4, 0.4, -176 + dz, { rz: Math.PI / 2, cast: false });
+    // pallets
+    const palletArt = (g, x, z, n = 3) => {
+      for (let i = 0; i < n; i++) {
+        B(g, 1.2, 0.14, 1.0, mats.wood, x, 0.1 + i * 0.18, z, 0.2, { cast: false });
+        B(g, 1.0, 0.05, 0.8, mats.wood, x, 0.19 + i * 0.18, z, 0.2, { cast: false });
+      }
+    };
+    palletArt(R, -8, -174, 4);
+    palletArt(R, 22, -122, 3);
+    palletArt(R, 4, -118, 2);
+    // signal masts
+    for (const [x, z, red] of [[-14, -164, true], [16, -156, false], [30, -150, true]]) {
+      C(R, 0.1, 0.12, 4.8, 6, mats.metal, x, 2.4, z, { cast: false });
+      B(R, 1.0, 0.12, 0.12, mats.metal, x + 0.45, 4.4, z, 0, { cast: false });
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), red ? mats.windowLit : mats.windowLitDim);
+      lamp.position.set(x + 0.9, 4.4, z); R.add(lamp);
+      B(R, 0.24, 0.3, 0.24, mats.metal, x + 0.9, 4.62, z, 0, { cast: false });
+    }
+    // platform shelter / benches / clock / safety line
+    for (const x of [-24, -6, 12]) {
+      B(R, 2.6, 0.12, 0.55, mats.wood, x, 4.78, -148.8, 0, { cast: false });
+      B(R, 2.6, 0.55, 0.1, mats.wood, x, 5.1, -149.1, 0, { cast: false });
+      for (const dx of [-1.1, 1.1]) B(R, 0.1, 0.5, 0.5, mats.metal, x + dx, 4.45, -148.8, 0, { cast: false });
+    }
+    // shelter (posts + roof + glass)
+    for (const x of [-2, 6]) for (const z of [-150.5, -146.5]) B(R, 0.12, 3.1, 0.12, mats.metal, x, 5.75, z, 0, { cast: false });
+    B(R, 9.0, 0.16, 4.8, mats.metal, 2, 7.35, -148.5, 0, { cast: false });
+    for (const z of [-150.4, -146.6]) WIN(R, 8.6, 1.3, mats.windowGlass, 2, 5.6, z, z < -148 ? 0 : Math.PI);
+    for (const x of [-2, 6]) WIN(R, 3.8, 1.3, mats.windowGlass, x, 5.6, -148.5, Math.PI / 2);
+    signZ(R, 2, 7.6, -146.4, 0, 3.2, 0.6, mats.signB);
+    // clock
+    C(R, 0.42, 0.42, 0.16, 14, mats.metalTan, 20, 6.4, -148.5, { rx: Math.PI / 2 });
+    WIN(R, 0.5, 0.5, mats.windowLit, 20, 6.4, -148.4, 0);
+    B(R, 0.08, 3.4, 0.08, mats.metal, 20, 4.9, -148.5, 0, { cast: false });
+    // yellow safety line
+    B(R, 58, 0.02, 0.16, mats.paint, 0, 4.23, -144.5, 0, { cast: false });
+    B(R, 58, 0.02, 0.1, mats.paint, 0, 4.23, -151.7, 0, { cast: false });
+    // catenary poles + wires
+    for (const x of [-36, -20, -4, 12, 28, 40]) {
+      C(R, 0.08, 0.1, 8.5, 5, mats.metal, x, 4.25, -164, { cast: false });
+      B(R, 2.2, 0.08, 0.08, mats.metal, x, 8.0, -164, 0, { cast: false });
+    }
+    for (let i = 0; i < 5; i++) {
+      const xa = [-36, -20, -4, 12, 28][i], xb = xa + 16;
+      rope(R, xa, 8.0, -164, xb, 8.0, -164, 0.012, mats.metal);
+      rope(R, xa, 7.6, -164, xb, 7.6, -164, 0.01, mats.metal);
+    }
+    // warehouse graffiti / posters / loading dock
+    for (const [z, y, w, h, mat] of [[-184, 2.4, 3.0, 1.6, mats.graffiti], [-172, 2.2, 5.0, 2.0, mats.graffiti], [-170, 2.2, 2.4, 1.4, mats.graffiti], [-166, 3.0, 1.8, 1.0, mats.signC], [-180, 5.8, 2.6, 0.8, mats.paper], [-174, 5.0, 2.0, 0.9, mats.signC]]) {
+      WIN(R, w, h, mat, -5.82, y, z, Math.PI / 2);
+    }
+    B(R, 3.2, 0.12, 6.6, mats.metal, -4.6, 0.06, -179, 0, { uv: 1.2, cast: false });
+    for (const z of [-182, -176]) B(R, 0.5, 0.45, 0.35, mats.rubber, -5.6, 0.4, z, 0, { cast: false });
+    for (const [x, z] of [[-4.4, -183.4], [-4.2, -174.8]]) crateD(R, x, z, 0.7, 0.2);
+    palletArt(R, -3.6, -177.2, 3);
+    palletArt(R, 4.2, -176.0, 2);
+    crateD(R, -6.0, -174.0, 0.75, 0.2);
+    crateD(R, 2.0, -172.0, 0.6, 0.4);
+    crateD(R, -2.0, -171.0, 0.8, 0.2);
+    palletArt(R, 0.0, -173.5, 2);
+    C(R, 0.1, 0.12, 4.6, 6, mats.metal, 3.0, 2.3, -166.0, { cast: false });
+    B(R, 0.9, 0.12, 0.12, mats.metal, 3.4, 4.3, -166.0, 0, { cast: false });
+    const sig = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), mats.windowLit);
+    sig.position.set(3.85, 4.3, -166.0); R.add(sig);
+    for (const [x, z] of [[2, -172.8], [6.2, -170.4]]) C(R, 0.34, 0.34, 0.95, 10, mats.rust, x, 0.48, z);
+    signZ(R, 2, 7.7, -152.05, 0, 4.2, 0.75, mats.signA);
+    for (const x of [-16, -4, 8, 20]) lantern(R, x, 5.0, -150.0, 1.0);
+    // platform luggage cart
+    B(R, 2.0, 0.35, 1.2, mats.metal, -12, 4.55, -147.5, 0, { uv: 1.0 });
+    for (const dx of [-0.7, 0.7]) for (const dz of [-0.4, 0.4]) C(R, 0.16, 0.16, 0.12, 8, mats.rubber, -12 + dx, 4.3, -147.5 + dz, { cast: false });
+    for (const dz of [-0.5, 0.5]) B(R, 0.06, 1.0, 0.06, mats.metal, -13, 5.0, -147.5 + dz, 0, { cast: false });
+
+    /* ---------- port: multi-colour stacks, crane, barge, dock ---------- */
+    const portStackArt = (g, x, z, stack, rot = 0) => {
+      for (let i = 0; i < stack; i++) {
+        const m = PORT_PAL[(Math.abs(Math.round(x)) + i) % PORT_PAL.length];
+        B(g, 12.0, 2.6, 2.6, m, x, 1.32 + i * 2.65, z, rot, { uv: 1.8 });
+        for (let k = 0; k < 6; k++) B(g, 0.07, 2.3, 0.05, mats.rust, x - 5.2 + k * 2.0, 1.32 + i * 2.65, z + 1.32, 0, { cast: false });
+        for (let k = 0; k < 4; k++) B(g, 0.05, 2.2, 0.05, mats.rust, x + 5.98, 1.3 + i * 2.65, z - 0.9 + k * 0.6, 0, { cast: false });
+        for (const dx of [-5.9, 5.9]) for (const dz of [-1.2, 1.2]) B(g, 0.15, 0.15, 0.15, mats.metalTan, x + dx, 0.15 + i * 2.65, z + dz, 0, { cast: false });
+      }
+    };
+    portStackArt(P, 56, -88, 2);
+    portStackArt(P, 104, -86, 2);
+    portStackArt(P, 60, -44, 2);
+    portStackArt(P, 110, -52, 1);
+    portStackArt(P, 54, -16, 2);
+    portStackArt(P, 108, 16, 1);
+    // gantry crane lattice / cab / cables / lights
+    for (const [x, z] of [[92, -60], [108, -60], [92, -36], [108, -36]]) {
+      for (let i = 0; i < 4; i++) {
+        const y = 2.5 + i * 5.2;
+        B(P, 0.12, 5.4, 0.12, mats.rust, x + 0.5, y, z, 0, { rz: 0.12, cast: false });
+        B(P, 0.12, 5.4, 0.12, mats.rust, x - 0.5, y, z, 0, { rz: -0.12, cast: false });
+        B(P, 1.1, 0.1, 0.1, mats.metal, x, y + 2.4, z, 0, { cast: false });
+      }
+    }
+    B(P, 4.0, 1.8, 3.0, mats.metalTan, 100, 19.0, -48, 0, { uv: 1.2 });
+    WIN(P, 3.0, 0.9, mats.windowLitDim, 100, 19.2, -46.48, 0);
+    for (const x of [97.5, 102.5]) rope(P, x, 20.0, -48, x + (x < 100 ? -1.5 : 1.5), 15.2, -48, 0.02, mats.rust);
+    B(P, 7.0, 0.35, 0.35, mats.metal, 100, 14.8, -48, 0, { cast: false });
+    for (const x of [96.8, 103.2]) {
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), mats.windowLit);
+      lamp.position.set(x, 22.0, -48); P.add(lamp);
+    }
+    // barge 1 (large) + barge 2 silhouette
+    // barge 1 (north water)
+    B(P, 11, 2.6, 38, mats.rust, 121.5, -0.1, -78, 0, { uv: 3.0 });
+    B(P, 8, 1.6, 10, mats.metalTan, 124, 1.4, -92, 0, { uv: 2.0 });
+    B(P, 5, 2.6, 6, mats.plasterB, 124, 2.4, -62, 0, { uv: 1.6 });
+    WIN(P, 3.4, 0.8, mats.windowLitDim, 121.4, 2.8, -62, -Math.PI / 2);
+    C(P, 0.1, 0.12, 9, 5, mats.metal, 124, 5.8, -88, { cast: false });
+    for (const z of [-90, -84, -76, -70]) B(P, 8, 2.4, 2.2, PORT_PAL[Math.abs(z) % 5], 123, 2.5, z, 0, { uv: 1.4 });
+    for (const z of [-94, -66]) {
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 6), mats.windowLit);
+      lamp.position.set(120, 2.2, z); P.add(lamp);
+    }
+    // barge 2 (south of the cargo ship)
+    B(P, 9, 2.2, 24, mats.metal, 122, 0.2, -52, 0, { uv: 2.6 });
+    B(P, 5, 2.2, 8, mats.plasterC, 123, 1.8, -46, 0, { uv: 1.4 });
+    for (const z of [-58, -54]) B(P, 7, 2.2, 2.1, mats.metalTan, 122, 2.4, z, 0, { uv: 1.2 });
+    // bollards + mooring ropes
+    for (let z = -92; z <= 30; z += 9) {
+      C(P, 0.22, 0.26, 0.9, 8, mats.rust, 115.0, 0.45, z);
+      B(P, 0.5, 0.12, 0.5, mats.metal, 115.0, 0.9, z, 0, { cast: false });
+    }
+    for (const z of [-10, 2]) rope(P, 115.2, 0.8, z, 118.5, 1.0, z + 6, 0.03, mats.burlap);
+    // oil drums / pallets / floodlights / fence
+    for (const [x, z] of [[58, -20], [59, -21], [60, -20], [90, -16], [91, -15], [108, 4], [108, 5], [72, -66], [73, -66]]) {
+      C(P, 0.34, 0.34, 0.95, 10, (x + z) % 2 ? mats.rust : mats.metalTan, x, 0.48, z);
+      C(P, 0.35, 0.35, 0.05, 10, mats.metal, x, 0.9, z, { cast: false });
+    }
+    for (const [x, z] of [[70, -60], [84, -20], [100, -10], [58, 4], [104, 2]]) palletArt(P, x, z, 4);
+    for (const [x, z] of [[60, -50], [90, -82], [110, 0], [70, 12]]) {
+      C(P, 0.09, 0.12, 10.5, 6, mats.metal, x, 5.25, z, { cast: false });
+      B(P, 1.6, 0.14, 0.14, mats.metal, x + 0.7, 10.3, z, 0, { cast: false });
+      for (const dx of [0, 1.4]) {
+        const panel = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.55), mats.windowLitDim);
+        panel.position.set(x + dx, 10.05, z); panel.rotation.x = 0.25; P.add(panel);
+      }
+    }
+    // security fence along the south edge
+    for (let x = 48; x <= 116; x += 4) C(P, 0.04, 0.05, 2.4, 5, mats.metal, x, 1.2, -96.5, { cast: false });
+    for (const yy of [0.5, 1.4, 2.2]) B(P, 68, 0.04, 0.04, mats.metal, 82, yy, -96.5, 0, { cast: false });
+    for (let x = 48; x < 116; x += 8) {
+      rope(P, x, 0.4, -96.5, x + 4, 2.2, -96.5, 0.008, mats.rust);
+      rope(P, x + 4, 0.4, -96.5, x, 2.2, -96.5, 0.008, mats.rust);
+    }
+    // warehouse dock: plate, bumpers, trailer, crates, hazard stripes
+    B(P, 24, 0.14, 1.6, mats.concreteDark, 72, 0.07, 6.9, 0, { uv: 2.0, cast: false });
+    for (const x of [61, 67, 76, 82]) B(P, 0.5, 0.5, 0.35, mats.rubber, x, 0.35, 7.4, 0, { cast: false });
+    B(P, 8.5, 2.6, 2.4, mats.metal, 88, 1.3, 3.0, 0, { uv: 1.6 });
+    B(P, 3.0, 2.3, 2.5, mats.metalTan, 84, 1.15, 3.0, 0, { uv: 1.2 });
+    for (const dx of [-3.0, 3.0]) for (const dz of [-0.9, 0.9]) C(P, 0.36, 0.36, 0.26, 10, mats.rubber, 88 + dx, 0.38, 3.0 + dz, { rz: Math.PI / 2, cast: false });
+    for (const [x, z] of [[62, 3.2], [64, 3.0], [78, 3.4], [80, 3.1]]) crateD(P, x, z, 0.7, 0.2);
+    for (let i = 0; i < 6; i++) B(P, 0.6, 0.02, 1.3, i % 2 ? mats.paint : mats.rust, 64 + i * 1.2, 0.14, 7.5, 0, { cast: false });
+    // lane lines + bay numbers
+    for (const z of [-76, -62, -48, -34, -20, -6]) B(P, 58, 0.02, 0.22, mats.paint, 82, 0.025, z, 0, { cast: false });
+    for (const [x, z, n] of [[58, -70, 0], [72, -56, 1], [86, -42, 2], [100, -28, 3], [104, -14, 4]]) {
+      WIN(P, 1.5, 1.5, mats.signA, x, 0.03, z, 0).rotation.x = -Math.PI / 2;
+    }
+    // stage-view extra colour near the port spawn
+    portStackArt(P, 92, -90, 2);
+    portStackArt(P, 66, -74, 1);
+    portStackArt(P, 62, -64, 3);
+    portStackArt(P, 104, -70, 2);
+    portStackArt(P, 94, -58, 1);
+    palletArt(P, 74, -76, 3);
+    palletArt(P, 86, -72, 2);
+    for (const [x, z] of [[84, -74], [85, -73], [73, -70]]) C(P, 0.34, 0.34, 0.95, 10, (x + z) % 2 ? mats.rust : mats.metalTan, x, 0.48, z);
+    crateD(P, 80, -74, 0.7, 0.2);
+    // ground bay numbers in the near lane
+    for (const [x, z] of [[76, -76], [88, -76], [64, -68]]) WIN(P, 1.4, 1.4, mats.signA, x, 0.03, z, 0).rotation.x = -Math.PI / 2;
+    B(P, 34, 0.02, 0.28, mats.paint, 83, 0.03, -78, 0, { cast: false });
+    palletArt(P, 88, -76, 3);
+    palletArt(P, 72, -76, 2);
+    for (const [x, z] of [[70, -74], [90, -78], [91, -77]]) C(P, 0.34, 0.34, 0.95, 10, mats.rust, x, 0.48, z);
+    // extra work light over the near lane
+    C(P, 0.09, 0.12, 9.0, 6, mats.metal, 94, 4.5, -72, { cast: false });
+    B(P, 1.4, 0.12, 0.12, mats.metal, 94.6, 8.8, -72, 0, { cast: false });
+    B(P, 0.55, 0.14, 0.35, mats.windowLitDim, 95.2, 8.7, -72, 0, { cast: false });
+
+
+    /* =====================================================================
+       LIGHTING + WALL DRESS — blind-critic pass.
+       The engine hemisphere is global, so the three districts get local
+       point-light fills (distance-limited) instead of touching the street.
+       ===================================================================== */
+    const poolMat = new THREE.MeshBasicMaterial({
+      map: mats.sprites.glow, color: 0xffb877, transparent: true, opacity: 0.34,
+      depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    const pool = (g, x, y, z, r) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(r * 2, r * 2), poolMat);
+      m.rotation.x = -Math.PI / 2;
+      m.position.set(x, y, z);
+      m.renderOrder = 2;
+      g.add(m);
+      return m;
+    };
+    const addPoint = (x, y, z, color, intensity, dist, decay = 1.4) => {
+      const l = new THREE.PointLight(color, intensity, dist, decay);
+      l.position.set(x, y, z);
+      dynamic.add(l);
+      return l;
+    };
+    // rail: 3 platform work lights + 2 yard masts + broad cool fill
+    for (const x of [-18, 0, 18]) {
+      B(R, 1.1, 0.16, 0.5, mats.metal, x, 7.05, -148, 0, { uv: 0.8, cast: false });
+      B(R, 0.9, 0.05, 0.35, mats.windowLitDim, x, 6.96, -148, 0, { cast: false });
+      pool(R, x, 4.24, -148, 3.4);
+      addPoint(x, 6.6, -148, 0xffb066, 12, 20, 1.4);
+    }
+    for (const [x, z] of [[-22, -156], [24, -130]]) {
+      C(R, 0.08, 0.12, 7.6, 6, mats.metal, x, 3.8, z, { cast: false });
+      B(R, 1.6, 0.1, 0.1, mats.metal, x + 0.6, 7.4, z, 0, { cast: false });
+      B(R, 0.5, 0.12, 0.3, mats.windowLitDim, x + 1.25, 7.3, z, 0, { cast: false });
+      pool(R, x + 1.25, 0.03, z, 4.2);
+      addPoint(x + 1.25, 7.1, z, 0xffc27a, 16, 30, 1.3);
+    }
+    addPoint(0, 11, -165, 0x9fb6c8, 10, 48, 1.0);   // local hemi fill (rail)
+    addPoint(-90, 10, 26, 0x9fb6c8, 9, 50, 1.0);    // local hemi fill (souk)
+    addPoint(96, 10, -30, 0x9fb6c8, 10, 48, 1.0);   // local hemi fill (port)
+    // warehouse window bands (rail east wall) + mullions
+    for (const z of [-186, -176, -166]) {
+      B(R, 0.08, 1.0, 6.0, mats.metal, -5.92, 6.4, z, 0, { uv: 0.8, cast: false });
+      WIN(R, 5.4, 0.55, z === -176 ? mats.windowLit : mats.windowLitDim, -5.84, 6.4, z, Math.PI / 2);
+      for (const dz of [-2.7, 0, 2.7]) B(R, 0.06, 0.55, 0.08, mats.metal, -5.8, 6.4, z + dz, 0, { cast: false });
+    }
+    // shopfront / floodlight ground pools
+    for (const [x, z] of [[-49.5, 8.3], [-49.5, -0.3], [-40.8, 24], [-63.5, 30]]) pool(S, x, 0.03, z, 2.6);
+    for (const [x, z] of [[60, -50], [90, -82], [110, 0], [70, 12]]) pool(P, x + 0.7, 0.03, z, 4.0);
+    pool(P, 95.2, 0.03, -72, 4.2);
+    addPoint(95.2, 8.4, -72, 0xffc27a, 14, 32, 1.3);
+
+    /* ---------- wall dressing helpers ---------- */
+    const acUnit = (g, x, y, z, ry = 0) => {
+      B(g, 1.1, 0.7, 0.55, mats.metal, x, y, z, ry, { uv: 0.8 });
+      B(g, 0.9, 0.06, 0.62, mats.concrete, x, y - 0.4, z, ry, { cast: false });
+      WIN(g, 0.8, 0.42, mats.interior, x + Math.sin(ry) * 0.29, y, z + Math.cos(ry) * 0.29, ry);
+      for (const s of [-0.4, 0.4]) B(g, 0.06, 0.4, 0.06, mats.rust, x + Math.cos(ry) * s, y - 0.55, z - Math.sin(ry) * s, 0, { cast: false });
+    };
+    const pipe = (g, x, z, h, y0 = 0.2) => {
+      C(g, 0.06, 0.07, h, 6, mats.rust, x, y0 + h / 2, z);
+      for (let i = 1; i < 4; i++) B(g, 0.18, 0.06, 0.18, mats.metal, x, y0 + h * i / 4, z, 0, { cast: false });
+    };
+    const winRecess = (g, x, y, z, ry, w = 1.3, h = 1.6, lit = false) => {
+      B(g, w + 0.22, h + 0.22, 0.05, mats.concreteDark, x, y, z, ry, { cast: false });
+      WIN(g, w, h, lit ? mats.windowLitDim : mats.interior, x + Math.sin(ry) * 0.04, y, z + Math.cos(ry) * 0.04, ry);
+      for (const o of [-w / 3, 0, w / 3]) B(g, 0.05, h, 0.05, mats.wood, x + Math.sin(ry) * 0.07 + Math.cos(ry) * o, y, z + Math.cos(ry) * 0.07 - Math.sin(ry) * o, ry, { cast: false });
+      for (const o of [-h / 3, 0, h / 3]) B(g, w, 0.05, 0.05, mats.wood, x + Math.sin(ry) * 0.07, y + o, z + Math.cos(ry) * 0.07, ry, { cast: false });
+      B(g, w + 0.3, 0.1, 0.22, mats.concrete, x + Math.sin(ry) * 0.1, y - h / 2 - 0.1, z + Math.cos(ry) * 0.1, ry, { cast: false });
+    };
+    // souk courtyard + objective-alley walls
+    acUnit(S, -88.45, 5.2, 30.0, -Math.PI / 2);
+    pipe(S, -88.4, 36.5, 6.4);
+    winRecess(S, -88.04, 3.2, 28.5, -Math.PI / 2, 1.2, 1.5, true);
+    winRecess(S, -88.04, 3.2, 35.5, -Math.PI / 2, 1.0, 1.4, false);
+    acUnit(S, -112.0, 5.0, 40.5, 0);
+    pipe(S, -106.5, 40.4, 6.0);
+    winRecess(S, -114.0, 3.2, 40.04, 0, 1.3, 1.5, false);
+    winRecess(S, -108.5, 3.2, 40.04, 0, 1.2, 1.5, true);
+    acUnit(S, -108.0, 5.2, 55.5, Math.PI);
+    pipe(S, -105.5, 55.6, 6.2);
+    winRecess(S, -112.0, 3.2, 55.96, Math.PI, 1.2, 1.5, true);
+    winRecess(S, -79.96, 3.0, 2.0, Math.PI / 2, 1.3, 1.6, true);
+    winRecess(S, -79.96, 3.0, 9.0, Math.PI / 2, 1.1, 1.5, false);
+    acUnit(S, -79.5, 4.8, 12.0, Math.PI / 2);
+    winRecess(S, -72.04, 3.0, 4.0, -Math.PI / 2, 1.2, 1.5, true);
+    pipe(S, -72.1, 12.0, 5.8);
+    // wall lanterns on the courtyard (local highlights, no extra light)
+    for (const [x, y, z, ry] of [[-88.3, 4.4, 31.5, -Math.PI / 2], [-79.7, 4.2, 5.0, Math.PI / 2], [-110.0, 4.5, 40.4, 0]]) {
+      B(S, 0.3, 0.12, 0.12, mats.metal, x, y + 0.3, z, ry, { cast: false });
+      const gl = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), mats.windowLit);
+      gl.position.set(x + Math.sin(ry) * 0.15, y, z + Math.cos(ry) * 0.15); S.add(gl);
+    }
+    // rail warehouse east wall: ribs, plinth, AC, pipe, sign
+    for (let z = -189; z <= -163; z += 1.6) B(R, 0.06, 7.4, 0.1, mats.metal, -5.94, 4.3, z, 0, { cast: false });
+    B(R, 0.3, 0.7, 28.2, mats.concreteDark, -5.86, 0.35, -176, 0, { uv: 2.0, cast: false });
+    acUnit(R, -5.45, 5.2, -183, Math.PI / 2);
+    pipe(R, -5.5, -187, 7.0);
+    B(R, 0.05, 1.5, 28.0, mats.grime, -5.96, 1.2, -176, 0, { cast: false });
+    for (const [zc, w] of [[-186.0, 3.4], [-168.5, 3.6]]) {
+      B(R, 0.1, 4.6, w, mats.metal, -5.9, 2.4, zc, 0, { uv: 1.6, cast: false });
+      for (let k = 0; k < 4; k++) B(R, 0.12, 4.5, 0.05, mats.rust, -5.84, 2.4, zc - w / 2 + 0.5 + k * (w / 4.4), 0, { cast: false });
+    }
+    B(R, 0.06, 0.8, 3.4, mats.metal, -5.8, 4.3, -174, 0, { cast: false });
+    WIN(R, 3.0, 0.6, mats.signA, -5.76, 4.3, -174, Math.PI / 2);
+    B(R, 0.3, 0.25, 0.25, mats.metal, -5.7, 5.0, -180.0, 0, { cast: false });
+    const wl = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), mats.windowLit);
+    wl.position.set(-5.7, 4.8, -180.0); R.add(wl);
+    B(R, 0.06, 0.9, 4.4, mats.metal, -5.78, 7.3, -174, 0, { cast: false });
+    WIN(R, 4.0, 0.7, mats.signB, -5.74, 7.3, -174, Math.PI / 2);
+    // port warehouse south wall: ribs, plinth, band, AC
+    for (let x = 60.6; x <= 83.4; x += 1.5) B(P, 0.08, 7.4, 0.06, mats.metal, x, 4.4, 7.78, 0, { cast: false });
+    B(P, 24.2, 0.7, 0.28, mats.concreteDark, 72, 0.35, 7.75, 0, { uv: 2.0, cast: false });
+    WIN(P, 18, 0.55, mats.windowLitDim, 72, 6.5, 7.7, Math.PI);
+    for (const x of [63, 69, 75, 81]) B(P, 0.06, 0.55, 0.06, mats.metal, x, 6.5, 7.68, 0, { cast: false });
+    acUnit(P, 66, 5.2, 7.35, Math.PI);
+    WIN(P, 4.0, 0.8, mats.signA, 72, 7.4, 7.66, Math.PI);
+
+
   }
 
   function buildBuilding(def) {
@@ -1997,23 +3057,22 @@ export function createLevel(engine) {
     // drainage channel + grate
     meshBox(0.32, 0.06, 5.6, mats.patch, -16.3, 0.13, 3.0, 0, { uv: 1.0, cast: false });
     for (let i = 0; i < 7; i++) meshBox(0.26, 0.03, 0.05, mats.metal, -16.3, 0.17, 0.5 + i * 0.8, 0, { cast: false });
-    // end wall + steel gate + warm doorway
-    const endW = new THREE.Mesh(new THREE.BoxGeometry(0.5, 4.2, 6.0), mats.plasterB);
-    projectBoxUV(endW.geometry, 3.0);
-    endW.position.set(xEnd, 2.1, 3.0);
-    endW.castShadow = true; endW.receiveShadow = true;
-    statics.add(endW);
-    addCollider(xEnd, 3.0, 0.5, 6.0);
-    meshBox(0.08, 2.4, 1.4, mats.metal, xEnd + 0.3, 1.25, 2.1, 0, { uv: 1.0 });
-    const warm = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.7), mats.windowLitDim);
-    warm.position.set(xEnd + 0.34, 1.35, 4.4);
-    warm.rotation.y = Math.PI / 2;
-    statics.add(warm);
-    lightPool(xEnd + 0.9, 4.4, 1.6, 0.22);
+    // Season 3: the dead-end wall becomes a 6 m gate into the old souk.
+    // A lintel + two pier stubs keep the alley reading as a gate, not a hole.
+    meshBox(0.6, 0.8, 6.6, mats.plasterB, xEnd, 3.85, 3.0, 0, { uv: 2.2, cast: false });
+    meshBox(0.36, 0.12, 6.7, mats.concrete, xEnd, 4.3, 3.0, 0, { uv: 1.6, cast: false });
+    for (const zz of [0.0, 6.0]) {
+      meshBox(0.58, 4.2, 0.36, mats.plasterB, xEnd, 2.1, zz, 0, { uv: 2.0, collide: true });
+      meshBox(0.7, 0.12, 0.5, mats.concrete, xEnd, 4.24, zz, 0, { uv: 1.0, cast: false });
+    }
+    meshBox(0.4, 0.16, 6.0, mats.concreteDark, xEnd, 0.08, 3.0, 0, { uv: 1.4, cast: false });
+    // service strip / connector ground behind the gate
+    meshBox(8.4, 0.04, 14.0, mats.dirt, -26.4, 0.01, 2.0, 0, { uv: 2.6, cast: false });
+    meshBox(1.8, 0.05, 6.0, mats.asphalt, -22.9, 0.03, 3.0, 0, { uv: 1.6, cast: false });
     const al = new THREE.PointLight(0xffa055, 2.6, 7, 2);
-    al.position.set(xEnd + 0.8, 1.8, 4.4);
+    al.position.set(xEnd + 0.9, 1.9, 4.6);
     dynamic.add(al);
-    meshBox(0.12, 2.0, 1.25, mats.metal, xEnd + 0.31, 1.25, 4.4, 0, { uv: 0.9, cast: false });
+    lightPool(xEnd + 1.1, 4.6, 1.6, 0.2);
     // stairs down the alley end
     for (let s = 0; s < 3; s++) meshBox(1.6, 0.16, 1.1, mats.concrete, -21.2 + s * 0.2, 0.08 + s * 0.15, 4.6, 0, { uv: 1.0, cast: false });
     // graffiti + posters on both side walls
@@ -2505,23 +3564,21 @@ export function createLevel(engine) {
     meshBox(0.36, 3.1, 14, wallMat, 30, 1.55, -89, 0, { collide: true, uv: 2.4 });
     meshBox(0.36, 3.1, 12, wallMat, 30, 1.55, -72, 0, { collide: true, uv: 2.4 });
     meshBox(0.36, 0.7, 4, wallMat, 30, 2.75, -80, 0, { uv: 2.4, cast: false });
-    for (const [xa, xb] of [[-30, -3], [3, 30]]) {
+    for (const [xa, xb] of [[-30, 0], [12, 30]]) {
       meshBox(xb - xa, 3.1, 0.36, wallMat, (xa + xb) / 2, 1.55, Z0, 0, { collide: true, uv: 2.4 });
     }
     meshBox(0.52, 0.12, Z1 - Z0, copMat, -30, 3.16, cz, 0, { uv: 2.0, cast: false });
     meshBox(0.52, 0.12, 14, copMat, 30, 3.16, -89, 0, { uv: 2.0, cast: false });
     meshBox(0.52, 0.12, 12, copMat, 30, 3.16, -72, 0, { uv: 2.0, cast: false });
     meshBox(0.52, 0.12, 4, copMat, 30, 3.16, -80, 0, { uv: 2.0, cast: false });
-    for (const [xa, xb] of [[-30, -3], [3, 30]]) {
+    for (const [xa, xb] of [[-30, 0], [12, 30]]) {
       meshBox(xb - xa, 0.12, 0.52, copMat, (xa + xb) / 2, 3.16, Z0, 0, { uv: 2.0, cast: false });
     }
-    // gate bars (kept shut) + posts
-    for (let i = 0; i < 13; i++) {
-      meshBox(0.04, 1.6, 0.04, mats.metal, -2.86 + i * 0.46, 0.85, Z0, 0, { uv: 0.4, cast: false });
-    }
-    for (const yy of [0.35, 1.55]) meshBox(6.0, 0.06, 0.06, mats.metal, 0, yy, Z0, 0, { uv: 0.6, cast: false });
-    addColliderRect(-3, 3, Z0 - 0.1, Z0 + 0.1);
-    for (const z of [-3, 3]) meshBox(0.26, 3.3, 0.26, wallMat, z, 1.65, Z0, 0, { uv: 0.9 });
+    // Season 3: open 12 m gate to the rail depot (0..12)
+    for (const x of [0, 12]) meshBox(0.28, 3.5, 0.28, wallMat, x, 1.75, Z0, 0, { uv: 0.9, collide: true });
+    meshBox(12.4, 0.7, 0.42, mats.concreteDark, 6, 3.45, Z0, 0, { uv: 2.0, cast: false });
+    meshBox(12.0, 0.1, 0.5, mats.concrete, 6, 0.05, Z0, 0, { uv: 1.4, cast: false });
+    for (const yy of [0.35, 1.5]) meshBox(0.08, 0.08, 0.5, mats.metal, 0.15, yy, Z0 + 0.2, 0, { uv: 0.4, cast: false });
 
     // checkpoint booth: one small interior nook facing the gate
     const bx = -8.5, bz = -74.5;
@@ -2675,18 +3732,24 @@ export function createLevel(engine) {
     addWeeds(44.8, -89.0, 3);
 
     // perimeter (west is the checkpoint wall, with the gate)
-    meshBox(0.4, 3.2, Z1 - Z0, wallMat, X1, 1.6, cz, 0, { collide: true, uv: 2.6 });
+    // Season 3: 8 m port gate at z -84..-76
+    meshBox(0.4, 3.2, 8, wallMat, X1, 1.6, -88, 0, { collide: true, uv: 2.6 });
+    meshBox(0.4, 3.2, 6, wallMat, X1, 1.6, -73, 0, { collide: true, uv: 2.6 });
+    for (const z of [-84, -76]) meshBox(0.32, 3.5, 0.32, wallMat, X1, 1.75, z, 0, { uv: 0.9, collide: true });
+    meshBox(0.4, 0.7, 8.4, mats.concreteDark, X1, 3.5, -80, 0, { uv: 2.0, cast: false });
+    for (const yy of [0.4, 1.6]) meshBox(0.08, 0.08, 0.4, mats.metal, X1, yy, -83.8, 0, { uv: 0.4, cast: false });
     for (const [xa, xb] of [[X0, X1]]) {
       meshBox(xb - xa, 3.2, 0.4, wallMat, (xa + xb) / 2, 1.6, Z0, 0, { collide: true, uv: 2.6 });
       meshBox(xb - xa, 3.2, 0.4, wallMat, (xa + xb) / 2, 1.6, Z1, 0, { collide: true, uv: 2.6 });
     }
-    meshBox(0.56, 0.12, Z1 - Z0, mats.concrete, X1, 3.26, cz, 0, { uv: 2.0, cast: false });
+    meshBox(0.56, 0.12, 8, mats.concrete, X1, 3.26, -88, 0, { uv: 2.0, cast: false });
+    meshBox(0.56, 0.12, 6, mats.concrete, X1, 3.26, -73, 0, { uv: 2.0, cast: false });
 
-    // shed facade on the east wall + roll-up door
-    meshBox(0.3, 5.2, 12.4, mats.plasterB, 45.6, 2.6, -79.5, 0, { uv: 2.4 });
-    meshBox(3.6, 3.4, 0.18, mats.metal, 45.4, 1.7, -83.6, 0, { uv: 1.2 });
-    for (let i = 0; i < 6; i++) meshBox(3.5, 0.06, 0.2, mats.metal, 45.35, 0.35 + i * 0.52, -83.6, 0, { uv: 0.6, cast: false });
-    meshBox(4.2, 0.5, 0.5, mats.concreteDark, 45.4, 3.7, -83.6, 0, { uv: 1.0 });
+    // shed facade moved north of the new gate + roll-up door
+    meshBox(0.3, 5.2, 5.6, mats.plasterB, 45.6, 2.6, -88.6, 0, { uv: 2.4 });
+    meshBox(3.6, 3.4, 0.18, mats.metal, 45.4, 1.7, -88.6, 0, { uv: 1.2 });
+    for (let i = 0; i < 6; i++) meshBox(3.5, 0.06, 0.2, mats.metal, 45.35, 0.35 + i * 0.52, -88.6, 0, { uv: 0.6, cast: false });
+    meshBox(4.2, 0.5, 0.5, mats.concreteDark, 45.4, 3.7, -88.6, 0, { uv: 1.0 });
 
     // containers + truck + pallets
     for (const [x, z, rot, stack] of [[34.0, -88.8, 0, 1], [35.6, -91.4, Math.PI / 2, 2]]) {
@@ -3992,6 +5055,7 @@ export function createLevel(engine) {
   buildNorthYard();
   buildEastDock();
   buildSouthYard();
+  buildExpansion();
 
   // ---- fire escapes on the two closest multi-storey fronts
   function fireEscape(side, z, floors, fh) {
@@ -4172,6 +5236,24 @@ export function createLevel(engine) {
   root.add(merged);
   statics.clear();
 
+  // Season 3 districts: merge each group separately so it keeps a local
+  // bounding volume (frustum culling keeps the street cost flat).
+  const districtMerged = [];
+  for (const key of ['souk', 'rail', 'port']) {
+    const grp = EXPANSION_GROUPS[key];
+    if (!grp || !grp.children.length) continue;
+    const dm = mergeStatic(grp);
+    dm.name = 'district:' + key;
+    dm.traverse((o) => {
+      if (!o.isMesh) return;
+      const ud = (o.material && o.material.userData) || {};
+      o.castShadow = !ud.noShadow;
+      o.receiveShadow = true;
+    });
+    root.add(dm);
+    districtMerged.push(dm);
+  }
+
   // far silhouettes: merged, never shadow casting
   const farMerged = mergeStatic(farGroup, { castShadow: false, receiveShadow: false });
   root.add(farMerged);
@@ -4186,19 +5268,23 @@ export function createLevel(engine) {
   const rayOnlyMat = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, visible: false });
   const rayGroup = new THREE.Group();
   rayGroup.name = 'bullet-surfaces';
-  merged.traverse((o) => {
-    if (!o.isMesh || !o.geometry) return;
-    const ud = (o.material && o.material.userData) || {};
-    if (ud.noBullet) return;
-    const m = new THREE.Mesh(o.geometry, rayOnlyMat);
-    m.matrixAutoUpdate = false;
-    m.matrix.copy(o.matrixWorld);
-    m.matrixWorld.copy(o.matrixWorld);
-    m.userData.rayOnly = true;
-    m.userData.srcMat = o.material;   // impact FX still needs the real material
-    rayGroup.add(m);
-    bulletTargets.push(m);
-  });
+  const addRayCopies = (src) => {
+    src.traverse((o) => {
+      if (!o.isMesh || !o.geometry) return;
+      const ud = (o.material && o.material.userData) || {};
+      if (ud.noBullet) return;
+      const m = new THREE.Mesh(o.geometry, rayOnlyMat);
+      m.matrixAutoUpdate = false;
+      m.matrix.copy(o.matrixWorld);
+      m.matrixWorld.copy(o.matrixWorld);
+      m.userData.rayOnly = true;
+      m.userData.srcMat = o.material;   // impact FX still needs the real material
+      rayGroup.add(m);
+      bulletTargets.push(m);
+    });
+  };
+  addRayCopies(merged);
+  for (const dm of districtMerged) addRayCopies(dm);
   root.add(rayGroup);
   // BVH once per merged buffer: a bullet costs 9 ms brute-force, <0.3 ms here.
   const bvhStats = buildBoundsTreeFor(bulletTargets);
@@ -4265,6 +5351,7 @@ export function createLevel(engine) {
     north_hq: { x: 10.6, z: -68.6, r: 2.6 },
     east_dock: { x: 43.5, z: -81, r: 4.5 },
     depot: { x: 11.5, z: 68, r: 4.0 },
+    ...EXPANSION_OBJECTIVES,
   };
   // expose the interior combat points through the legacy arrays too
   for (const z of cqbZones) {
@@ -4335,6 +5422,12 @@ export function createLevel(engine) {
   /* Coarse rectangles for the HUD location tag and the wayfinder. First hit
      wins, so keep the small / specific areas ahead of the wide fallbacks. */
   const REGIONS = [
+    { id: 'old_souk', name: '老城集市', en: 'OLD SOUK', x0: -116, x1: -40, z0: -42, z1: 72 },
+    { id: 'rail_depot', name: '北站货场', en: 'RAIL DEPOT', x0: -38, x1: 42, z0: -194, z1: -106 },
+    { id: 'container_yard', name: '东港集装箱场', en: 'CONTAINER YARD', x0: 48, x1: 122, z0: -98, z1: 34 },
+    { id: 'souk_gate', name: '集市门廊', en: 'SOUK GATE', x0: -40, x1: -22, z0: -11, z1: 34 },
+    { id: 'rail_gate', name: '北站门廊', en: 'RAIL GATE', x0: -1, x1: 13, z0: -108, z1: -95 },
+    { id: 'port_gate', name: '东港门廊', en: 'PORT GATE', x0: 44, x1: 50, z0: -85, z1: -75 },
     { id: 'east-dock', name: '东码头', en: 'EAST DOCK', x0: 30, x1: 46, z0: -92, z1: -70 },
     { id: 'north-hq', name: '北楼', en: 'NORTH HQ', x0: 6.0, x1: 15.0, z0: -75.2, z1: -64.8 },
     { id: 'checkpoint', name: '北检查站', en: 'CHECKPOINT', x0: -30, x1: 30, z0: -96, z1: -66 },
@@ -4361,8 +5454,9 @@ export function createLevel(engine) {
 
   return {
     root, colliders, bulletTargets, spawnPoints, coverPoints, bvhStats, breachDoors,
-    bounds: { x0: -30, x1: 46, z0: -96, z1: 84 },
+    bounds: { x0: -118, x1: 124, z0: -196, z1: 128 },
     cqbZones, objectiveZones, regionAt, regions: REGIONS,
+    stages: EXPANSION_STAGES, districts: EXPANSION_DISTRICTS,
     groundHeight, roofZones: ROOF_ZONES, roofSpawns: ROOF_SPAWNS, roofCovers: ROOF_COVERS,
     navLinks: [{ ax: 15.9, az: -12.0, bx: 17.6, bz: -12.0 }],
     destructibles, hitDestructible,

@@ -1,10 +1,15 @@
-# deepseek-of-duty 联网排行榜服务
+# deepseek-of-duty 服务端说明（排行榜 + LAN 联机）
 
-零依赖 Node 服务：`server/leaderboard.mjs` + 单 JSON 文件存储。
-配套前端客户端：`src/net/leaderboard.js`；本地冒烟测试：`tools/lb-smoke.mjs`。
+本文件覆盖两个互相独立的服务：
+
+- **排行榜**：[`server/leaderboard.mjs`](leaderboard.mjs)（第 1–10 节），零依赖 Node + 单 JSON 文件。
+- **LAN 联机**：[`server/lan.mjs`](lan.mjs)（第 11 节），`ws` WebSocket 中继，host-authoritative。
+
+两者都不处理静态资源；静态站由 Vite / nginx 负责。LAN 服务不读写排行榜数据，
+排行榜服务也不参与联机。
 
 > **先说清楚：这不是反作弊。**
-> 客户端是浏览器游戏，玩家可以改内存、改请求。本服务能做的只有：
+> 客户端是浏览器游戏，玩家可以改内存、改请求。排行榜服务能做的只有：
 > 一次性 HMAC ticket（挡住手搓请求、限制提交节奏）、数值上限与一致性检查
 > （挡住明显离谱的记录）、按 IP 限流（挡住脚本乱刷）。
 > 一个改过的客户端仍然可以提交“数值自洽的假成绩”，本服务无法分辨。
@@ -26,11 +31,11 @@
 
 ---
 
-## 2. 快速启动
+### 2. 快速启动（排行榜服务）
 
-要求 Node.js ≥ 18（服务端只使用 `node:http`、`node:crypto`、`node:fs`、`node:path`、
+排行榜服务要求 Node.js ≥ 18（只使用 `node:http`、`node:crypto`、`node:fs`、`node:path`、
 `node:url` 等内置模块；实际验证环境为 v24.20.0）。
-不需要 `npm install`，服务端只用 Node 内置模块。
+不需要 `npm install` 即可运行排行榜；LAN 服务需要 `ws`（见第 11 节）。
 
 ```bash
 # 最简：使用默认值（127.0.0.1 之外的网卡也会监听，见“已知局限”）
@@ -573,3 +578,274 @@ node --check tools/lb-smoke.mjs
 8. **服务本身不处理 TLS**。HTTPS 由 nginx 终止；8787 不应直接对公网开放。
 9. **ticket 重启即失效**。未设置 `LB_SECRET` 时服务使用临时随机密钥，重启后所有旧 ticket 失效。
 10. **`LB_ALLOW_UNSIGNED=1` 只适合本地开发**，生产开启等于取消 ticket 门槛。
+
+---
+
+## 11. LAN 联机服务（Season 3 Track B）
+
+### 11.1 定位与启动
+
+`server/lan.mjs` 是一个 **JSON WebSocket 中继**，不包含任何游戏模拟：
+
+- **host-authoritative**：host 客户端模拟敌人/波次，并以 20 Hz 发送 `snapshot`；
+  服务端只负责把快照转发给同房间的 client。
+- **client-local movement**：客户端本地移动，通过 `input` 把位置/朝向发给 host；
+  服务端不校验移动、不校验命中，也不做回滚/对账。
+- 2–4 人同房间；服务端不做静态文件服务，静态页面仍由 Vite / nginx 提供。
+
+启动：
+
+```bash
+npm install          # ws 在 devDependencies
+npm run lan          # 默认 0.0.0.0:8790
+# 或
+LAN_PORT=8790 node server/lan.mjs
+```
+
+`LAN_PORT` 默认为 `8790`；`LAN_PORT=0` 会让系统分配临时端口（冒烟测试用），
+服务端启动日志会打印实际端口：
+
+```text
+[lan] listening on ws://0.0.0.0:8790
+```
+
+客户端打开 Vite 页面时带上服务地址：
+
+```text
+http://HOST:5173/?lan=ws://LAN-HOST:8790
+```
+
+`src/net/lanClient.js` 会把 `room` 作为 query 参数追加到 WebSocket URL，例如
+`ws://LAN-HOST:8790/?room=ALPHA`。
+
+**部署注意**：`server/lan.mjs` 直接 import 了
+[`src/net/lanProtocol.js`](../src/net/lanProtocol.js)，部署时要保留仓库的
+`server/` + `src/net/lanProtocol.js` 目录结构（或把协议模块一起打包）。
+`ws` 目前是 devDependency，生产安装如果要跑 LAN 服务，需要保留 dev 依赖或单独安装 `ws`。
+
+### 11.2 服务端行为
+
+- 房间由 WebSocket URL 的 `?room=` 决定（缺省 `lobby`）；`join` 消息里的 `room` 只在 URL 没有房间时作为回退。
+- 每个房间最多 **4** 人；第 5 人收到 `room_full` 错误并以 close code **4004** 断开。
+- 第一个成功 `join` 的玩家是 host；host 断开后，按加入顺序把下一位提升为 host，
+  广播新的 `lobby` 和 `{t:'event',kind:'host_change',host}`。
+- 房间之间完全隔离；最后一个玩家离开时房间被删除。
+- 中继规则：
+
+| 发送方 | 消息 | 转发目标 |
+| --- | --- | --- |
+| host | `snapshot` | 同房间其他玩家 |
+| client | `input` / `fire` | host |
+| client | `event` | host |
+| host | `event` | 同房间其他玩家 |
+| host | `input` / `fire` | 同房间其他玩家（给 client 做表现） |
+| 非 host | `snapshot` | 不转发，回 `{kind:'error',code:'not_host'}` |
+
+- 所有转发给对端的 `input` / `fire` / `event` 都会由服务端补上发送者 `id`；
+  客户端不能用消息里的 `id` 冒充别人。
+- `event.kind === 'ready'` 会更新服务端保存的 `ready` 状态并广播 `lobby`。
+- 服务端自己产生的事件：
+  - `{t:'event',kind:'error',code,message}`：`room_full`、`rate_limited`、`bad_message`、`not_joined`、`not_host`、`unknown_type` 等；
+  - `{t:'event',kind:'host_change',host}`；
+  - `{t:'event',kind:'leave',id}`。
+- 限制：
+  - 单条消息上限 **16 KB**（WebSocket `maxPayload`；超限由 ws 以 close code **1009** 断开）；
+  - 每连接 **60 条/秒** 的 token bucket（容量 60）；超限发送 `rate_limited` 并以 **4029** 断开；
+  - 心跳 ping 每 **20 秒**一次，连续无 pong 的连接会被 terminate；
+  - 不持久化任何房间/玩家/战局状态，服务重启即清空。
+
+### 11.3 消息 schema（JSON）
+
+所有消息都是 UTF-8 JSON 文本帧，`t` 为消息类型。
+
+客户端 → 服务端：
+
+```json
+{ "t": "join", "room": "ALPHA", "name": "KEN" }
+```
+
+```json
+{ "t": "input", "seq": 12, "x": 3.2, "z": -8.1, "yaw": 0.4, "pitch": -0.1, "hp": 90, "alive": true }
+```
+
+```json
+{ "t": "fire", "seq": 13, "ox": 1.2, "oy": 1.6, "oz": -2.0, "dx": 0.7, "dy": -0.1, "dz": -0.7, "weapon": "AK" }
+```
+
+```json
+{ "t": "event", "kind": "ready", "ready": true }
+```
+
+```json
+{ "t": "snapshot", "tick": 421, "players": [], "enemies": [], "wave": 3, "kills": 17, "objective": "defend" }
+```
+
+`snapshot` 的 `players/enemies/objective` 由 host 定义；服务端把它当作不透明 JSON 转发，
+不校验敌人数量、不检查命中、也不计算波次。
+
+服务端 → 客户端：
+
+```json
+{
+  "t": "welcome",
+  "id": "p_1a2b3c4d",
+  "host": "p_1a2b3c4d",
+  "room": "ALPHA",
+  "players": [{ "id": "p_1a2b3c4d", "name": "KEN", "ready": false, "host": true }]
+}
+```
+
+```json
+{
+  "t": "lobby",
+  "players": [
+    { "id": "p_1a2b3c4d", "name": "KEN", "ready": true, "host": true },
+    { "id": "p_5e6f7a8b", "name": "MAYA", "ready": false, "host": false }
+  ]
+}
+```
+
+```json
+{
+  "t": "snapshot",
+  "tick": 421,
+  "players": [{ "id": "p_1a2b3c4d", "x": 1, "z": 2, "yaw": 0.3, "hp": 100, "alive": true }],
+  "enemies": [{ "id": "e1", "x": 8, "z": -4, "hp": 60 }],
+  "wave": 3,
+  "kills": 17,
+  "objective": "defend"
+}
+```
+
+```json
+{ "t": "event", "kind": "damage", "id": "p_1a2b3c4d", "target": "p_5e6f7a8b", "amount": 10 }
+```
+
+转发规则补充：
+
+- `welcome` 只在 `join` 成功后发送一次；断线重连会重新 `join`，得到新的 `id`。
+- 客户端收到的 `input`/`fire` 一定带 `id`；host 收到的 `event` 也带 `id`。
+- `event` 的业务字段由 host/client 自行约定（`damage`、`kill`、`hit`、`respawn` 等），
+  服务端只特殊处理 `ready`。
+
+### 11.4 客户端 API `src/net/lanClient.js`
+
+```js
+import { createLanClient } from './net/lanClient.js';
+
+const params = new URLSearchParams(location.search);
+const lan = createLanClient({
+  // 页面 URL 里的 ?lan=ws://HOST:8790；缺省连本机 8790
+  url: params.get('lan') || 'ws://127.0.0.1:8790',
+  room: params.get('room') || 'ALPHA',
+  name: 'KEN',
+  onLobby(players) {
+    // [{ id, name, ready, host }]
+  },
+  onSnapshot(snapshot) {
+    // host 广播的 { tick, players, enemies, wave, kills, objective }
+  },
+  onEvent(message) {
+    // 本端收到的所有中继消息：
+    //   {t:'event', kind:'damage'|'kill'|'hit'|'respawn'|...}
+    //   {t:'input', ...}  // host 收 client 输入；client 也可能收到 host 输入
+    //   {t:'fire', ...}   // host 收 client 开火；client 也可能收到 host 开火
+    // 用 message.t 区分。
+  },
+  onStatus(status) {
+    // { state, room, id, host, attempt, error }
+  },
+});
+
+const joined = await lan.connect(); // 永不 reject
+if (!joined.ok) {
+  // joined.error: room_full / rate_limited / message_too_large /
+  //               no_websocket / network / reconnect_failed / closed
+}
+```
+
+导出的 API：
+
+| API | 说明 |
+| --- | --- |
+| `createLanClient({ url, room, name, onLobby, onSnapshot, onEvent, onStatus })` | 创建客户端；所有回调异常都会被吞掉，不会抛进游戏循环 |
+| `connect(): Promise<{ok, id?, host?, error?}>` | 开始连接/自动重连；在收到 `welcome` 时 resolve `{ok:true}`；致命错误或 3 次重连耗尽时 resolve `{ok:false}`；永不 reject |
+| `close()` | 主动断开并停止重连 |
+| `sendInput(input): boolean` | 发送 `{t:'input',seq,x,z,yaw,pitch,hp,alive}`；未加入房间/未连接返回 `false` |
+| `sendFire(fire): boolean` | 发送 `{t:'fire',seq,ox,oy,oz,dx,dy,dz,weapon}` |
+| `sendEvent(kind, data?): boolean` / `sendEvent(obj)` | 发送 `{t:'event',kind,...}`；client 发给 host |
+| `broadcastSnapshot(snapshot): boolean` | 仅 host 有效；发送 20 Hz 快照 |
+| `broadcastEvent(kind, data?): boolean` / `broadcastEvent(obj)` | 仅 host 有效；广播权威事件 |
+| `get isHost` | 当前连接是否为 host |
+| `get id` | 自己的玩家 id（未加入为 `null`） |
+| `get host` | 当前 host 的 id |
+| `get players` | 最近一次 `lobby` 的玩家数组副本 |
+| `get status` | `idle / connecting / open / joined / reconnecting / closed / error` |
+
+`onStatus` 的状态值：
+
+- `idle`：尚未调用 `connect()`；
+- `connecting`：首次连接中；
+- `open`：WebSocket 已打开，正在发 `join`；
+- `joined`：已收到 `welcome`；
+- `reconnecting`：断线自动重连中（`attempt` 1–3）；
+- `closed`：主动 `close()`；
+- `error`：致命错误或重连耗尽（`error` 字段有原因）。
+
+重连策略：非主动断开、且不是致命 close code 时，按 `[1000, 2000, 4000] ms`
+最多重连 **3** 次；每次重连会重新 `join`。`room_full`、`rate_limited`、
+`message_too_large`、`bad_message` 不自动重连。
+
+Host 驱动 20 Hz 的典型写法（由 main.js 负责接线）：
+
+```js
+const SNAPSHOT_MS = 50;
+setInterval(() => {
+  if (!lan.isHost) return;
+  lan.broadcastSnapshot({
+    tick: nextTick++,
+    players: buildPlayers(),
+    enemies: buildEnemies(),
+    wave,
+    kills,
+    objective,
+  });
+}, SNAPSHOT_MS);
+```
+
+### 11.5 冒烟测试
+
+```bash
+node tools/lan-smoke.mjs
+```
+
+脚本使用 `LAN_PORT=0` 的临时端口启动 `server/lan.mjs`，真实连接 `ws` 客户端，验证：
+
+1. `welcome`：id/host/room/players；
+2. `lobby`：第一人是 host，第二人加入后双方看到 2 人；
+3. host `snapshot` 到达 client；
+4. client `input`/`fire` 到达 host（带来源 id）；
+5. host `fire`/`event` 广播到 client；
+6. `ready` 更新 lobby；
+7. 第 5 人收到 `room_full`（4004）；
+8. host 断开后下一位被提升为 host（`lobby` + `host_change`）；
+9. 超过 60 条/秒被关闭（4029）；
+10. 17KB 消息被关闭（1009）。
+
+任一断言失败退出码为 1；结束后会关闭客户端和服务器进程。
+
+### 11.6 LAN 已知局限
+
+1. **没有服务端权威模拟，也没有反作弊**。host 就是权威；host 可以改敌人血量/位置/分数，
+   服务端无法验证。client 本地移动、射击也被信任。
+2. **没有账号/鉴权**。房间码不是密码，同一网络内知道地址和房间码的人都能加入。
+3. **无持久化、无断线续局**。服务重启清空房间；重连会得到新玩家 id；
+   host 迁移不传输战局状态，新 host 需要自己继续维护世界状态。
+4. **JSON 文本 + 20 Hz**。带宽随玩家/敌人数量增长；没有二进制协议、压缩或 delta 编码。
+5. **最多 4 人**，固定 60 条/秒/连接；高频特效/输入可能触发 4029。
+6. **16 KB 单帧上限**；大快照需要 host 自己裁剪。
+7. **没有 TLS**。默认 `ws://`，适合 LAN/VPN；公网部署应放在 wss 反向代理后，
+   并注意房间码仍然不是安全边界。
+8. **心跳 20 秒**才能发现死连接；移动端切后台可能被误判断线。
+9. **`ready` 只是大厅状态**，是否开始、何时开始由 host/UI 决定，服务端不强制。
+10. **`ws` 是 devDependency**；只装生产依赖时 LAN 服务不会启动，需要额外安装 `ws`。
