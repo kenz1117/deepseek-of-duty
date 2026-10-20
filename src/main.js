@@ -13,6 +13,7 @@ import { loadSettings, saveSettings, sanitizeSettings, tutorialDone, markTutoria
 import { createRunStats, runPayload, recordRun, applyDailyProgress, loadDaily, dailySummary, dailyPerks, loadCallsign, saveCallsign, bestFor } from './core/profile.js';
 import { createPickups } from './world/pickups.js';
 import { createStreaks } from './systems/streaks.js';
+import { createMilestones, stepLabel } from './systems/milestones.js';
 import { createArtillery } from './systems/artillery.js';
 import { createLeaderboard } from './net/leaderboard.js';
 import { createNavGrid } from './systems/navgrid.js';
@@ -161,6 +162,8 @@ const net = {
   inputT: 0, snapT: 0, tick: 0, seq: 0, started: false, respawnT: 0, lastError: null,
 };
 let netEnemySeq = 1;
+/** Client-side read-only mirror of the host's milestone chain. */
+let netMilestoneMirror = null;
 let perception = null, aiDirector = null, barks = null, equipment = null;
 let codex = { intel: [] };
 let mothAlly = null;
@@ -1104,6 +1107,135 @@ function setupObjective(n) {
   };
   if (hud && hud.setMode) hud.setMode(mode.toUpperCase(), mode === 'defend' ? 'HOLD THE ZONE' : 'CLEAR THE AREA, THEN EXTRACT');
   showBeacon(zone, mode);
+}
+
+/* ---- milestone chain ------------------------------------------------------
+   Co-op used to run with G.operation = null, so the only thing the HUD could
+   say was "clear hostiles" and players had no idea what to do. The chain gives
+   every match a visible sequence of steps.
+
+   The chain mixes reach / hold / collect / kill on purpose: a chain made only
+   of kill goals would reproduce the exact problem it is meant to fix, so
+   systems/milestones.js guarantees at least a third of the steps are
+   non-lethal. ---------------------------------------------------------------- */
+
+let milestones = null;
+let milestoneTarget = null;   // the mounted interact target for a `collect` step
+
+/** Collect candidate spots from the spots the level already defines, so the
+    chain points at real playable geometry instead of arbitrary coordinates. */
+function milestoneSpots() {
+  const reach = [];
+  const hold = [];
+  const collect = [];
+  const table = OBJECTIVE_SPOTS[currentSiteId()] || OBJECTIVE_SPOTS.street;
+  if (table) {
+    for (const s of table.defend || []) hold.push(s);
+    for (const s of table.extract || []) reach.push(s);
+  }
+  if (level && level.objectiveZones) {
+    for (const key of Object.keys(level.objectiveZones)) {
+      const z = level.objectiveZones[key];
+      if (z && Number.isFinite(z.x)) hold.push({ x: z.x, z: z.z, r: z.r });
+    }
+  }
+  if (level && level.cqbZones) {
+    for (const q of level.cqbZones) {
+      if (q && q.center && Number.isFinite(q.center.x)) {
+        hold.push({ x: q.center.x, z: q.center.z, r: Math.min(5, q.radius || 4) });
+      }
+    }
+  }
+  if (intelSys) {
+    for (const t of intelSys.targetList()) collect.push({ x: t.x, z: t.z });
+  }
+  return { reach, hold, collect };
+}
+
+function unmountMilestoneTarget() {
+  if (milestoneTarget && interact) {
+    try { interact.remove(milestoneTarget); } catch (e) { /* already gone */ }
+  }
+  milestoneTarget = null;
+}
+
+/** Mount whatever world marker the newly active step needs. */
+function mountMilestoneStep(step) {
+  unmountMilestoneTarget();
+  if (!step) return;
+  if (step.kind === 'reach' || step.kind === 'hold') {
+    showBeacon({ x: step.x, z: step.z, r: step.r }, step.kind === 'hold' ? 'defend' : 'extract');
+    return;
+  }
+  if (step.kind === 'collect' && interact) {
+    // The interact system already renders the prompt and drives the HUD, so a
+    // collect step needs no new UI: press E at the marker.
+    milestoneTarget = interact.add({
+      x: step.x, z: step.z, r: step.r,
+      label: '按住 E 搜集物资',
+      hold: 0.8,
+      onUse: () => { if (milestones) milestones.notifyCollect(step.id); },
+    });
+  }
+}
+
+function startMilestones() {
+  unmountMilestoneTarget();
+  const spots = milestoneSpots();
+  milestones = createMilestones({
+    reachSpots: spots.reach,
+    holdSpots: spots.hold,
+    collectSpots: spots.collect,
+    origin: { x: controller.pos.x, z: controller.pos.z },
+    onChainAdvance: (step) => mountMilestoneStep(step),
+    onStep: (step) => {
+      if (hud && hud.toast) hud.toast(`阶段完成 · ${stepLabel(step)}`, 2000);
+      if (hud && hud.radio) hud.radio('VEGA', '阶段完成。推进到下一个目标。', 2600);
+    },
+    onAllDone: () => {
+      if (hud && hud.toast) hud.toast('任务链完成 · 干得漂亮', 3200);
+    },
+  });
+  // createMilestones announces the opening step via onChainAdvance, so the
+  // first marker/target is already mounted here.
+}
+
+function stopMilestones() {
+  unmountMilestoneTarget();
+  milestones = null;
+  if (hud && hud.hideMilestones) hud.hideMilestones();
+}
+
+/** Per-frame: advance hold/reach steps and repaint the HUD checklist. */
+function updateMilestones(dt) {
+  if (!milestones || milestones.isDone) {
+    if (hud && hud.hideMilestones) hud.hideMilestones();
+    return;
+  }
+  const step = milestones.current;
+  let inside = false;
+  if (step && (step.kind === 'reach' || step.kind === 'hold') && Number.isFinite(step.x)) {
+    inside = Math.hypot(controller.pos.x - step.x, controller.pos.z - step.z) <= (step.r || 4);
+  }
+  const before = milestones.state.index;
+  milestones.update(dt, inside);
+
+  if (milestones.state.index !== before) {
+    if (hud && hud.setMode) {
+      hud.setMode('OBJECTIVE', milestones.state.label);
+    }
+  }
+  if (hud && hud.setMilestones) {
+    const st = milestones.state;
+    const upcoming = milestones.steps
+      .slice(st.index + 1, st.index + 3)
+      .map((s) => stepLabel(s));
+    hud.setMilestones(milestones.serialize(), upcoming);
+  }
+  if (step && (step.kind === 'reach' || step.kind === 'hold') && hud && hud.setZoneDistance) {
+    const d = Math.hypot(controller.pos.x - step.x, controller.pos.z - step.z);
+    hud.setZoneDistance(inside ? null : d);
+  }
 }
 
 function isSpawnAllowed(sp) {
@@ -2713,6 +2845,7 @@ function onEnemyKilled(enemy, headshot, cause = 'bullet') {
   }
   // killstreak kills must not feed the next streak (CoD rule) or artillery chains forever
   if (streakSys && cause !== 'artillery') streakSys.notifyKill({ headshot, cause });
+  if (milestones && cause !== 'artillery') milestones.notifyKill(1);
 
   // loot: the dropped rifle is the signature CoD beat; consumables are rarer
   if (pickups && enemy && enemy.root) {
@@ -3796,6 +3929,30 @@ function getOrCreateNetEnemy(data) {
   return e;
 }
 
+/** Clients do not simulate the chain — they mirror the host's view of it.
+    This keeps a single source of truth for progress while still showing every
+    player what the squad is working on. */
+function applyLanMilestones(data) {
+  if (!hud) return;
+  if (!data) {
+    if (hud.hideMilestones) hud.hideMilestones();
+    return;
+  }
+  // A passive mirror is enough on the client: it never advances on its own.
+  if (!netMilestoneMirror) {
+    netMilestoneMirror = createMilestones({ chain: [{ kind: 'kill', need: 1 }], mirror: true });
+  }
+  const st = netMilestoneMirror.applyRemote(data);
+  if (hud.setMode) hud.setMode('OBJECTIVE', st.label);
+  if (hud.setMilestones) hud.setMilestones(netMilestoneMirror.serialize(), []);
+  if (hud.setZoneDistance) {
+    const d = (Number.isFinite(st.x) && Number.isFinite(st.z))
+      ? Math.hypot(controller.pos.x - st.x, controller.pos.z - st.z)
+      : null;
+    hud.setZoneDistance((st.kind === 'reach' || st.kind === 'hold') && d != null && d > 1 ? d : null);
+  }
+}
+
 function applyLanSnapshot(snap) {
   if (!snap || net.role !== 'client') return;
   G.wave = Number(snap.wave) || G.wave;
@@ -3806,6 +3963,7 @@ function applyLanSnapshot(snap) {
     hud.setScore(G.score, G.kills);
   }
   onLanSnapshotApplyPlayers(snap.players || []);
+  applyLanMilestones(snap.milestones || null);
   const seen = new Set();
   const list = Array.isArray(snap.enemies) ? snap.enemies : [];
   for (const d of list) {
@@ -3941,6 +4099,9 @@ function sendLanSnapshot() {
     site: G.site && G.site.id,
     wave: G.wave, kills: G.kills, score: G.score,
     objective: G.objective ? { type: G.objective.type, done: !!G.objective.done } : null,
+    // host-authoritative milestone chain; makeSnapshot() is a pass-through so
+    // no protocol change is needed for this field
+    milestones: milestones ? milestones.serialize() : null,
   });
 }
 
@@ -4002,6 +4163,11 @@ function startLanHostGame() {
   if (lanSession) lanSession.broadcastEvent('start', { wave: 1, site: G.site && G.site.id });
   if (lanLobby) lanLobby.setPlayers(lanSession.players || []);
   syncLanAvatars(lanSession.players || []);
+  // Co-op previously started with G.operation = null, so the only thing the HUD
+  // could report was "clear hostiles" — players had no idea what they were
+  // meant to be doing. The host now owns a milestone chain and relays it.
+  startMilestones();
+  if (hud && hud.setMode) hud.setMode('OBJECTIVE', '推进任务链');
   if (hud && hud.toast) hud.toast('LAN CO-OP · 等待队友');
 }
 
@@ -4163,6 +4329,7 @@ function updateGame(dt) {
       updateObjective(dt);
       updateWaves(dt);
       updateTutorial(dt);
+      updateMilestones(dt);
     }
     updateBeacon(dt);
 

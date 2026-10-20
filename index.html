@@ -54,6 +54,9 @@
         <span class="mode-progress-text" id="mode-progress-text">0 / 60s</span>
         <span class="zone-distance hidden" id="zone-distance"><i class="zone-dot"></i><span id="zone-distance-text">ZONE 18m</span></span>
       </div>
+      <!-- milestone chain: current step + the next ones, so the match always
+           shows a direction instead of only "clear hostiles". -->
+      <ol class="ms-list hidden" id="ms-list" aria-label="任务目标"></ol>
     </div>
 
     <!-- top right: killfeed / score -->

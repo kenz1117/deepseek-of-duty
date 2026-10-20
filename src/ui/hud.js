@@ -63,6 +63,7 @@ export function createHUD() {
     modeHud: $('mode-hud'), modeLabel: $('mode-label'), modeSub: $('mode-sub'),
     modeFill: $('mode-progress-fill'), modeProgressText: $('mode-progress-text'),
     modeZone: $('zone-distance'), modeZoneText: $('zone-distance-text'),
+    msList: $('ms-list'),
     modeSelect: $('mode-select'), modeSelectCurrent: $('mode-select-current'),
     modeSelectBtns: Array.from(document.querySelectorAll('#mode-select-pills button')),
     bigModeCards: Array.from(document.querySelectorAll('.big-mode')),
@@ -100,18 +101,27 @@ export function createHUD() {
   let areaKey = '';
   let areaHold = 0;
   let chDpr = 0;
+  let chLastGap = -1, chLastAds = false;
   let compassW = 0, compassH = 56, compassDpr = 0;
   let compassDirty = true;
   let lastHeadingDrawn = 999;
+  let compassAcc = 1;          // start hot so the first frame draws immediately
+  const COMPASS_FRAME = 0.05;  // 20 Hz is plenty for a compass strip
   let frames = 0;
   let hintHold = 0;   // brief grace so per-frame `setHint('')` cannot wipe wave notices
+  // DOM-write caches: setting textContent/style to the value it already has is
+  // NOT free (it still dirties layout), so every per-frame setter remembers
+  let dmgShown = -1, flashShown = -1;
+  let hpShown = -1, hpPctShown = -1, armorShown = -1, hpLowShown = null, vitCritShown = null;
+  let magShown = -1, reserveShown = -1, grenShown = -1, scoreShown = -1, killsShown = -1;
+  let wavePctShown = -1, modePctShown = -1, modeTextShown = null, zoneTextShown = null, objectiveShown = null;
 
   const MAX_ARMOR_PIPS = 6;
   let armorPips = [];
 
   const DEFAULT_SETTINGS = {
     sensitivity: 1, adsSens: 0.75, fov: 90, invertY: false,
-    master: 0.8, reduceMotion: false, quality: 'high',
+    master: 0.8, reduceMotion: false, quality: 'high', fpsCap: 60,
   };
   let settings = { ...DEFAULT_SETTINGS };
   let settingsOnChange = null;
@@ -153,6 +163,7 @@ export function createHUD() {
       chDpr = d;
       el.crosshair.width = px;
       el.crosshair.height = px;
+      chLastGap = -1;   // resize cleared the canvas: force one redraw
     }
   }
 
@@ -223,13 +234,16 @@ export function createHUD() {
     state.hp = Math.max(0, hp);
     state.armor = Math.max(0, armor | 0);
     const pct = clamp01(state.hp / state.maxHp);
-    el.hpFill.style.width = `${pct * 100}%`;
-    el.hpNum.textContent = String(Math.ceil(state.hp));
+    const pctQ = Math.round(pct * 200) / 200;      // 0.5% steps
+    if (pctQ !== hpPctShown) { hpPctShown = pctQ; el.hpFill.style.width = `${pctQ * 100}%`; }
+    const hpInt = Math.ceil(state.hp);
+    if (hpInt !== hpShown) { hpShown = hpInt; el.hpNum.textContent = String(hpInt); }
     const low = state.hp < 45;
-    el.hpFill.classList.toggle('low', low);
-    if (el.vitals) el.vitals.classList.toggle('critical', state.hp < 35);
+    if (low !== hpLowShown) { hpLowShown = low; el.hpFill.classList.toggle('low', low); }
+    const vitCrit = state.hp < 35;
+    if (el.vitals && vitCrit !== vitCritShown) { vitCritShown = vitCrit; el.vitals.classList.toggle('critical', vitCrit); }
 
-    setArmorPips(state.armor);
+    if (state.armor !== armorShown) { armorShown = state.armor; setArmorPips(state.armor); }
 
     const critical = state.hp < 40;
     if (critical !== state.lowHp) {
@@ -243,12 +257,15 @@ export function createHUD() {
     state.reserve = Math.max(0, reserve | 0);
     if (magPips.length !== state.magSize) buildMagPips(state.magSize);
 
-    el.ammoMag.textContent = String(state.mag);
-    el.ammoReserve.textContent = String(state.reserve);
-    el.ammoMag.classList.toggle('low', state.mag <= Math.max(3, Math.ceil(state.magSize * 0.2)));
-    if (name) el.weaponName.textContent = name;
-    if (mode) el.fireMode.textContent = mode;
-    paintMagPips(state.mag);
+    if (state.mag !== magShown) {
+      magShown = state.mag;
+      el.ammoMag.textContent = String(state.mag);
+      el.ammoMag.classList.toggle('low', state.mag <= Math.max(3, Math.ceil(state.magSize * 0.2)));
+      paintMagPips(state.mag);
+    }
+    if (state.reserve !== reserveShown) { reserveShown = state.reserve; el.ammoReserve.textContent = String(state.reserve); }
+    if (name && el.weaponName.textContent !== name) el.weaponName.textContent = name;
+    if (mode && el.fireMode.textContent !== mode) el.fireMode.textContent = mode;
   }
 
   /* 1/2/3 slot strip: names + live ammo + active highlight */
@@ -287,9 +304,18 @@ export function createHUD() {
     el.waveTotal.textContent = String(total);
   }
   function setWaveProgress(p) {
-    el.waveBar.style.width = `${clamp01(p) * 100}%`;
+    const v = Math.round(clamp01(p) * 500) / 500;  // 0.2% steps
+    if (v === wavePctShown) return;
+    wavePctShown = v;
+    el.waveBar.style.width = `${v * 100}%`;
   }
-  function setObjective(t) { if (t !== undefined && t !== null) el.objective.textContent = String(t); }
+  function setObjective(t) {
+    if (t === undefined || t === null) return;
+    const s = String(t);
+    if (s === objectiveShown) return;
+    objectiveShown = s;
+    el.objective.textContent = s;
+  }
 
   /* location tag: fades in on every region change, then hides itself again */
   function setArea(name, en) {
@@ -305,10 +331,18 @@ export function createHUD() {
     areaHold = 3.6;
   }
   function setScore(score, kills) {
-    el.score.textContent = String(score);
-    if (kills !== undefined) { el.kills.textContent = String(kills); state.kills = kills; }
+    if (score !== scoreShown) { scoreShown = score; el.score.textContent = String(score); }
+    if (kills !== undefined && kills !== killsShown) {
+      killsShown = kills;
+      el.kills.textContent = String(kills);
+      state.kills = kills;
+    }
   }
-  function setGrenades(n) { el.grenades.textContent = String(n); }
+  function setGrenades(n) {
+    if (n === grenShown) return;
+    grenShown = n;
+    el.grenades.textContent = String(n);
+  }
 
   /* ------------------------------------------------------------ feedback */
   function replay(node, cls) {
@@ -358,6 +392,7 @@ export function createHUD() {
     state.dmgAngle = dirAngle;
     state.dmgAlpha = 1;
     el.dmgDirs.style.transform = `rotate(${dirAngle}rad)`;
+    dmgShown = 0.95;
     el.dmgDirs.style.opacity = '0.95';
   }
 
@@ -550,6 +585,7 @@ export function createHUD() {
     el.modeHud.dataset.mode = modeVariant(text);
     el.modeHud.classList.remove('inactive');
     // main.js drives progress every frame; clear stale values until then
+    modePctShown = 0; modeTextShown = null;
     if (el.modeFill) el.modeFill.style.width = '0%';
     if (el.modeProgressText) el.modeProgressText.textContent = '';
     if (el.modeZone) el.modeZone.classList.add('hidden');
@@ -564,13 +600,13 @@ export function createHUD() {
     if (!Number.isFinite(v)) v = 0;
     if (v > 1) v /= 100;          // accept both 0..1 and 0..100
     v = clamp01(v);
-    if (el.modeFill) el.modeFill.style.width = `${(v * 100).toFixed(2)}%`;
+    const q = Math.round(v * 200) / 200;   // 0.5% steps — per-frame callers
+    if (el.modeFill && q !== modePctShown) { modePctShown = q; el.modeFill.style.width = `${q * 100}%`; }
 
     const isActive = !(active === false || active === 0);
     const label = String(text == null ? '' : text).trim();
-    if (el.modeProgressText) {
-      el.modeProgressText.textContent = label || (isActive ? '' : '返回区域');
-    }
+    const txt = label || (isActive ? '' : '返回区域');
+    if (el.modeProgressText && txt !== modeTextShown) { modeTextShown = txt; el.modeProgressText.textContent = txt; }
     if (el.modeHud) el.modeHud.classList.toggle('inactive', !isActive);
   }
 
@@ -579,15 +615,94 @@ export function createHUD() {
     const n = typeof m === 'number' ? m : parseFloat(m);
     if (!Number.isFinite(n) || n <= 0) {
       el.modeZone.classList.add('hidden');
-      el.modeZoneText.textContent = '';
+      if (zoneTextShown !== '') { zoneTextShown = ''; el.modeZoneText.textContent = ''; }
       return;
     }
-    el.modeZoneText.textContent = `ZONE ${n < 10 ? n.toFixed(1) : Math.round(n)}m`;
+    const txt = `ZONE ${n < 10 ? n.toFixed(1) : Math.round(n)}m`;
+    if (txt !== zoneTextShown) { zoneTextShown = txt; el.modeZoneText.textContent = txt; }
     el.modeZone.classList.remove('hidden');
+  }
+
+  /**
+   * Milestone chain checklist.
+   *
+   * `state` is the serialized view from systems/milestones.js:
+   *   { index, total, kind, label, need, x, z, r, progress01, done, kills }
+   * `upcoming` is an optional array of the following step labels.
+   *
+   * Rows are rebuilt only when the visible set changes, so the per-frame
+   * caller does not thrash the DOM.
+   */
+  let msShownKey = '';
+
+  function setMilestones(state, upcoming) {
+    if (!el.msList) return;
+    if (!state || !Number.isFinite(Number(state.total))) {
+      if (msShownKey !== '') {
+        msShownKey = '';
+        el.msList.textContent = '';
+        el.msList.classList.add('hidden');
+      }
+      return;
+    }
+
+    const total = Math.max(0, Number(state.total) || 0);
+    const index = Math.max(0, Number(state.index) || 0);
+    const next = Array.isArray(upcoming) ? upcoming.slice(0, 2) : [];
+    // Rebuild only on a structural change: index, total, or the next labels.
+    const key = `${index}|${total}|${next.join('>')}|${state.done ? 'D' : ''}|${state.kind || ''}|${state.need || ''}|${state.kills || ''}`;
+    if (key === msShownKey) return;
+    msShownKey = key;
+
+    el.msList.textContent = '';
+    if (!total) { el.msList.classList.add('hidden'); return; }
+    el.msList.classList.remove('hidden');
+
+    const row = (cls, tick, text, count) => {
+      const li = document.createElement('li');
+      li.className = `ms-item${cls ? ` ${cls}` : ''}`;
+      const t = document.createElement('span');
+      t.className = 'ms-tick';
+      t.textContent = tick || '';
+      const b = document.createElement('span');
+      b.textContent = text;
+      li.append(t, b);
+      if (count) {
+        const c = document.createElement('span');
+        c.className = 'ms-count';
+        c.textContent = count;
+        li.appendChild(c);
+      }
+      return li;
+    };
+
+    // Completed steps collapse into a single summary line.
+    if (index > 0) {
+      el.msList.appendChild(row('is-done', '', `已完成 ${index}/${total}`));
+    }
+    if (state.done) {
+      el.msList.appendChild(row('is-done', '', '任务链完成'));
+      return;
+    }
+
+    const need = Number(state.need) || 0;
+    let count = '';
+    if (state.kind === 'hold') count = `${Math.floor(state.progress01 * need)}/${need}s`;
+    else if (state.kind === 'kill') count = `${Math.min(need, Number(state.kills) || 0)}/${need}`;
+    el.msList.appendChild(row('is-current', '', `阶段 ${index + 1}/${total} · ${state.label || '目标'}`, count));
+
+    for (const label of next) {
+      el.msList.appendChild(row('', '', `下一阶段 · ${label}`));
+    }
+  }
+
+  function hideMilestones() {
+    setMilestones(null);
   }
 
   function hideMode() {
     if (!el.modeHud) return;
+    hideMilestones();
     el.modeHud.classList.remove('show');
     el.modeHud.setAttribute('aria-hidden', 'true');
     // let the strip fade out with its content, then clear it
@@ -599,6 +714,7 @@ export function createHUD() {
       if (el.modeLabel) el.modeLabel.textContent = '';
       if (el.modeSub) { el.modeSub.textContent = ''; el.modeSub.classList.add('empty'); }
       el.modeHud.classList.add('no-sub');
+      modePctShown = 0; modeTextShown = null;
       if (el.modeFill) el.modeFill.style.width = '0%';
       if (el.modeProgressText) el.modeProgressText.textContent = '';
       if (el.modeZone) el.modeZone.classList.add('hidden');
@@ -866,6 +982,11 @@ export function createHUD() {
       if (v) b.classList.toggle('active', v === q);
     });
   }
+  function setFpsState(v) {
+    document.querySelectorAll('.fps-pills button').forEach((b) => {
+      b.classList.toggle('active', Number(b.dataset.fps) === Number(v));
+    });
+  }
   function syncSettingsUI() {
     setRangeValue('set-sensitivity', 'out-sensitivity', settings.sensitivity, fmt2);
     setRangeValue('set-ads', 'out-ads', settings.adsSens, fmt2);
@@ -876,6 +997,7 @@ export function createHUD() {
     setSwitch('set-wayfinder', settings.wayfinder !== false);
     setSwitch('set-voice', settings.voice !== false);
     setQualityState(settings.quality);
+    setFpsState(settings.fpsCap != null ? settings.fpsCap : 60);
     document.documentElement.classList.toggle('reduce-motion', !!settings.reduceMotion);
   }
   // main.js contract: onChange(key, value)
@@ -931,6 +1053,20 @@ export function createHUD() {
         settings.quality = q;
         setQualityState(q);
         emitSetting('quality', q);
+      });
+    }
+
+    // fps cap pills: own class so the quality handlers (here and in main.js)
+    // never mistake them for a graphics preset
+    if (el.settings) {
+      el.settings.addEventListener('click', (e) => {
+        const b = e.target && e.target.closest ? e.target.closest('.fps-pills button') : null;
+        if (!b) return;
+        const v = Number(b.dataset.fps);
+        if (![0, 30, 60, 120].includes(v)) return;
+        settings.fpsCap = v;
+        setFpsState(v);
+        emitSetting('fpsCap', v);
       });
     }
 
@@ -996,6 +1132,7 @@ export function createHUD() {
         reduceMotion: !!next.reduceMotion,
         wayfinder: next.wayfinder !== false,
         quality: String(next.quality || DEFAULT_SETTINGS.quality),
+        fpsCap: [0, 30, 60, 120].includes(Number(next.fpsCap)) ? Number(next.fpsCap) : DEFAULT_SETTINGS.fpsCap,
         voice: next.voice !== false,
       };
     }
@@ -1109,8 +1246,17 @@ export function createHUD() {
   function hideTutorial() {
     if (el.tutorial) el.tutorial.classList.remove('show');
   }
+  let atmoText = '', weatherText = '';
   function setAtmosphere(label) {
-    const text = String(label == null ? '' : label).trim();
+    atmoText = String(label == null ? '' : label).trim();
+    renderAtmoTag();
+  }
+  function setWeather(label) {
+    weatherText = String(label == null ? '' : label).trim();
+    renderAtmoTag();
+  }
+  function renderAtmoTag() {
+    const text = [atmoText, weatherText].filter(Boolean).join(' · ');
     if (!el.atmo) return;
     if (!text) { el.atmo.classList.add('hidden'); return; }
     if (el.atmoValue) el.atmoValue.textContent = text;
@@ -1323,25 +1469,38 @@ export function createHUD() {
     const k = 1 - Math.exp(-16 * dt);
     state.spreadShown += (state.spreadPx - state.spreadShown) * k;
 
-    drawCrosshair();
+    // crosshair: redraw only when the bloom is actually moving (or ADS toggled);
+    // a settled crosshair repaints an identical image 60 times a second
+    const chGap = 6.5 + state.spreadShown;
+    if (state.ads ? !chLastAds : (chLastAds || Math.abs(chGap - chLastGap) > 0.04)) {
+      drawCrosshair();
+      chLastGap = chGap;
+    }
+    chLastAds = state.ads;
 
+    // compass: dirty / ping / heading change, capped at 20 Hz
+    compassAcc += dt;
     const heading = ((state.heading % 360) + 360) % 360;
-    if (compassDirty || state.pings.length > 0 || Math.abs(heading - lastHeadingDrawn) > 0.02) {
+    if (compassAcc >= COMPASS_FRAME &&
+        (compassDirty || state.pings.length > 0 || Math.abs(heading - lastHeadingDrawn) > 0.02)) {
+      compassAcc = 0;
       drawCompass();
       lastHeadingDrawn = heading;
       compassDirty = false;
     }
 
-    // damage direction fade
+    // damage direction fade (quantized: identical opacity strings still dirty layout)
     if (state.dmgAlpha > 0) {
       state.dmgAlpha = Math.max(0, state.dmgAlpha - dt * 1.9);
-      el.dmgDirs.style.opacity = (state.dmgAlpha * 0.95).toFixed(3);
+      const v = Math.round(state.dmgAlpha * 0.95 * 40) / 40;
+      if (v !== dmgShown) { dmgShown = v; el.dmgDirs.style.opacity = v.toFixed(3); }
     }
 
     // damage flash fade
     if (state.flashAlpha > 0) {
       state.flashAlpha = Math.max(0, state.flashAlpha - dt * 3.4);
-      el.dmgFlash.style.opacity = state.flashAlpha.toFixed(3);
+      const v = Math.round(state.flashAlpha * 40) / 40;
+      if (v !== flashShown) { flashShown = v; el.dmgFlash.style.opacity = v.toFixed(3); }
     }
 
     // pings expire (force one more compass pass so the last stale marker clears)
@@ -1364,14 +1523,17 @@ export function createHUD() {
     state.heading = 0; state.dmgAlpha = 0; state.flashAlpha = 0;
     state.lowHp = false; state.kills = 0;
     state.pings.length = 0;
+    hideMilestones();
 
     el.killfeed.innerHTML = '';
-    el.dmgDirs.style.opacity = '0';
-    el.dmgFlash.style.opacity = '0';
+    el.dmgDirs.style.opacity = '0'; dmgShown = 0;
+    el.dmgFlash.style.opacity = '0'; flashShown = 0;
     el.lowhp.style.opacity = '0';
     el.reload.classList.remove('show');
-    el.score.textContent = '0';
-    el.kills.textContent = '0';
+    el.score.textContent = '0'; scoreShown = 0;
+    el.kills.textContent = '0'; killsShown = 0;
+    chLastGap = -1;            // force a crosshair repaint for the new run
+    compassAcc = 1;
     el.magPips.innerHTML = '';
     magPips = [];
     buildMagPips(30);
@@ -1410,8 +1572,8 @@ export function createHUD() {
     setHeading(h) { state.heading = h; },
     bindSettings, openSettings, closeSettings,
     get isSettingsOpen() { return settingsOpen; },
-    showUpgrades, hideUpgrades, showTutorial, hideTutorial, setAtmosphere,
-    setMode, setModeProgress, setZoneDistance, hideMode,
+    showUpgrades, hideUpgrades, showTutorial, hideTutorial, setAtmosphere, setWeather,
+    setMode, setModeProgress, setZoneDistance, hideMode, setMilestones, hideMilestones,
     bindModeSelect, setModeSelect,
     bindBigModes, setBigMode, setPlaylist, openPlaylist, closePlaylist,
     openLanModal, closeLanModal, get bigMode() { return bigMode; },
