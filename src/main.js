@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createEngine } from './core/engine.js';
+import { GAME_VERSION } from './core/version.js';
 import { createLevel } from './world/level.js';
 import { createViewmodel } from './player/viewmodel.js';
 import { createFX } from './fx/fx.js';
@@ -1342,6 +1343,8 @@ async function boot() {
       if (audio && audio.ctx) audio.ui();
     });
     updateBriefing(G.settings.runMode);
+    const menuVersionEl = document.getElementById('menu-version');
+    if (menuVersionEl) menuVersionEl.textContent = 'V' + GAME_VERSION;
     applySettings(true);
     raycaster = new THREE.Raycaster();
     raycaster.far = 160;
