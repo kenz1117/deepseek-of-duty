@@ -15,6 +15,7 @@ import { createPickups } from './world/pickups.js';
 import { createStreaks } from './systems/streaks.js';
 import { createMilestones, stepLabel } from './systems/milestones.js';
 import { createZone } from './systems/zone.js';
+import { createTeamBrain } from './systems/ai/teamBrain.js';
 import { createArtillery } from './systems/artillery.js';
 import { createLeaderboard } from './net/leaderboard.js';
 import { createNavGrid } from './systems/navgrid.js';
@@ -1266,6 +1267,12 @@ const VERSUS_RESPAWN_MS = 5000;
 
 let versusBots = [];          // [{ e: Enemy, team, respawnAt }]
 let zoneVisual = null;        // { wall, ringNext, ringNow }
+/** Per-faction squad coordination (shared intel / focus fire), host only. */
+let teamBrains = [null, null];
+let teamBrainAcc = 0;
+/** One director per faction in versus — the PvE single instance scores one
+    playerPos, which cannot serve two teams with different objectives. */
+let teamDirectors = [null, null];
 
 /** Spawn point per team inside the site rect: team 0 at the site's objective
     zone, team 1 at the opposite end of the rect. */
@@ -1301,11 +1308,137 @@ function startVersusBots(teams, lobbyPlayers) {
       versusBots.push({ e, team, respawnAt: 0 });
     }
   }
+  teamBrains = [createTeamBrain({ team: 0 }), createTeamBrain({ team: 1 })];
+  teamBrainAcc = 0;
+  teamDirectors = [
+    new AIDirector(nav, level, {}),
+    new AIDirector(nav, level, {}),
+  ];
+}
+
+/**
+ * Per-faction coordination tick (host, versus, 0.3 s cadence):
+ *   - feed each brain who is alive, who sees what (bots carry their own
+ *     canSee; humans get an honest line-of-sight approximation), and the
+ *     ring centre as the fallback objective;
+ *   - then run one director instance per faction around that faction's
+ *     tactical focus, so flank/intel/cover all orbit the shared plan.
+ */
+function updateTeamBrains(dt) {
+  if (!G.versusMode || net.role !== 'host') return;
+  teamBrainAcc += dt;
+  if (teamBrainAcc < 0.3) return;
+  const step = teamBrainAcc;
+  teamBrainAcc = 0;
+
+  const zs = zoneSys ? zoneSys.state : null;
+  for (let t = 0; t < 2; t += 1) {
+    const brain = teamBrains[t];
+    if (!brain) continue;
+
+    // squad members: bots use their own canSee; humans get an honest
+    // approximation (range gate + 2D walkable line), because the host cannot
+    // read a remote player's real view frustum.
+    const allies = [];
+    for (const b of versusBots) {
+      const e = b.e;
+      if (!e || b.team !== t || !e.alive) continue;
+      const sees = new Set();
+      if (e.canSee) {
+        for (const other of versusBots) {
+          if (other.team === t || !other.e || !other.e.alive) continue;
+          const o = other.e.root.position;
+          if (Math.hypot(o.x - e.root.position.x, o.z - e.root.position.z) < 12) {
+            sees.add(`bot:${other.e._netId}`);
+          }
+        }
+      }
+      allies.push({
+        x: e.root.position.x, z: e.root.position.z, alive: true,
+        canSee: !!e.canSee, sees, hp: e.hp,
+      });
+    }
+    const humanAlly = (r) => {
+      const sees = new Set();
+      for (const other of versusBots) {
+        if (other.team === t || !other.e || !other.e.alive) continue;
+        const o = other.e.root.position;
+        if (Math.hypot(o.x - r.x, o.z - r.z) < 45
+            && (!nav || !nav.lineWalkable || nav.lineWalkable(r.x, r.z, o.x, o.z))) {
+          sees.add(`bot:${other.e._netId}`);
+        }
+      }
+      return { x: r.x, z: r.z, alive: r.alive, canSee: r.alive, sees, hp: r.hp };
+    };
+    if (net.team === t && G.hp > 0 && G.state === 'playing') {
+      allies.push(humanAlly({ x: controller.pos.x, z: controller.pos.z, hp: G.hp }));
+    }
+    for (const r of net.remote.values()) {
+      if (r.team !== t || !r.alive) continue;
+      allies.push(humanAlly(r));
+    }
+
+    // hostile actors from this faction's point of view
+    const enemies = [];
+    for (const b of versusBots) {
+      const e = b.e;
+      if (!e || b.team === t || !e.alive) continue;
+      enemies.push({
+        id: `bot:${e._netId}`, x: e.root.position.x, z: e.root.position.z,
+        alive: true, hp: e.hp, freshness: 1 - e.hp / Math.max(1, e.maxHp),
+      });
+    }
+    for (const r of net.remote.values()) {
+      if (r.team === t || !r.alive) continue;
+      enemies.push({ id: r.id, x: r.x, z: r.z, alive: true, hp: r.hp, isHuman: true, freshness: 1 });
+    }
+    if (net.team !== t && G.hp > 0 && G.state === 'playing') {
+      enemies.push({
+        id: net.selfId, x: controller.pos.x, z: controller.pos.z,
+        alive: true, hp: G.hp, isHuman: true, freshness: 1,
+      });
+    }
+
+    brain.observe({
+      allies,
+      enemies,
+      ring: zs && !zs.finished ? { x: zs.x, z: zs.z } : null,
+    });
+    brain.tick(step);
+
+    // one director per faction, scored around that faction's shared focus
+    const focus = brain.focus || (zs ? { x: zs.x, z: zs.z } : controller.pos);
+    const squad = versusBots.filter((b) => b.team === t && b.e && b.e.alive && b.e.root.visible).map((b) => b.e);
+    if (teamDirectors[t] && squad.length) {
+      teamDirectors[t].tick(step, squad, focus, G.diff);
+    }
+  }
 }
 
 /** Nearest hostile actor for one AI soldier: humans first-class, plus fill
     bots of the other team. Co-op callers keep using nearestLanTarget. */
-function nearestHostileActor(pos, selfTeam) {
+function nearestHostileActor(pos, selfTeam, preferredId = null) {
+  // Focus fire: if the faction brain has a confirmed visible target and it is
+  // still alive, every member aims at it instead of their own nearest. That
+  // is what turns eight duelists into one squad.
+  if (preferredId != null) {
+    const pid = String(preferredId);
+    if (pid.startsWith('bot:')) {
+      const b = botById(pid.slice(4));
+      if (b && b.e && b.e.alive && b.team !== selfTeam) {
+        const o = b.e.root.position;
+        return {
+          id: pid, x: o.x, y: o.y, z: o.z,
+          hp: b.e.hp, alive: true, speed: b.e.speed || 0, team: b.team, isBot: true,
+        };
+      }
+    } else {
+      const r = net.remote.get(pid);
+      if (r && r.alive && (selfTeam == null || r.team !== selfTeam)) {
+        return { id: r.id, x: r.x, y: r.y, z: r.z, hp: r.hp, alive: true, speed: r.speed || 0, team: r.team };
+      }
+    }
+  }
   const human = nearestLanTarget(pos, selfTeam);
   let best = human;
   let bestD = Math.hypot(pos.x - best.x, pos.z - best.z);
@@ -4806,6 +4939,7 @@ function updateGame(dt) {
     if (G.versusMode) {
       updateZone(dt);
       if (net.role === 'host') {
+        updateTeamBrains(dt);
         updateVersusBots(dt);
         updateVersusRespawns();
       }
@@ -4878,7 +5012,7 @@ function updateGame(dt) {
   // AI v2: tick the shared senses, then hand out squad roles once per 0.3 s
   if (net.role !== 'client') {
   if (perception) perception.update(dt);
-  if (aiDirector && nav) aiDirector.tick(dt, enemies, controller.pos, G.diff);
+  if (aiDirector && nav && !G.versusMode) aiDirector.tick(dt, enemies, controller.pos, G.diff);
   // Versus: the grenade subsystem assumes one hostile faction and one player
   // target; both assumptions break, so it stays a co-op-only feature.
   if (equipment && !G.versusMode && !SHOT_MODE && !(net.role === 'host' && net.remote.size > 0)) {
@@ -4901,8 +5035,9 @@ function updateGame(dt) {
     if (net.role === 'host' && (net.remote.size || G.versusMode)) {
       // Versus: a bot targets the nearest hostile ACTOR (humans + enemy-team
       // bots). Co-op keeps the human-only selector; behaviour unchanged.
+      const brain = G.versusMode && e.team != null ? teamBrains[e.team] : null;
       const tgt = G.versusMode
-        ? nearestHostileActor(e.root.position, e.team)
+        ? nearestHostileActor(e.root.position, e.team, brain ? brain.priorityTargetId : null)
         : nearestLanTarget(e.root.position);
       enemyCtx.targetId = tgt.id;
       enemyCtx.playerPos.set(tgt.x, tgt.y, tgt.z);

@@ -9,11 +9,12 @@
     "preview": "vite preview --port 4173",
     "lan": "node server/lan.mjs",
     "dev:lan": "vite --port 5173 --host 0.0.0.0",
-    "test": "node tools/zone-test.mjs && node tools/milestones-test.mjs && node tools/milestones-integration-test.mjs && node tools/versus-guard-test.mjs && node tools/lan-smoke.mjs",
+    "test": "node tools/zone-test.mjs && node tools/milestones-test.mjs && node tools/milestones-integration-test.mjs && node tools/teambrain-test.mjs && node tools/versus-guard-test.mjs && node tools/lan-smoke.mjs",
     "test:milestones": "node tools/milestones-test.mjs && node tools/milestones-integration-test.mjs",
     "test:lan": "node tools/lan-smoke.mjs",
     "test:zone": "node tools/zone-test.mjs",
-    "test:versus": "node tools/versus-guard-test.mjs"
+    "test:versus": "node tools/versus-guard-test.mjs",
+    "test:brain": "node tools/teambrain-test.mjs"
   },
   "dependencies": {
     "three": "^0.169.0",

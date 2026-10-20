@@ -78,6 +78,21 @@ function check(name, ok, detail = '') {
     /netZoneMirror\.applyRemote\(snap\.zone\)/.test(mainSrc));
 }
 
+/* --- team coordination wiring (focus fire / per-faction director) --------- */
+{
+  const brainSrc = readFileSync(path.join(ROOT, 'src', 'systems', 'ai', 'teamBrain.js'), 'utf8');
+  check('teamBrain: intel only from a member sighting (anti-wallhack)',
+    /seenByAny\(e\)/.test(brainSrc) && /INTEL_TTL/.test(brainSrc));
+  check('wiring: per-bot targeting consults the brain priority',
+    /nearestHostileActor\(e\.root\.position, e\.team, brain \? brain\.priorityTargetId : null\)/.test(mainSrc));
+  check('wiring: PvE director gated off in versus (per-faction instances)',
+    /aiDirector && nav && !G\.versusMode\) aiDirector\.tick/.test(mainSrc));
+  check('wiring: coordination tick is called from the game loop',
+    /updateTeamBrains\(dt\)/.test(mainSrc));
+  check('wiring: coordination tick is host-only',
+    /function updateTeamBrains\(dt\) \{\s*\n\s*if \(!G\.versusMode \|\| net\.role !== 'host'\) return;/.test(mainSrc));
+}
+
 /* --- team assignment math (the actual logic, re-implemented + verified) --- */
 {
   // main.js assigns teams by lobby join order: host first, alternating.
