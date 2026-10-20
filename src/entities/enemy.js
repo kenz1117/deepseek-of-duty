@@ -141,6 +141,63 @@ const _ragS = {
   forward: new THREE.Vector3(0, 0, -1),
 };
 
+/**
+ * Analytic segment-vs-AABB occlusion test (see Enemy.pathBlocked).
+ * Module-level and pure so it can be unit-tested without three.js.
+ *
+ * @returns {{blocked: boolean, tEnd: number}} tEnd is the path fraction at
+ *          the blocking point (1 when clear), for tracer truncation.
+ */
+export function segmentBlockedByColliders(ax, ay, az, bx, by, bz, colliders, occluders = [], host = null) {
+  const dx = bx - ax, dz = bz - az, dy3 = by - ay;
+
+  // 3D roof decks: an elevated shooter cannot see through a deck into the room below
+  if (occluders && occluders.length && ay > by + 0.2) {
+    for (const o of occluders) {
+      if (!(ay > o.y && by < o.y - 0.05)) continue;
+      const t = (o.y - ay) / (by - ay);
+      if (t <= 0 || t >= 1) continue;
+      const x = ax + dx * t, z = az + dz * t;
+      if (x > o.x0 && x < o.x1 && z > o.z0 && z < o.z1) return { blocked: true, tEnd: t };
+    }
+  }
+
+  const cols = colliders || [];
+  const nCols = cols.length;
+  for (let k = 0; k < nCols; k++) {
+    const c = cols[k];
+    if (c === host) continue;
+    const top = c.top != null ? c.top : Infinity;
+    if (Math.min(ay, by) >= top) continue;           // whole path passes over it
+
+    // slab test: overlap of the segment with the AABB in x and z
+    const invDx = dx !== 0 ? 1 / dx : 0;
+    const invDz = dz !== 0 ? 1 / dz : 0;
+    let t0 = 0, t1 = 1;
+    if (dx !== 0) {
+      let ta = (c.x0 - ax) * invDx, tb = (c.x1 - ax) * invDx;
+      if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; }
+      if (ta > t0) t0 = ta;
+      if (tb < t1) t1 = tb;
+    } else if (ax < c.x0 || ax > c.x1) continue;
+    if (dz !== 0) {
+      let ta = (c.z0 - az) * invDz, tb = (c.z1 - az) * invDz;
+      if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; }
+      if (ta > t0) t0 = ta;
+      if (tb < t1) t1 = tb;
+    } else if (az < c.z0 || az > c.z1) continue;
+    if (t0 >= t1 || t1 <= 0 || t0 >= 1) continue;
+
+    // height along the path inside the overlap: blocked only where the
+    // eye line is below the collider top
+    const h0 = ay + dy3 * t0;
+    const h1 = ay + dy3 * t1;
+    if (h0 >= top && h1 >= top) continue;            // clears it within the overlap
+    return { blocked: true, tEnd: t0 > 0 ? t0 : 0.001 };
+  }
+  return { blocked: false, tEnd: 1 };
+}
+
 export class Enemy {
   constructor(scene, mats, colliders, rnd) {
     this.scene = scene;
@@ -792,49 +849,39 @@ export class Enemy {
    * this function allocation-free and lets it bail out on range.
    */
   canSeeTarget(targetPos, dist) {
+    return this.pathBlocked(targetPos, dist).blocked === false;
+  }
+
+  /**
+   * Analytic line-of-sight / shot-path test from this soldier's eye to a
+   * target point. Replaces the old 1.15 m sampled march, which leaked on
+   * thin walls: with a step larger than the wall thickness both samples can
+   * land on either side and the wall disappears. The slab test below is
+   * exact for every AABB, so thin cover actually blocks.
+   *
+   * Returns { blocked, tEnd } — tEnd is the path fraction at the blocking
+   * point (1 when clear), so callers can truncate a tracer against the wall
+   * instead of drawing it through.
+   */
+  pathBlocked(targetPos, dist) {
     const p = this.root.position;
     const ax = p.x, az = p.z, ay = EYE_Y + p.y;
     const bx = targetPos.x, bz = targetPos.z;
     const by = targetPos.y != null ? targetPos.y : CHEST_Y;
     const dx = bx - ax, dz = bz - az;
     const planar = dist != null ? dist : Math.hypot(dx, dz);
-    if (planar > 130) return false;
-    const steps = Math.max(2, Math.min(56, Math.floor(planar / 1.15)));
+    if (planar > 130) return { blocked: true, tEnd: 0 };
 
     // an elevated shooter ignores the footprint of the building it stands on
     // (colliders are 2D, so its own roof would otherwise block every shot)
-    const elevated = this.baseY > 0.5;
     let host = null;
-    if (elevated) {
+    if (this.baseY > 0.5) {
       for (let k = 0; k < this.colliders.length; k++) {
         const c = this.colliders[k];
         if (ax > c.x0 && ax < c.x1 && az > c.z0 && az < c.z1) { host = c; break; }
       }
     }
-    // 3D roof decks: an elevated shooter cannot see through a deck into the room below
-    if (elevated && ay > by + 0.2) {
-      for (const o of this.occluders) {
-        if (!(ay > o.y && by < o.y - 0.05)) continue;
-        const t = (o.y - ay) / (by - ay);
-        if (t <= 0 || t >= 1) continue;
-        const x = ax + dx * t, z = az + dz * t;
-        if (x > o.x0 && x < o.x1 && z > o.z0 && z < o.z1) return false;
-      }
-    }
-    const cols = this.colliders;
-    const nCols = cols.length;
-    for (let i = 1; i < steps; i++) {
-      const t = i / steps;
-      const x = ax + dx * t, z = az + dz * t;
-      const yLine = ay + (by - ay) * t;
-      for (let k = 0; k < nCols; k++) {
-        const c = cols[k];
-        if (c === host) continue;
-        if (c.top != null && c.top <= yLine) continue;   // eye line passes over it
-        if (x > c.x0 && x < c.x1 && z > c.z0 && z < c.z1) return false;
-      }
-    }
-    return true;
+    return segmentBlockedByColliders(ax, ay, az, bx, by, bz, this.colliders, this.occluders, host);
   }
 
   /** Back-compat alias — the old name, safe to keep while callers migrate. */
@@ -1707,7 +1754,15 @@ export class Enemy {
         - Math.max(0, proj - 0.04) * 0.55,
       0.05, 0.95
     );
-    const hit = Math.random() < hitChance;
+    // Final authority on every shot: the actual path from muzzle to target.
+    // fireReady trusts a 0.13-0.36 s old losCache, so a soldier that peeked
+    // and re-covered would otherwise keep hitting through the wall. A blocked
+    // path forces the shot to miss and truncates the tracer at the wall.
+    const path = this.pathBlocked(playerPos, dist);
+    const hit = !path.blocked && Math.random() < hitChance;
+    const truncateTo = path.blocked ? path.tEnd : 1;
+    const pOwn = this.root.position;
+    const ax = pOwn.x, az = pOwn.z, ay = EYE_Y + pOwn.y;
     const pan = ctx.panFor ? ctx.panFor(this.root.position) : 0;
 
     if (this.archetype === 'rusher') {
@@ -1719,7 +1774,12 @@ export class Enemy {
       const lrX = leadX * 0.10;
       const lrZ = leadZ * 0.10;
       const end = _shotEnd;
-      if (hit) {
+      if (path.blocked) {
+        // wall between us: pellets die at the wall, not at the player
+        end.set(ax + (playerPos.x - ax) * truncateTo,
+                ay + (playerPos.y - ay) * truncateTo,
+                az + (playerPos.z - az) * truncateTo);
+      } else if (hit) {
         end.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.3 + lrX, -0.12, (Math.random() - 0.5) * 0.3 + lrZ));
       } else {
         end.copy(playerPos).add(_shotSpread.set(
@@ -1751,7 +1811,11 @@ export class Enemy {
       const lsX = leadX * 0.32;
       const lsZ = leadZ * 0.32;
       const end = _shotEnd;
-      if (hit) {
+      if (path.blocked) {
+        end.set(ax + (playerPos.x - ax) * truncateTo,
+                ay + (playerPos.y - ay) * truncateTo,
+                az + (playerPos.z - az) * truncateTo);
+      } else if (hit) {
         end.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.12 + lsX, -0.1, (Math.random() - 0.5) * 0.12 + lsZ));
       } else {
         end.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.5 + lsX, -0.2, (Math.random() - 0.5) * 0.5 + lsZ));
@@ -1782,9 +1846,16 @@ export class Enemy {
       (Math.random() - 0.5) * baseErr + (Math.random() - 0.5) * 0.18 + leadOffsetZ
     );
     const target = _shotEnd.copy(playerPos).add(spread);
-    const endpoint = hit
-      ? _shotPellet.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.25, -0.15, (Math.random() - 0.5) * 0.25))
-      : target;
+    let endpoint;
+    if (path.blocked) {
+      endpoint = _shotPellet.set(ax + (playerPos.x - ax) * truncateTo,
+        ay + (playerPos.y - ay) * truncateTo,
+        az + (playerPos.z - az) * truncateTo);
+    } else if (hit) {
+      endpoint = _shotPellet.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.25, -0.15, (Math.random() - 0.5) * 0.25));
+    } else {
+      endpoint = target;
+    }
     ctx.fx.tracer(muzzle, endpoint, { color: 0xffc98a, width: 0.03, life: 0.05 });
     ctx.fx.muzzleFlash(muzzle);
     if (hit) {
