@@ -111,6 +111,41 @@ function check(name, ok, detail = '') {
   check('fill: 8 players -> zero bots', JSON.stringify(fill([4, 4])) === '[0,0]');
 }
 
+/* --- spawn spread: 8 combatants must not stack on one point --------------- */
+{
+  // versusSpawnSlot geometry for the narrowest site (port, 74 x 132)
+  const rect = { x0: 48, x1: 122, z0: -98, z1: 34 };
+  const midZ = (rect.z0 + rect.z1) / 2;
+  const slot = (team, index) => {
+    const hz0 = team === 0 ? rect.z0 + 14 : midZ + 12;
+    const hz1 = team === 0 ? midZ - 12 : rect.z1 - 14;
+    const col = index % 2;
+    const row = Math.floor(index / 2) % 2;
+    return {
+      x: (rect.x0 + 16) + col * ((rect.x1 - rect.x0) - 32),
+      z: hz0 + row * (hz1 - hz0),
+    };
+  };
+  const pts = [];
+  for (let t = 0; t < 2; t += 1) for (let i = 0; i < 4; i += 1) pts.push({ ...slot(t, i), team: t });
+  let minSame = Infinity;
+  let minCross = Infinity;
+  for (let i = 0; i < 8; i += 1) {
+    for (let j = i + 1; j < 8; j += 1) {
+      const d = Math.hypot(pts[i].x - pts[j].x, pts[i].z - pts[j].z);
+      if (pts[i].team === pts[j].team) { if (d < minSame) minSame = d; }
+      else if (d < minCross) minCross = d;
+    }
+  }
+  check('spawns: same-team slots never closer than 24 m', minSame >= 24, `${minSame.toFixed(1)} m`);
+  check('spawns: factions separated by at least 20 m at spawn', minCross >= 20, `${minCross.toFixed(1)} m`);
+  check('wiring: humans and bots both use versusSpawnSlot',
+    /versusSpawnSlot\(vsSlot\.team, vsSlot\.index/.test(mainSrc)
+      && /versusSpawnSlot\(team, counts\[team\] \+ i/.test(mainSrc));
+  check('wiring: minimap feed carries the zone ring',
+    /zone: zoneState \? \{/.test(mainSrc));
+}
+
 /* --- zone smoke inside versus context ------------------------------------- */
 {
   const { createZone } = await import('../src/systems/zone.js');

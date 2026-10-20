@@ -4527,7 +4527,10 @@ function applyLanSnapshot(snap) {
     // level bounds) or client and host rings diverge.
     G.versusMode = true;
     net.team = net.team ?? 0;
-    netZoneMirror = createZone({ rect: G.playRect || (G.site && G.site.rect) || { x0: -30, x1: 30, z0: -30, z1: 30 } });
+    netZoneMirror = createZone({
+      rect: (G.versusMode && level && level.bounds) ? { ...level.bounds }
+        : (G.playRect || (G.site && G.site.rect) || { x0: -30, x1: 30, z0: -30, z1: 30 }),
+    });
     ensureZoneVisual();
     if (hud && hud.setMode) hud.setMode('VERSUS', '蓝军 vs 红军');
   }
@@ -4863,6 +4866,19 @@ function startLanClientGame(siteId = 'street', startMsg = null) {
     // Client mirrors the host's ring read-only; visuals + damage below.
     netZoneMirror = createZone({ rect: G.site.rect });
     ensureZoneVisual();
+    // Mirror the host's slot registry from the start event so both ends spawn
+    // at the same spread-out map points, then take this client's own slot.
+    const startTeams = (startMsg && startMsg.teams) || {};
+    net.spawnSlots = {};
+    const seen = [0, 0];
+    Object.keys(startTeams).forEach((pid) => {
+      const t = startTeams[pid] ?? 0;
+      net.spawnSlots[String(pid)] = { team: t, index: seen[t]++ };
+    });
+    const mySlot = net.spawnSlots[String(net.selfId)];
+    const sp = versusSpawnSlot(mySlot ? mySlot.team : (net.team ?? 0), mySlot ? mySlot.index : 0, 3);
+    controller.revive(sp.x, sp.z);
+    controller.setLook((G.site && G.site.yaw) || -0.03, -0.015);
     if (hud && hud.setMode) hud.setMode('VERSUS', '蓝军 vs 红军');
     if (hud && hud.toast) hud.toast(`对抗模式 · 你是${net.team === 0 ? '蓝军' : '红军'}`, 3200);
   }

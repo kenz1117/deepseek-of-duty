@@ -109,6 +109,42 @@ export function createMinimap({ level }) {
       };
     });
 
+  /* Walls are static for the whole session, so rasterize them ONCE into an
+     offscreen world-space sheet; every redraw is then a single drawImage blit.
+     (The old path issued up to ~3k fillRect per redraw at 10 Hz — the biggest
+     2D canvas cost in the HUD.) */
+  let wallBake = null;
+  if (walls.length) {
+    let bx0 = Infinity, bx1 = -Infinity, bz0 = Infinity, bz1 = -Infinity;
+    for (const c of walls) {
+      if (c.x0 < bx0) bx0 = c.x0;
+      if (c.x1 > bx1) bx1 = c.x1;
+      if (c.z0 < bz0) bz0 = c.z0;
+      if (c.z1 > bz1) bz1 = c.z1;
+    }
+    bx0 -= 2; bz0 -= 2; bx1 += 2; bz1 += 2;
+    const k = Math.min(6, 2048 / Math.max(bx1 - bx0, bz1 - bz0));
+    const bc = document.createElement('canvas');
+    bc.width = Math.max(1, Math.ceil((bx1 - bx0) * k));
+    bc.height = Math.max(1, Math.ceil((bz1 - bz0) * k));
+    const bctx = bc.getContext('2d');
+    // low cover first (translucent), tall walls on top (solid) — same stacking
+    // as the live pass, with a compromise alpha between the 42m/70m stylings
+    bctx.fillStyle = 'rgba(106,118,126,0.30)';
+    for (const c of walls) {
+      if (c.tall) continue;
+      bctx.fillRect((c.x0 - bx0) * k, (c.z0 - bz0) * k,
+        Math.max(0.35 * k, (c.x1 - c.x0) * k), Math.max(0.35 * k, (c.z1 - c.z0) * k));
+    }
+    bctx.fillStyle = 'rgba(160,178,188,0.72)';
+    for (const c of walls) {
+      if (!c.tall) continue;
+      bctx.fillRect((c.x0 - bx0) * k, (c.z0 - bz0) * k,
+        Math.max(0.6 * k, (c.x1 - c.x0) * k), Math.max(0.6 * k, (c.z1 - c.z0) * k));
+    }
+    wallBake = { c: bc, x0: bx0, z0: bz0, k };
+  }
+
   let on = true;
   try { on = localStorage.getItem('dod.minimap') !== '0'; } catch (e) { /* ignore */ }
   let acc = 0;
@@ -171,41 +207,53 @@ export function createMinimap({ level }) {
 
     updateScaleBar();
 
-    // walls: 42m keeps the legacy single pass. 70m is tiered by height and
-    // widens high walls to 2-3 screen pixels so containers/platforms read as
-    // solid masses instead of 1px dashes.
-    if (range >= 70) {
-      const cssK = (wrap.clientWidth || 166) / W; // canvas px -> CSS px
-      const minHigh = Math.max(3, 2.5 / Math.max(cssK, 0.2));
-      const minLow = Math.max(1, 1.0 / Math.max(cssK, 0.2));
-      const drawWall = (c, minPx, fill) => {
-        const x = toX(c.x0);
-        const y = toY(c.z0);
-        const w = (c.x1 - c.x0) * scale;
-        const h = (c.z1 - c.z0) * scale;
-        if (x > W || y > H || x + w < 0 || y + h < 0) return;
-        ctx.fillStyle = fill;
-        ctx.fillRect(x, y, Math.max(minPx, w), Math.max(minPx, h));
-      };
-      // low / walkable-cover / ground colliders first, translucent
-      for (const c of walls) {
-        if (c.tall || c.tiny) continue;
-        drawWall(c, minLow, 'rgba(106,118,126,0.24)');
-      }
-      // tall walls on top, solid 2-3 CSS px minimum
-      for (const c of walls) {
-        if (!c.tall) continue;
-        drawWall(c, minHigh, 'rgba(176,190,198,0.80)');
-      }
-    } else {
-      for (const c of walls) {
-        const x = toX(c.x0);
-        const y = toY(c.z0);
-        const w = (c.x1 - c.x0) * scale;
-        const h = (c.z1 - c.z0) * scale;
-        if (x > W || y > H || x + w < 0 || y + h < 0) continue;
-        ctx.fillStyle = c.tall ? 'rgba(126,138,146,0.55)' : 'rgba(96,106,112,0.4)';
-        ctx.fillRect(x, y, Math.max(1, w), Math.max(1, h));
+    // walls: one blit from the static bake (see above); the source rect maps
+    // world [px-range, px+range] onto the full canvas, matching toX/toY exactly
+    if (wallBake) {
+      const bs = range * 2 * wallBake.k;
+      ctx.drawImage(wallBake.c,
+        (px - range - wallBake.x0) * wallBake.k, (pz - range - wallBake.z0) * wallBake.k, bs, bs,
+        0, 0, W, H);
+    }
+
+    // safe-zone ring (versus): darken everything outside the current ring,
+    // stroke the ring itself, then preview the next ring as a dashed white
+    // circle — the battle-royale read. Drawn before objectives so beacons
+    // stay on top.
+    const zone = s.zone;
+    if (zone && Number.isFinite(zone.x) && Number.isFinite(zone.r)) {
+      const zx = toX(zone.x);
+      const zy = toY(zone.z);
+      const zr = Math.max(4, zone.r * scale);
+
+      // outside-darkening: even-odd fill between the full canvas and the ring
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, W, H);
+      ctx.arc(zx, zy, zr, 0, Math.PI * 2, true);   // reverse winding -> hole
+      ctx.fillStyle = 'rgba(20,60,66,0.34)';
+      ctx.fill();
+      ctx.restore();
+
+      // current ring edge
+      ctx.beginPath();
+      ctx.arc(zx, zy, zr, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(89,214,201,0.92)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // next ring preview (only while the match still has phases to run)
+      if (!zone.finished && Number.isFinite(zone.nextR) && zone.nextR > 1) {
+        const nx = toX(zone.nextX);
+        const ny = toY(zone.nextZ);
+        const nr = Math.max(3, zone.nextR * scale);
+        ctx.beginPath();
+        ctx.setLineDash([4, 4]);
+        ctx.arc(nx, ny, nr, 0, Math.PI * 2);
+        ctx.strokeStyle = zone.shrinking ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.7)';
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
     }
 
