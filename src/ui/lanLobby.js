@@ -32,6 +32,11 @@ function writeStore(key, value) {
   try { if (value) localStorage.setItem(key, value); } catch (e) { /* ignore */ }
 }
 
+function defaultLanServer() {
+  if (location.protocol === 'https:') return `wss://${location.host}/lan`;
+  return `ws://${location.hostname || 'localhost'}:8790`;
+}
+
 function randomRoom() {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let out = '';
@@ -102,6 +107,17 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
     let v = String(value || '').trim();
     if (!v) return '';
     if (!/^wss?:\/\//i.test(v)) v = `ws://${v}`;
+    // HTTPS pages cannot open ws:// (mixed content). The hosted relay is
+    // published at /lan on the same origin, so migrate the common
+    // ws://<page-host>:8790 default to wss://<page-host>/lan automatically.
+    if (location.protocol === 'https:') {
+      try {
+        const u = new URL(v);
+        if (u.protocol === 'ws:' && u.hostname === location.hostname) {
+          return `wss://${location.host}/lan`;
+        }
+      } catch (e) { /* let the connection attempt report it */ }
+    }
     return v;
   }
   function normalizeRoom(value) {
@@ -131,6 +147,11 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
       setFieldError(serverEl);
       return null;
     }
+    if (location.protocol === 'https:' && /^ws:\/\//i.test(data.server)) {
+      setStatus('error', 'ERROR · HTTPS 页面不能连 ws://；纯局域网请用 http://<房主IP>:5173 打开，或填 wss:// 地址');
+      setFieldError(serverEl);
+      return null;
+    }
     if (!data.room) {
       setStatus('error', 'ERROR · 请填写房间码');
       setFieldError(roomEl);
@@ -141,6 +162,7 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
       setFieldError(nameEl);
       return null;
     }
+    if (serverEl) serverEl.value = data.server;
     if (roomEl) roomEl.value = data.room;
     if (nameEl) nameEl.value = data.name;
     writeStore(STORE.server, data.server);
@@ -273,7 +295,7 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
       const fromUrl = (() => {
         try { return new URLSearchParams(location.search).get('lan') || ''; } catch (e) { return ''; }
       })();
-      serverEl.value = readStore(STORE.server, fromUrl || `ws://${location.hostname || 'localhost'}:8790`);
+      serverEl.value = normalizeServer(readStore(STORE.server, fromUrl || defaultLanServer()));
     }
     if (roomEl && !roomEl.value) {
       const fromUrl = (() => {

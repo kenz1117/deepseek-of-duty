@@ -849,3 +849,21 @@ node tools/lan-smoke.mjs
 8. **心跳 20 秒**才能发现死连接；移动端切后台可能被误判断线。
 9. **`ready` 只是大厅状态**，是否开始、何时开始由 host/UI 决定，服务端不强制。
 10. **`ws` 是 devDependency**；只装生产依赖时 LAN 服务不会启动，需要额外安装 `ws`。
+
+
+## 12. Hosted WSS relay (dod.goodpoint.top)
+
+The public HTTPS build cannot open `ws://` (mixed content). The production host
+terminates TLS at nginx and proxies same-origin WebSocket traffic:
+
+- client default on HTTPS: `wss://<page-host>/lan`
+- nginx: `location /lan` -> `http://127.0.0.1:8790` with `Upgrade`/`Connection`
+  headers and long read/send timeouts
+- relay process: systemd `dod-lan.service`, `WorkingDirectory=/opt/dod-lan`,
+  `ExecStart=/usr/bin/node server/lan.mjs`, `LAN_PORT=8790`
+- deployment files: `server/lan.mjs`, `src/net/lanProtocol.js`, a minimal
+  `package.json` with `"type":"module"` and `node_modules/ws`
+
+This is a **central relay**, not a true peer-to-peer LAN. For a host on the
+player's own machine, still serve the game over HTTP (`npm run dev:lan`) and
+connect to `ws://<host-ip>:8790`.

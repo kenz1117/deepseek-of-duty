@@ -329,7 +329,7 @@ npm run lan                  # 中继 0.0.0.0:8790
 # 也支持 http://<房主IP>:5173/?lan=ws://<房主IP>:8790
 ```
 
-> 必须用 **HTTP 的局域网页面**（`http://<房主IP>:5173`），不要用线上 HTTPS 站点连 `ws://`——浏览器会按 mixed content 拦截。Linux 防火墙需放行 5173/8790 TCP。
+> 线上 HTTPS 版（`https://dod.goodpoint.top`）已通过 nginx 把 `/lan` 反代到本机 8790，客户端会自动用 `wss://dod.goodpoint.top/lan`，不需要再填 `ws://`。如果要让**房主自己的机器**做中继，仍需用 **HTTP 局域网页面**（`http://<房主IP>:5173`）连 `ws://<房主IP>:8790`，否则 HTTPS 页面会被 mixed content 拦截。Linux 防火墙需放行 5173/8790 TCP。
 
 - **CO-OP SURVIVAL（开放）**：2–4 名玩家，全部 **TASK FORCE 军官**（同阵营），对抗 **INSURGENT AI**；AI 每波 8–16 人，场上最多 6–12 人（随人数缩放）。每局 host 随机一个战区，客户端从快照同步出生点。
 - **VERSUS 4v4（设计稿/未开放）**：2–8 名玩家分成 TASK FORCE / INSURGENT 两阵营，AI 补位到每队 4 人；TDM 50 杀/6 分钟。当前 AI 是单阵营 PvE 导演，做可信的 bot-vs-bot 需要独立目标选择与平衡，所以 UI 明确标 `NEXT`，不装成可玩。
