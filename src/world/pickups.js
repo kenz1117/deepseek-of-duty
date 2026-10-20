@@ -362,7 +362,8 @@ function materials() {
     }),
     glow: new THREE.MeshBasicMaterial({
       vertexColors: true, transparent: true, opacity: 0.72,
-      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide,
+      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+      side: THREE.DoubleSide, forceSinglePass: true,
     }),
   };
   return mats;
