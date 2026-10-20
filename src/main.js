@@ -1338,7 +1338,7 @@ function startVersusBots(teams, lobbyPlayers) {
     for (let i = 0; i < fill; i += 1) {
       // slot index continues after the humans so the whole squad spreads out
       const sp = versusSpawnSlot(team, counts[team] + i, 2.5);
-      const e = spawnEnemy({ x: sp.x, z: sp.z, y: 0 }, { force: true });
+      const e = spawnEnemy({ x: sp.x, z: sp.z, y: 0 }, { noRing: true, force: true });
       if (!e) break;
       e.team = team;
       if (e.setDifficulty) e.setDifficulty(DIFF_TIERS[3]);
@@ -3001,8 +3001,19 @@ function spawnEnemy(pos, opts = {}) {
   const playerPos = controller.pos;
   let sp = resolveSpawn(pos.x, pos.z, pos.y || 0);
   const sealed = !!(G.operation && G.operation.spawnRect);
-  if (!sp) sp = ringSpawn() || { x: pos.x, z: pos.z, y: pos.y || 0 };
-  else if (!sealed && !opts.force && sp.y <= 1 && !spawnReachesPlayer(sp)) sp = ringSpawn() || sp;
+  // Versus bots spawn at their assigned slot, period. ringSpawn() is PvE
+  // wave semantics ("a ring around the player") — as the versus fallback it
+  // deposited the enemy team in a clump right next to the player at spawn.
+  if (opts.noRing) {
+    if (!sp) {
+      sp = (nav && nav.closestWalkable)
+        ? (nav.closestWalkable(pos.x, pos.z) || { x: pos.x, z: pos.z, y: pos.y || 0 })
+        : { x: pos.x, z: pos.z, y: pos.y || 0 };
+    }
+  } else {
+    if (!sp) sp = ringSpawn() || { x: pos.x, z: pos.z, y: pos.y || 0 };
+    else if (!sealed && !opts.force && sp.y <= 1 && !spawnReachesPlayer(sp)) sp = ringSpawn() || sp;
+  }
   const yaw = Math.atan2(-(playerPos.x - sp.x), -(playerPos.z - sp.z));
   // a shotgun rusher stranded on a platform cannot charge; keep him a rifleman
   const type = ((pos.y || 0) > 0.6 && pos.type === 'rusher') ? 'rifleman' : (pos.type || 'rifleman');
@@ -4830,7 +4841,13 @@ function nearestLanTarget(pos, selfTeam = undefined) {
   let best = {
     id: net.selfId || 'local',
     x: controller.pos.x, y: controller.pos.y, z: controller.pos.z,
-    hp: G.hp, alive: G.hp > 0, speed: controller.state.speed,
+    // The deployment window (versusGraceT) hides the local player from
+    // targeting entirely: the per-enemy loop overwrites the shared
+    // enemyCtx.playerAlive with tgt.alive, so the grace gate must live here
+    // or it is silently overwritten and bots open fire mid-deployment.
+    hp: G.hp,
+    alive: G.hp > 0 && !(G.versusMode && G.versusGraceT > 0),
+    speed: controller.state.speed,
     team: selfTeam,
   };
   let bestD = Math.hypot(pos.x - best.x, pos.z - best.z);

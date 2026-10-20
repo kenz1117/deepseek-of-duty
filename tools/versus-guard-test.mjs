@@ -146,6 +146,18 @@ function check(name, ok, detail = '') {
     /zone: zoneState \? \{/.test(mainSrc));
 }
 
+/* --- spawn integrity: no ringSpawn fallback, deployment grace ------------ */
+{
+  check('spawns: versus bots bypass the PvE ringSpawn fallback',
+    /opts\.noRing/.test(mainSrc) && /noRing: true, force: true/.test(mainSrc));
+  check('spawns: ringSpawn never runs for noRing spawns',
+    /if \(opts\.noRing\) \{[\s\S]{0,400}\} else \{[\s\S]{0,200}ringSpawn\(\)/.test(mainSrc));
+  check('deployment: grace gate lives in the targeting selector',
+    /alive: G\.hp > 0 && !\(G\.versusMode && G\.versusGraceT > 0\)/.test(mainSrc));
+  check('deployment: HUD shows the phase countdown',
+    /部署阶段/.test(mainSrc));
+}
+
 /* --- zone smoke inside versus context ------------------------------------- */
 {
   const { createZone } = await import('../src/systems/zone.js');
