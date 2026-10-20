@@ -1004,6 +1004,11 @@ export function createLevel(engine) {
     }
     d.hp = 0;
     d.destroyed = true;
+    // Cover points that relied on this prop are no longer cover. Keep the
+    // object identity: the AI cover system holds the same references.
+    for (const cp of coverPoints) {
+      if (Math.hypot(cp.x - d.def.x, cp.z - d.def.z) <= 2.3) cp.invalid = true;
+    }
     if (d.mesh.parent) d.mesh.parent.remove(d.mesh);
     const bi = bulletTargets.indexOf(d.mesh);
     if (bi >= 0) bulletTargets.splice(bi, 1);
@@ -1475,7 +1480,7 @@ export function createLevel(engine) {
     }
 
     // two enterable shops on the east plaza (x -58..-50)
-    function soukShop(g, x0, x1, z0, z1, doorW = 2.2, wallH = 3.4, roofTrim = true) {
+    function soukShop(g, x0, x1, z0, z1, doorW = 2.2, wallH = 3.4, roofTrim = true, counter = true) {
       const h = wallH, t = 0.3, door = doorW, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
       B(g, x1 - x0, 0.12, z1 - z0, mats.concrete, cx, 0.06, cz, 0, { uv: 1.6, cast: false });
       B(g, x1 - x0 + 0.4, 0.26, z1 - z0 + 0.4, mats.concreteDark, cx, h + 0.13, cz, 0, { uv: 1.6 });
@@ -1492,7 +1497,7 @@ export function createLevel(engine) {
       B(g, 0.5, 0.16, door + 0.5, mats.wood, x1 + 0.1, 2.32, cz, 0, { uv: 0.8, cast: false });
       B(g, 0.7, 0.05, door + 0.4, mats.metal, x1 + 0.35, 0.03, cz, 0, { uv: 0.6, cast: false });
       // interior: counter, shelf, lit bulb
-      B(g, 0.8, 1.0, 2.4, mats.wood, x0 + 1.0, 0.62, cz, 0, { uv: 1.0, collide: true });
+      if (counter) B(g, 0.8, 1.0, 2.4, mats.wood, x0 + 1.0, 0.62, cz, 0, { uv: 1.0, collide: true });
       B(g, 2.6, 0.08, 0.7, mats.wood, cx, 1.6, z0 + 1.1, 0, { uv: 0.8, cast: false });
       B(g, 0.9, 0.06, 0.5, mats.metalTan, cx + 0.6, 2.2, z0 + 1.0, 0, { uv: 0.6, cast: false });
       B(g, 0.5, 0.12, 0.5, mats.metalTan, cx, 2.7, cz, 0, { uv: 0.5, cast: false });
@@ -2544,7 +2549,7 @@ export function createLevel(engine) {
       solidBox(P, x, z, 2.2, 0.6, 0.9, mats.concrete, 0);
       coverPoints.push({ x: x + 1.4, z, h: false });
     }
-    soukShop(P, 52, 56, -94, -89, 1.6, 2.94, false);
+    soukShop(P, 52, 56, -94, -89, 1.6, 2.94, false, false);
     trailerSolid(P, 88.0, 2.0, 0, mats.metal);
     for (const [x, z] of [[114, -20], [114, -8], [114, 4]]) {
       B(P, 0.5, 1.0, 0.5, mats.rust, x, 0.5, z, 0, { uv: 0.6, collide: true });
@@ -2670,25 +2675,156 @@ export function createLevel(engine) {
     B(P, 0.3, 0.1, 4.6, mats.wood, 52.1, 3.26, -91.5, 0, { cast: false });
     B(P, 1.2, 0.8, 0.8, mats.metalTan, 54.4, 3.64, -92.6, 0, { uv: 0.8, cast: false });
 
-    // ---- RAIL ticket / station office (4 x 6, 1.6 m door) ----
-    soukShop(R, 16.0, 20.0, -134.0, -128.0, 1.6, 2.8);
-    B(R, 1.9, 0.5, 0.55, mats.wood, 18.0, 0.25, -132.6, 0, { uv: 0.8, collide: true });
-    B(R, 1.9, 0.5, 0.1, mats.wood, 18.0, 0.75, -132.9, 0, { cast: false });
-    B(R, 0.34, 0.24, 0.26, mats.metalTan, 17.0, 1.24, -131.0, 0, { uv: 0.5 });
-    WIN(R, 0.24, 0.14, mats.windowLitDim, 17.0, 1.32, -130.84, 0);
-    B(R, 0.34, 0.24, 0.26, mats.metal, 18.7, 1.24, -130.2, 0, { uv: 0.5 });
-    WIN(R, 1.2, 0.8, mats.windowLitDim, 17.5, 1.9, -127.97, 0);
-    for (const ox of [-0.42, 0, 0.42]) B(R, 0.06, 0.9, 0.06, mats.wood, 17.5 + ox, 1.9, -127.99, 0, { cast: false });
-    B(R, 1.3, 0.06, 0.06, mats.wood, 17.5, 2.32, -127.99, 0, { cast: false });
+    // ---- shared office door / chair / mug helpers ----
+    const officeDoor = (g, x, zc, wh, signMat) => {
+      const d = 1.6;
+      for (const s of [-1, 1]) B(g, 0.1, Math.min(wh, 2.3), 0.1, mats.wood, x - 0.03, Math.min(wh, 2.3) / 2, zc + s * (d / 2 + 0.05), 0, { cast: false });
+      B(g, 0.1, 0.12, d + 0.24, mats.wood, x - 0.03, 2.28, zc, 0, { cast: false });
+      B(g, 0.5, 0.035, d + 0.2, mats.metal, x - 0.02, 0.018, zc, 0, { cast: false });
+      const hz = zc + d / 2, leafD = 0.78, ang = 0.55;
+      B(g, 0.06, 2.02, leafD, mats.wood, x - 0.28, 1.03, hz - Math.cos(ang) * leafD / 2, ang, { cast: false });
+      for (const yy of [0.42, 1.72]) C(g, 0.035, 0.035, 0.12, 6, mats.metal, x - 0.03, yy, hz - 0.03, { rz: Math.PI / 2, cast: false });
+      B(g, 0.07, 0.09, 0.13, mats.metalTan, x - 0.44, 1.0, hz - Math.cos(ang) * 0.7, 0, { cast: false });
+      B(g, 0.05, 0.3, 0.95, signMat || mats.signB, x + 0.06, 2.55, zc, 0, { cast: false });
+    };
+    const officeChair = (g, x, z, rot = 0) => {
+      B(g, 0.42, 0.07, 0.42, mats.wood, x, 0.45, z, rot, { cast: false });
+      B(g, 0.42, 0.5, 0.06, mats.wood, x, 0.72, z - 0.19, rot, { cast: false });
+      for (const dx of [-0.16, 0.16]) for (const dz of [-0.16, 0.16]) B(g, 0.05, 0.44, 0.05, mats.metal, x + dx, 0.22, z + dz, 0, { cast: false });
+    };
+    const officeMug = (g, x, y, z) => C(g, 0.048, 0.042, 0.09, 8, mats.plasterC, x, y + 0.045, z, { cast: false });
 
-    // ---- PORT dock office interior props + lit window ----
-    B(P, 1.2, 0.8, 0.6, mats.wood, 54.4, 1.0, -92.2, 0, { uv: 0.8, collide: true });
-    B(P, 0.6, 1.8, 1.0, mats.metal, 52.4, 0.9, -92.5, 0, { uv: 0.9, collide: true });
-    B(P, 0.34, 0.24, 0.26, mats.metalTan, 54.4, 1.24, -92.2, 0, { uv: 0.5 });
-    WIN(P, 0.24, 0.14, mats.windowLitDim, 54.4, 1.32, -92.06, 0);
+    // ---- RAIL ticket / station office (4 x 6, 2.8 m, 1.6 m door) ----
+    soukShop(R, 16.0, 20.0, -134.0, -128.0, 1.6, 2.8, true, false);
+    officeDoor(R, 20.0, -131.0, 2.8, mats.signB);
+    // counter along north wall + desk/chair south + locker west + bench
+    B(R, 2.2, 1.0, 0.6, mats.wood, 17.8, 0.5, -133.35, 0, { uv: 0.8, collide: true });
+    B(R, 2.3, 0.06, 0.7, mats.metalTan, 17.8, 1.03, -133.35, 0, { cast: false });
+    B(R, 1.3, 0.75, 0.6, mats.wood, 18.6, 0.375, -129.0, 0, { uv: 0.8, collide: true });
+    officeChair(R, 18.6, -129.7, 0.1);
+    B(R, 0.62, 1.8, 0.55, mats.metal, 16.35, 0.9, -130.2, 0, { uv: 0.9, collide: true });
+    B(R, 0.5, 0.03, 0.4, mats.metalTan, 16.35, 1.82, -130.2, 0, { cast: false });
+    B(R, 0.55, 0.5, 1.6, mats.wood, 16.4, 0.25, -129.0, 0, { uv: 0.8, collide: true });
+    B(R, 0.1, 0.5, 1.6, mats.wood, 16.12, 0.75, -129.0, 0, { cast: false });
+    B(R, 0.6, 0.6, 0.6, mats.wood, 19.4, 0.3, -133.4, 0, { uv: 0.7, collide: true });
+    // radio + antenna (counter and desk), papers, mug
+    B(R, 0.36, 0.22, 0.26, mats.metalTan, 17.4, 1.12, -133.3, 0, { uv: 0.5 });
+    WIN(R, 0.24, 0.13, mats.windowLitDim, 17.4, 1.18, -133.16, 0);
+    C(R, 0.012, 0.012, 0.62, 4, mats.metal, 17.4, 1.55, -133.3, { cast: false });
+    B(R, 0.32, 0.2, 0.24, mats.metal, 18.9, 0.86, -129.0, 0, { uv: 0.5 });
+    C(R, 0.012, 0.012, 0.44, 4, mats.metal, 18.9, 1.2, -129.0, { cast: false });
+    B(R, 0.24, 0.012, 0.3, mats.signB, 18.3, 0.76, -128.85, 0, { cast: false });
+    officeMug(R, 18.7, 0.75, -128.8);
+    // wall map/board, shelf boxes / files, clock / poster
+    B(R, 1.3, 0.85, 0.05, mats.wood, 18.0, 1.9, -133.68, 0, { cast: false });
+    B(R, 1.18, 0.72, 0.04, mats.signB, 18.0, 1.9, -133.64, 0, { cast: false });
+    for (const [bx, bw, bh, bd] of [[17.2, 0.3, 0.28, 0.34], [18.2, 0.32, 0.26, 0.3], [18.9, 0.24, 0.2, 0.28]]) B(R, bw, bh, bd, mats.signC, bx, 1.68, -132.9, 0, { cast: false });
+    B(R, 0.04, 0.32, 0.32, mats.windowLitDim, 16.31, 2.2, -131.0, 0, { cast: false });
+    B(R, 0.05, 0.2, 0.02, mats.metal, 16.3, 2.26, -131.0, 0, { cast: false });
+    B(R, 0.04, 0.72, 0.52, mats.signA, 16.31, 1.45, -132.3, 0, { cast: false });
+    addPoint(18, 2.45, -131, 0xffb066, 0.6, 6, 1.5);
+    pool(R, 18, 0.02, -131, 1.35);
+
+    // ---- PORT dock office (4 x 5, 2.94 m, 1.6 m door) ----
+    soukShop(P, 52, 56, -94, -89, 1.6, 2.94, false, false);
+    officeDoor(P, 56.0, -91.5, 2.94, mats.signC);
+    B(P, 1.2, 0.75, 0.6, mats.wood, 53.4, 0.375, -90.2, 0, { uv: 0.8, collide: true });
+    officeChair(P, 53.4, -90.8, 0.15);
+    B(P, 0.62, 1.8, 0.55, mats.metal, 55.4, 0.9, -93.4, 0, { uv: 0.9, collide: true });
+    B(P, 0.5, 0.03, 0.4, mats.metalTan, 55.4, 1.82, -93.4, 0, { cast: false });
+    B(P, 0.6, 0.6, 0.6, mats.wood, 52.7, 0.3, -89.6, 0, { uv: 0.7, collide: true });
+    B(P, 0.34, 0.22, 0.26, mats.metalTan, 53.4, 0.87, -90.2, 0, { uv: 0.5 });
+    WIN(P, 0.24, 0.13, mats.windowLitDim, 53.4, 0.93, -90.06, 0);
+    C(P, 0.012, 0.012, 0.5, 4, mats.metal, 53.4, 1.3, -90.2, { cast: false });
+    B(P, 0.24, 0.012, 0.3, mats.signB, 53.9, 0.76, -90.05, 0, { cast: false });
+    officeMug(P, 53.1, 0.75, -90.1);
+    B(P, 1.3, 0.85, 0.05, mats.wood, 54.0, 1.9, -89.32, 0, { cast: false });
+    B(P, 1.18, 0.72, 0.04, mats.signB, 54.0, 1.9, -89.28, 0, { cast: false });
+    for (const [bx, bw, bh, bd] of [[53.0, 0.3, 0.28, 0.34], [54.0, 0.3, 0.26, 0.3], [54.9, 0.24, 0.2, 0.28]]) B(P, bw, bh, bd, mats.signC, bx, 1.68, -92.9, 0, { cast: false });
+    B(P, 0.04, 0.32, 0.32, mats.windowLitDim, 52.31, 2.2, -91.5, 0, { cast: false });
+    B(P, 0.05, 0.2, 0.02, mats.metal, 52.3, 2.26, -91.5, 0, { cast: false });
+    B(P, 0.04, 0.72, 0.52, mats.signA, 52.31, 1.45, -92.9, 0, { cast: false });
     WIN(P, 1.1, 0.7, mats.windowLitDim, 54.0, 1.9, -94.02, Math.PI);
     for (const ox of [-0.45, 0, 0.45]) B(P, 0.05, 0.8, 0.06, mats.wood, 54.0 + ox, 1.9, -94.06, 0, { cast: false });
     B(P, 1.2, 0.06, 0.06, mats.wood, 54.0, 1.9, -94.06, 0, { cast: false });
+    addPoint(54, 2.5, -91.5, 0xffb066, 0.6, 6, 1.5);
+    pool(P, 54, 0.02, -91.5, 1.35);
+
+    // ---- PORT container-top catwalk: office roof -> container 1 -> container 2 (3.20 m) ----
+    const cWall = (x, z, w, d, m = mats.metal) => B(P, w, 3.2, d, m, x, 1.6, z, 0, { uv: 1.5, collide: true });
+    const cRail = (x, z0, z1, axis) => {
+      for (const z of [z0, z1]) B(P, 0.07, 0.07, axis === 'z' ? 0.07 : 0.07, mats.metal, x, 4.05, z, 0, { cast: false });
+    };
+    // container 1 shell (hollow, 58..70 x -95..-90); bridge gaps at z -92.3..-90.7
+    cWall(58, -93.65, 0.24, 2.7);
+    cWall(58, -90.35, 0.24, 0.7);
+    cWall(70, -93.65, 0.24, 2.7);
+    cWall(70, -90.35, 0.24, 0.7);
+    cWall(64, -95, 12, 0.24);
+    cWall(64, -90, 12, 0.24);
+    B(P, 12, 0.16, 5, mats.metalTan, 64, 3.12, -92.5, 0, { uv: 1.8 });
+    for (let x = 58.6; x < 70; x += 1.4) B(P, 0.05, 2.9, 0.05, mats.rust, x, 1.55, -94.83, 0, { cast: false });
+    for (let x = 58.6; x < 70; x += 1.4) B(P, 0.05, 2.9, 0.05, mats.rust, x, 1.55, -90.17, 0, { cast: false });
+    for (let z = -94.4; z < -90; z += 1.1) B(P, 0.05, 2.9, 0.05, mats.rust, 58.17, 1.55, z, 0, { cast: false });
+    for (let z = -94.4; z < -90; z += 1.1) B(P, 0.05, 2.9, 0.05, mats.rust, 69.83, 1.55, z, 0, { cast: false });
+    // visible top deck plate + rails/edge trim
+    B(P, 11.7, 0.08, 4.7, mats.metal, 64, 3.22, -92.5, 0, { uv: 2.2, cast: false });
+    for (const z of [-95, -90]) {
+      B(P, 12, 0.08, 0.08, mats.rust, 64, 4.0, z, 0, { cast: false });
+      B(P, 12, 0.08, 0.08, mats.rust, 64, 3.45, z, 0, { cast: false });
+      for (let x = 58; x <= 70; x += 2) B(P, 0.07, 1.0, 0.07, mats.metal, x, 3.7, z, 0, { cast: false });
+    }
+    for (const x of [58, 70]) {
+      for (const [za, zb] of [[-95, -92.3], [-90.7, -90]]) {
+        B(P, 0.08, 0.08, zb - za, mats.rust, x, 4.0, (za + zb) / 2, 0, { cast: false });
+        B(P, 0.08, 0.08, zb - za, mats.rust, x, 3.45, (za + zb) / 2, 0, { cast: false });
+        for (let z = za; z <= zb; z += 2) B(P, 0.07, 1.0, 0.07, mats.metal, x, 3.7, z, 0, { cast: false });
+      }
+    }
+    B(P, 1.1, 0.08, 0.9, mats.metalTan, 65.5, 3.28, -93.2, 0, { uv: 0.8, cast: false });
+    B(P, 1.0, 0.5, 0.8, mats.metal, 65.5, 3.45, -93.2, 0, { uv: 0.8 });
+    // container 2 shell (72..84 x -95..-90); catwalk gap on west
+    cWall(72, -93.65, 0.24, 2.7);
+    cWall(72, -90.35, 0.24, 0.7);
+    cWall(84, -92.5, 0.24, 5);
+    cWall(78, -95, 12, 0.24);
+    cWall(78, -90, 12, 0.24);
+    B(P, 12, 0.16, 5, mats.metalTan, 78, 3.12, -92.5, 0, { uv: 1.8 });
+    for (let x = 72.6; x < 84; x += 1.4) B(P, 0.05, 2.9, 0.05, mats.rust, x, 1.55, -94.83, 0, { cast: false });
+    for (let x = 72.6; x < 84; x += 1.4) B(P, 0.05, 2.9, 0.05, mats.rust, x, 1.55, -90.17, 0, { cast: false });
+    for (let z = -94.4; z < -90; z += 1.1) B(P, 0.05, 2.9, 0.05, mats.rust, 83.83, 1.55, z, 0, { cast: false });
+    B(P, 11.7, 0.08, 4.7, mats.metal, 78, 3.22, -92.5, 0, { uv: 2.2, cast: false });
+    for (const z of [-95, -90]) {
+      B(P, 12, 0.08, 0.08, mats.rust, 78, 4.0, z, 0, { cast: false });
+      B(P, 12, 0.08, 0.08, mats.rust, 78, 3.45, z, 0, { cast: false });
+      for (let x = 72; x <= 84; x += 2) B(P, 0.07, 1.0, 0.07, mats.metal, x, 3.7, z, 0, { cast: false });
+    }
+    for (const [za, zb] of [[-95, -92.3], [-90.7, -90]]) {
+      B(P, 0.08, 0.08, zb - za, mats.rust, 72, 4.0, (za + zb) / 2, 0, { cast: false });
+      B(P, 0.08, 0.08, zb - za, mats.rust, 72, 3.45, (za + zb) / 2, 0, { cast: false });
+      for (let z = za; z <= zb; z += 2) B(P, 0.07, 1.0, 0.07, mats.metal, 72, 3.7, z, 0, { cast: false });
+    }
+    B(P, 0.08, 0.08, 5, mats.rust, 84, 4.0, -92.5, 0, { cast: false });
+    B(P, 0.08, 0.08, 5, mats.rust, 84, 3.45, -92.5, 0, { cast: false });
+    for (let z = -95; z <= -90; z += 2) B(P, 0.07, 1.0, 0.07, mats.metal, 84, 3.7, z, 0, { cast: false });
+    for (const z of [-93.4, -91.6]) B(P, 0.1, 2.7, 0.08, mats.metalTan, 84.14, 1.4, z, 0, { uv: 0.8, cast: false });
+    B(P, 2.2, 0.08, 0.9, mats.metalTan, 80.5, 3.28, -91.2, 0, { uv: 0.8, cast: false });
+    // bridge (office roof -> container 1) + catwalk (container 1 -> 2)
+    B(P, 2.0, 0.14, 1.6, mats.metal, 57, 3.13, -91.5, 0, { uv: 1.4 });
+    B(P, 2.0, 0.14, 1.6, mats.metal, 71, 3.13, -91.5, 0, { uv: 1.4 });
+    for (const x of [57, 71]) {
+      for (const z of [-92.27, -90.73]) {
+        B(P, 1.7, 0.07, 0.07, mats.rust, x, 4.0, z, 0, { cast: false });
+        for (const dx of [-0.8, 0.8]) B(P, 0.07, 1.0, 0.07, mats.metal, x + dx, 3.65, z, 0, { cast: false });
+      }
+    }
+    B(P, 0.5, 0.04, 2.0, mats.metal, 57, 3.23, -91.5, 0, { cast: false });
+    // roof zones / spawns / covers
+    ROOF_ZONES.push({ x0: 56, x1: 58, z0: -92.3, z1: -90.7, y: 3.2 });
+    addRoof(58, 70, -95, -90, 3.2, 64.0, -92.5, 60.0, -93.2);
+    ROOF_COVERS.push({ x: 68.0, z: -91.2, y: 3.2, h: false }); coverPoints.push({ x: 68.0, z: -91.2, y: 3.2, h: false });
+    ROOF_ZONES.push({ x0: 70, x1: 72, z0: -92.3, z1: -90.7, y: 3.2 });
+    addRoof(72, 84, -95, -90, 3.2, 78.0, -92.5, 78.0, -91.0);
 
     // ---- rail warehouse open loading bay (plate + frame, door path stays clear) ----
     B(R, 4.0, 0.06, 5.8, mats.concreteDark, -4.0, 0.03, -179.0, 0, { uv: 1.4, cast: false });
@@ -2710,7 +2846,7 @@ export function createLevel(engine) {
       { id: 'port-break-crate', x: 76.0, z: -70.0, w: 1.0, h: 1.0, d: 1.0, mat: 'wood', hp: 55 },
       { id: 'port-break-sacks', x: 86.0, z: -78.0, w: 1.8, h: 1.0, d: 0.9, mat: 'sandbag', hp: 120 },
       { id: 'port-break-rail', x: 92.0, z: -74.0, w: 1.6, h: 1.0, d: 0.45, mat: 'metal', hp: 80 },
-      { id: 'port-break-crate2', x: 62.0, z: -90.0, w: 1.1, h: 1.1, d: 1.1, mat: 'wood', hp: 60 },
+      { id: 'port-break-crate2', x: 88.0, z: -84.0, w: 1.1, h: 1.1, d: 1.1, mat: 'wood', hp: 60 },
     );
 
 

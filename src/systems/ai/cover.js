@@ -91,6 +91,12 @@ export function createCoverSystem(level, nav) {
   function find(e, playerPos, opts = {}) {
     const maxFromEnemy = opts.maxFromEnemy || 15;
     const reserved = opts.reserved || null;
+    // a "fresh" fire-direction hint (last few seconds of incoming rounds)
+    // is treated as a known threat lane; cover closer to the inbound axis
+    // is downgraded so the soldier is not sent right back into the fire.
+    const threat = (e.fireBearingT && e.fireBearingT > 0.1)
+      ? { x: e.fireBearingX || 0, z: e.fireBearingZ || 0 }
+      : null;
     const px = e.root.position.x, pz = e.root.position.z;
     let best = null, bestScore = -Infinity;
 
@@ -104,11 +110,24 @@ export function createCoverSystem(level, nav) {
       if (!blocksCrouched(x, z, playerPos.x, playerPos.z)) return;
       let score = 5 - Math.abs(dp - 15) * 0.22 - de * 0.30;
       if (nav && !nav.lineWalkable(px, pz, x, z)) score -= 1.4;
+      // penalty for cover that sits between the soldier and a known fire
+      // direction: hiding behind something on the fire axis is fine for
+      // the cover test, but it tells the soldier they are still facing
+      // the threat lane. We nudge them sideways instead.
+      if (threat) {
+        const tx = x - px, tz = z - pz;
+        const tl = Math.hypot(tx, tz) || 1;
+        const align = (tx / tl) * threat.x + (tz / tl) * threat.z;
+        if (align > 0.45) score -= 1.6;          // cover sits "in front" of the fire direction
+        else if (align < -0.45) score += 0.6;    // cover sits off-axis: better flank, less obvious
+      }
+      // peer-spread: cover 1.4 m from a chosen cover is suspicious, but
+      // we want some breathing room, not just clutter. Soft penalty.
       if (best && Math.hypot(best.x - x, best.z - z) < 1.4) return;
       if (score > bestScore) { bestScore = score; best = { x, z }; }
     };
 
-    for (const cp of points) test(cp.x, cp.z);
+    for (const cp of points) { if (!cp.invalid) test(cp.x, cp.z); }
 
     if (maxFromEnemy >= 12) {
       const faces = nearbyFaces(e, playerPos, maxFromEnemy);
