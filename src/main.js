@@ -1567,12 +1567,14 @@ function startZone() {
     ? { ...level.bounds }
     : (G.playRect || (G.site && G.site.rect));
   if (!rect) return;
-  zoneSys = createZone({ rect });
+  zoneSys = createZone({ rect, startDelay: 120, warnAt: 15 });
+  G.zoneWarned = false;
   ensureZoneVisual();
 }
 
 function stopZone() {
   zoneSys = null;
+  G.zoneWarned = false;
   disposeZoneVisual();
 }
 
@@ -1588,6 +1590,23 @@ function applyZoneDamage(amount) {
   }
 }
 
+function announceZoneWarning() {
+  if (G.zoneWarned) return;
+  G.zoneWarned = true;
+  if (hud && hud.radio) hud.radio('VEGA', '毒圈将在 15 秒后开始收缩。', 4800);
+  try {
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      const u = new SpeechSynthesisUtterance('毒圈将在十五秒后开始收缩');
+      u.lang = 'zh-CN';
+      u.rate = 1.05;
+      u.pitch = 0.78;
+      u.volume = 0.8;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    }
+  } catch (e) { /* voice is optional */ }
+}
+
 function updateZone(dt) {
   // authoritative on the host, mirror on the client — both drive visuals
   const zs = net.role === 'host'
@@ -1595,8 +1614,13 @@ function updateZone(dt) {
     : (netZoneMirror ? netZoneMirror.update(dt, controller.pos.x, controller.pos.z) : null);
   if (!zs) return;
 
-  // gas damage from the authoritative-or-mirrored ring
-  if (zs.distance > 0.5) applyZoneDamage(zs.dps * dt);
+  if (!zs.started) {
+    if (zs.delayLeft <= 15) announceZoneWarning();
+    // Ring is announced/previewed but does not hurt until its 2-minute start.
+  } else if (zs.distance > 0.5) {
+    // gas damage from the authoritative-or-mirrored ring
+    applyZoneDamage(zs.dps * dt);
+  }
 
   if (zoneVisual) {
     zoneVisual.wall.position.x = zs.x;
@@ -1618,12 +1642,18 @@ function updateZone(dt) {
     hud.setZoneDistance(Math.round(zs.distance));
   }
 
-  // objective line: team score + ring countdown (replaces "clear hostiles")
+  // objective line: 2-minute arming countdown, then score + ring countdown
   if (hud && hud.setObjective) {
-    const mins = Math.floor(zs.eta / 60);
-    const secs = String(Math.floor(zs.eta % 60)).padStart(2, '0');
-    const phase = zs.finished ? '最终圈' : (zs.shrinking ? '收缩中' : `缩圈 ${mins}:${secs}`);
-    hud.setObjective(`蓝 ${G.teamScores[0]} : ${G.teamScores[1]} 红 · ${phase}`);
+    if (!zs.started) {
+      const left = Math.max(0, Math.ceil(zs.delayLeft));
+      const mm = Math.floor(left / 60), ss = String(left % 60).padStart(2, '0');
+      hud.setObjective(`蓝 ${G.teamScores[0]} : ${G.teamScores[1]} 红 · 毒圈 ${mm}:${ss} 后开启`);
+    } else {
+      const mins = Math.floor(zs.eta / 60);
+      const secs = String(Math.floor(zs.eta % 60)).padStart(2, '0');
+      const phase = zs.finished ? '最终圈' : (zs.shrinking ? '收缩中' : `缩圈 ${mins}:${secs}`);
+      hud.setObjective(`蓝 ${G.teamScores[0]} : ${G.teamScores[1]} 红 · ${phase}`);
+    }
   }
 }
 
@@ -4530,7 +4560,9 @@ function applyLanSnapshot(snap) {
     netZoneMirror = createZone({
       rect: (G.versusMode && level && level.bounds) ? { ...level.bounds }
         : (G.playRect || (G.site && G.site.rect) || { x0: -30, x1: 30, z0: -30, z1: 30 }),
+      startDelay: 120, warnAt: 15,
     });
+    G.zoneWarned = false;
     ensureZoneVisual();
     if (hud && hud.setMode) hud.setMode('VERSUS', '蓝军 vs 红军');
   }

@@ -61,7 +61,7 @@ export function defaultPhases(rectW = 72, rectH = 110) {
     // Phase 1 is forced to cover the whole rect (plus 3% so a spawn in a
     // corner is safely inside rather than on the exact circle edge); easing it
     // would leave rect corners outside the opening ring, spawning in the gas.
-    const r = i === 0 ? Math.max(10, cover * 1.03) : cover + (finalR - cover) * (t * t * 0.7 + t * 0.3);
+    const r = i === 0 ? Math.max(10, cover * 0.94) : cover + (finalR - cover) * (t * t * 0.7 + t * 0.3);
     phases.push({
       wait: Math.max(8, 20 - i * 2),       // seconds the ring is announced
       shrink: Math.max(6, 24 - i * 3),     // seconds to interpolate inward
@@ -92,8 +92,11 @@ export function createZone({
   rect = { x0: -30, x1: 30, z0: -30, z1: 30 },
   center = null,
   rng = Math.random,
+  startDelay = 0,
+  warnAt = 15,
   onPhase = null,
   onShrink = null,
+  onWarning = null,
   onFinal = null,
 } = {}) {
   const rand = typeof rng === 'function' ? rng : Math.random;
@@ -103,7 +106,13 @@ export function createZone({
   const maxInscribed = Math.max(6, Math.min(w, d) / 2);
 
   const phases = defaultPhases(w, d);
-  const startR = phases[0].radius;
+  // Opening circle must cover the map; phase 0 shrinks inward from here.
+  const startR = Math.max(phases[0].radius, Math.hypot(w, d) / 2 * 1.03);
+  const preDelay = Math.max(0, Number(startDelay) || 0);
+  const warnLead = Math.max(1, Number(warnAt) || 15);
+  let started = preDelay <= 0;
+  let preT = 0;
+  let warned = false;
 
   // Centre clamping. Phase 1 is wide enough to cover the whole rect, so it must
   // stay pinned to the rect centre; once the ring is inside the rect the centre
@@ -167,6 +176,9 @@ export function createZone({
       nextR: next.r,
       // seconds until the ring starts moving again (or until it finishes)
       eta: p ? (shrinking ? Math.max(0, p.shrink - t) : Math.max(0, p.wait - t)) : 0,
+      started,
+      delayLeft: started ? 0 : Math.max(0, preDelay - preT),
+      startDelay: preDelay,
       shrinking,
       finished,
       dps: p ? p.dps : 0,
@@ -211,6 +223,20 @@ export function createZone({
   }
 
   function update(dt, px = null, pz = null) {
+    if (!started) {
+      preT += dt;
+      if (!warned && preDelay > 0 && preT >= preDelay - warnLead) {
+        warned = true;
+        if (typeof onWarning === 'function') onWarning();
+      }
+      if (preT >= preDelay) {
+        started = true;
+        preT = preDelay;
+      } else {
+        if (Number.isFinite(px) && Number.isFinite(pz)) lastDistance = 0;
+        return lastStatus();
+      }
+    }
     if (finished) {
       if (Number.isFinite(px) && Number.isFinite(pz)) lastDistance = outsideDistance(px, pz);
       return lastStatus();
@@ -250,6 +276,9 @@ export function createZone({
 
   function reset() {
     phaseIndex = 0;
+    started = preDelay <= 0;
+    preT = 0;
+    warned = false;
     t = 0;
     shrinking = false;
     finished = false;
@@ -269,6 +298,9 @@ export function createZone({
     return {
       phase: s.phase,
       total: s.total,
+      started: s.started,
+      delayLeft: Number(s.delayLeft.toFixed(1)),
+      startDelay: Number(s.startDelay.toFixed(1)),
       x: Number(s.x.toFixed(2)),
       z: Number(s.z.toFixed(2)),
       r: Number(s.r.toFixed(2)),
@@ -291,6 +323,12 @@ export function createZone({
     cur.r = n(data.r, cur.r);
     next = { x: n(data.nextX, cur.x), z: n(data.nextZ, cur.z), r: n(data.nextR, cur.r) };
     phaseIndex = n(data.phase, phaseIndex);
+    started = data.started !== false;
+    if (Number.isFinite(Number(data.startDelay))) {
+      preDelay = Math.max(0, Number(data.startDelay));
+    }
+    preT = started ? preDelay : Math.max(0, preDelay - n(data.delayLeft, 0));
+    warned = started || n(data.delayLeft, 0) <= 15;
     shrinking = data.shrinking === true;
     finished = data.finished === true;
     t = 0;
