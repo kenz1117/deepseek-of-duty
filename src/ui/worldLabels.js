@@ -71,8 +71,12 @@ export function createWorldLabels({ camera, level } = {}) {
 
   const _fwd = new THREE.Vector3();
   const _proj = new THREE.Vector3();
-  let on = true;
+  const _origin = new THREE.Vector3();
+  const _target = new THREE.Vector3();
+  const _ray = new THREE.Raycaster();
+  const _blocked = new Map();
   let occlT = 0;
+  let on = true;
   const visibleSet = new Set();
 
   function setVisible(v) {
@@ -98,7 +102,24 @@ export function createWorldLabels({ camera, level } = {}) {
       cand.push({ t, dist, dot });
     }
     cand.sort((a, b) => a.dist - b.dist);
-    const keep = cand.slice(0, 4);
+    // Occlusion: a wall between the camera and the label hides it. This also
+    // stops district tags leaking through the walls when the player is indoors.
+    occlT -= dt;
+    if (occlT <= 0) {
+      occlT = 0.22;
+      const objects = level && level.bulletTargets ? level.bulletTargets : null;
+      if (objects) {
+        _origin.copy(cam.position);
+        for (const c of cand.slice(0, 6)) {
+          _target.set(c.t.p.x, c.t.p.y, c.t.p.z);
+          _ray.set(_origin, _target.sub(_origin).normalize());
+          _ray.far = Math.max(1, c.dist - 0.8);
+          const hit = _ray.intersectObjects(objects, false)[0];
+          _blocked.set(c.t, !!hit);
+        }
+      }
+    }
+    const keep = cand.filter((c) => !_blocked.get(c.t)).slice(0, 4);
     visibleSet.clear();
     for (const c of keep) visibleSet.add(c.t);
     for (const t of tags) {

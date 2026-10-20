@@ -1475,11 +1475,11 @@ export function createLevel(engine) {
     }
 
     // two enterable shops on the east plaza (x -58..-50)
-    function soukShop(g, x0, x1, z0, z1) {
-      const h = 3.4, t = 0.3, door = 2.2, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+    function soukShop(g, x0, x1, z0, z1, doorW = 2.2, wallH = 3.4, roofTrim = true) {
+      const h = wallH, t = 0.3, door = doorW, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
       B(g, x1 - x0, 0.12, z1 - z0, mats.concrete, cx, 0.06, cz, 0, { uv: 1.6, cast: false });
       B(g, x1 - x0 + 0.4, 0.26, z1 - z0 + 0.4, mats.concreteDark, cx, h + 0.13, cz, 0, { uv: 1.6 });
-      B(g, x1 - x0, 0.16, z1 - z0, mats.wood, cx, h + 0.34, cz, 0, { uv: 1.4, cast: false });
+      if (roofTrim) B(g, x1 - x0, 0.16, z1 - z0, mats.wood, cx, h + 0.34, cz, 0, { uv: 1.4, cast: false });
       // west / north / south walls are solid; east wall takes the door
       B(g, t, h, z1 - z0, wallMats[0], x0 + t / 2, h / 2, cz, 0, { collide: true, uv: 1.6 });
       B(g, x1 - x0, h, t, wallMats[2], cx, h / 2, z0 + t / 2, 0, { collide: true, uv: 1.6 });
@@ -2544,7 +2544,7 @@ export function createLevel(engine) {
       solidBox(P, x, z, 2.2, 0.6, 0.9, mats.concrete, 0);
       coverPoints.push({ x: x + 1.4, z, h: false });
     }
-    officeSolid(P, 56.0, -90.0, 4.0, 3.0, mats.plasterB);
+    soukShop(P, 52, 56, -94, -89, 1.6, 2.94, false);
     trailerSolid(P, 88.0, 2.0, 0, mats.metal);
     for (const [x, z] of [[114, -20], [114, -8], [114, 4]]) {
       B(P, 0.5, 1.0, 0.5, mats.rust, x, 0.5, z, 0, { uv: 0.6, collide: true });
@@ -2607,6 +2607,111 @@ export function createLevel(engine) {
       B(P, 0.7, 0.1, 0.7, mats.metal, x, 1.05, z, 0, { cast: false });
       coverPoints.push({ x: x + 0.8, z, h: false });
     }
+
+
+    /* ================= vertical routes / interiors / destructibles ================= */
+    const rampVis = (g, x0, x1, z0, z1, rise) => {
+      const dz = Math.abs(z1 - z0), len = Math.hypot(dz, rise), ang = Math.atan2(rise, dz);
+      const rx = z1 < z0 ? ang : -ang;
+      B(g, x1 - x0, 0.14, len + 0.1, mats.metal, (x0 + x1) / 2, rise / 2, (z0 + z1) / 2, 0, { rx, uv: 1.2, cast: false });
+      for (const x of [x0 + 0.05, x1 - 0.05]) {
+        B(g, 0.06, 0.06, len, mats.rust, x, rise / 2 + 0.95, (z0 + z1) / 2, 0, { rx, cast: false });
+        for (let i = 0; i <= 5; i++) {
+          const t = i / 5;
+          B(g, 0.07, 0.95, 0.07, mats.rust, x, rise * t + 0.47, z0 + (z1 - z0) * t, 0, { cast: false });
+        }
+      }
+      for (let i = 1; i < 8; i++) {
+        const t = i / 8;
+        B(g, x1 - x0 - 0.08, 0.05, 0.3, mats.rust, (x0 + x1) / 2, rise * t + 0.02, z0 + (z1 - z0) * t, 0, { cast: false });
+      }
+      B(g, x1 - x0 + 0.2, 0.12, 1.2, mats.concrete, (x0 + x1) / 2, rise + 0.06, z1, 0, { uv: 1.0, cast: false });
+    };
+    const addRoof = (x0, x1, z0, z1, y, sx, sz, cx, cz) => {
+      ROOF_ZONES.push({ x0, x1, z0, z1, y });
+      if (sx !== undefined) { ROOF_SPAWNS.push({ x: sx, z: sz, y }); spawnPoints.push({ x: sx, z: sz, y }); }
+      if (cx !== undefined) { ROOF_COVERS.push({ x: cx, z: cz, y, h: false }); coverPoints.push({ x: cx, z: cz, y, h: false }); }
+    };
+
+    // ---- OLD SOUK: exterior stair from the plaza to the shop roof (3.82 m) ----
+    EXPANSION_RAMPS.push({ id: 'souk-shop', x0: -49.0, x1: -47.4, z0: 15.6, z1: 9.4, rise: 3.82 });
+    rampVis(S, -49.0, -47.4, 15.6, 9.4, 3.82);
+    addRoof(-58, -50, 4.6, 12, 3.82, -54.0, 10.4, -52.0, 8.4);
+    addRoof(-50, -47.4, 7.2, 9.4, 3.82);
+    ROOF_COVERS.push({ x: -55.6, z: 5.6, y: 3.82, h: false }); coverPoints.push({ x: -55.6, z: 5.6, y: 3.82, h: false });
+    B(S, 7.6, 0.1, 0.3, mats.wood, -53.8, 3.9, 4.75, 0, { cast: false });
+    B(S, 0.3, 0.1, 7.2, mats.wood, -57.7, 3.9, 8.3, 0, { cast: false });
+    B(S, 1.4, 1.0, 0.9, mats.metalTan, -55.8, 4.35, 10.8, 0, { uv: 0.8, cast: false });
+    B(S, 0.9, 0.7, 0.7, mats.wood, -51.6, 4.2, 6.0, 0, { uv: 0.7, cast: false });
+
+    // ---- RAIL: external loading deck + stair, bridged to the station platform (4.2 m) ----
+    EXPANSION_RAMPS.push({ id: 'rail-load', x0: -1.8, x1: -0.4, z0: -170.0, z1: -162.0, rise: 4.2 });
+    rampVis(R, -1.8, -0.4, -170.0, -162.0, 4.2);
+    B(R, 4.0, 0.26, 10.0, mats.concrete, -4.0, 4.07, -157.0, 0, { uv: 1.8 });
+    for (const [x, z] of [[-6.0, -160.0], [-6.0, -154.0], [-2.0, -162.0], [-2.0, -152.0]]) {
+      B(R, 0.18, 4.2, 0.18, mats.metal, x, 2.1, z, 0, { uv: 0.8, collide: true });
+    }
+    for (const z of [-161.8, -152.2]) B(R, 4.0, 0.07, 0.07, mats.metal, -4.0, 5.1, z, 0, { cast: false });
+    for (const x of [-5.95, -2.05]) B(R, 0.07, 0.07, 9.6, mats.metal, x, 5.1, -157.0, 0, { cast: false });
+    for (let i = 0; i < 5; i++) B(R, 0.07, 0.9, 0.07, mats.metal, -5.95 + i * 0.98, 4.65, -152.2, 0, { cast: false });
+    addRoof(-6, -2, -162, -152, 4.2, -4.0, -157.0, -4.0, -160.0);
+    addRoof(-2.4, -0.4, -162, -160, 4.2);
+    ROOF_COVERS.push({ x: -4.8, z: -154.5, y: 4.2, h: false }); coverPoints.push({ x: -4.8, z: -154.5, y: 4.2, h: false });
+    B(R, 1.2, 0.9, 0.8, mats.wood, -4.5, 4.65, -154.5, 0, { uv: 0.8, cast: false });
+    B(R, 1.6, 0.06, 6.0, mats.concreteDark, -4.0, 4.22, -157.0, 0, { uv: 1.2, cast: false });
+
+    // ---- PORT: stair to the dock-office roof (3.26 m) ----
+    EXPANSION_RAMPS.push({ id: 'port-office', x0: 56.2, x1: 57.8, z0: -86.0, z1: -91.5, rise: 3.20 });
+    rampVis(P, 56.2, 57.8, -86.0, -91.5, 3.20);
+    addRoof(52, 56, -94, -89, 3.20, 54.5, -90.5, 55.0, -89.5);
+    addRoof(56, 57.8, -92.3, -90.7, 3.20);
+    ROOF_COVERS.push({ x: 53.2, z: -89.4, y: 3.20, h: false }); coverPoints.push({ x: 53.2, z: -89.4, y: 3.20, h: false });
+    B(P, 3.6, 0.1, 0.3, mats.wood, 54.0, 3.26, -89.1, 0, { cast: false });
+    B(P, 0.3, 0.1, 4.6, mats.wood, 52.1, 3.26, -91.5, 0, { cast: false });
+    B(P, 1.2, 0.8, 0.8, mats.metalTan, 54.4, 3.64, -92.6, 0, { uv: 0.8, cast: false });
+
+    // ---- RAIL ticket / station office (4 x 6, 1.6 m door) ----
+    soukShop(R, 16.0, 20.0, -134.0, -128.0, 1.6, 2.8);
+    B(R, 1.9, 0.5, 0.55, mats.wood, 18.0, 0.25, -132.6, 0, { uv: 0.8, collide: true });
+    B(R, 1.9, 0.5, 0.1, mats.wood, 18.0, 0.75, -132.9, 0, { cast: false });
+    B(R, 0.34, 0.24, 0.26, mats.metalTan, 17.0, 1.24, -131.0, 0, { uv: 0.5 });
+    WIN(R, 0.24, 0.14, mats.windowLitDim, 17.0, 1.32, -130.84, 0);
+    B(R, 0.34, 0.24, 0.26, mats.metal, 18.7, 1.24, -130.2, 0, { uv: 0.5 });
+    WIN(R, 1.2, 0.8, mats.windowLitDim, 17.5, 1.9, -127.97, 0);
+    for (const ox of [-0.42, 0, 0.42]) B(R, 0.06, 0.9, 0.06, mats.wood, 17.5 + ox, 1.9, -127.99, 0, { cast: false });
+    B(R, 1.3, 0.06, 0.06, mats.wood, 17.5, 2.32, -127.99, 0, { cast: false });
+
+    // ---- PORT dock office interior props + lit window ----
+    B(P, 1.2, 0.8, 0.6, mats.wood, 54.4, 1.0, -92.2, 0, { uv: 0.8, collide: true });
+    B(P, 0.6, 1.8, 1.0, mats.metal, 52.4, 0.9, -92.5, 0, { uv: 0.9, collide: true });
+    B(P, 0.34, 0.24, 0.26, mats.metalTan, 54.4, 1.24, -92.2, 0, { uv: 0.5 });
+    WIN(P, 0.24, 0.14, mats.windowLitDim, 54.4, 1.32, -92.06, 0);
+    WIN(P, 1.1, 0.7, mats.windowLitDim, 54.0, 1.9, -94.02, Math.PI);
+    for (const ox of [-0.45, 0, 0.45]) B(P, 0.05, 0.8, 0.06, mats.wood, 54.0 + ox, 1.9, -94.06, 0, { cast: false });
+    B(P, 1.2, 0.06, 0.06, mats.wood, 54.0, 1.9, -94.06, 0, { cast: false });
+
+    // ---- rail warehouse open loading bay (plate + frame, door path stays clear) ----
+    B(R, 4.0, 0.06, 5.8, mats.concreteDark, -4.0, 0.03, -179.0, 0, { uv: 1.4, cast: false });
+    for (const z of [-182.15, -175.85]) B(R, 0.2, 3.4, 0.2, mats.metal, -5.8, 1.7, z, 0, { uv: 0.8, collide: true });
+    B(R, 0.2, 0.2, 6.5, mats.metal, -5.8, 3.35, -179.0, 0, { cast: false });
+    palletArt(R, -3.0, -172.5, 3);
+    crateSolid(R, -8.5, -171.5, 0.9);
+
+    // ---- destructible cover (wood 55-60 / sandbag 120-125 / metal 80-85 hp) ----
+    DESTRUCTIBLE_DEFS.push(
+      { id: 'souk-break-crate', x: -101.5, z: 39.0, w: 1.0, h: 1.0, d: 1.0, mat: 'wood', hp: 55 },
+      { id: 'souk-break-sacks', x: -105.0, z: 46.2, w: 1.8, h: 1.0, d: 0.9, mat: 'sandbag', hp: 120 },
+      { id: 'souk-break-rail', x: -103.0, z: 51.5, w: 1.6, h: 1.0, d: 0.45, mat: 'metal', hp: 80 },
+      { id: 'souk-break-crate2', x: -90.0, z: 38.5, w: 1.1, h: 1.1, d: 1.1, mat: 'wood', hp: 60 },
+      { id: 'rail-break-crate', x: -8.0, z: -156.5, w: 1.0, h: 1.0, d: 1.0, mat: 'wood', hp: 60 },
+      { id: 'rail-break-sacks', x: 14.0, z: -148.0, w: 1.8, h: 1.0, d: 0.9, mat: 'sandbag', hp: 125 },
+      { id: 'rail-break-rail', x: 18.0, z: -142.0, w: 1.6, h: 1.0, d: 0.45, mat: 'metal', hp: 85 },
+      { id: 'rail-break-crate2', x: 16.0, z: -170.0, w: 1.1, h: 1.1, d: 1.1, mat: 'wood', hp: 55 },
+      { id: 'port-break-crate', x: 76.0, z: -70.0, w: 1.0, h: 1.0, d: 1.0, mat: 'wood', hp: 55 },
+      { id: 'port-break-sacks', x: 86.0, z: -78.0, w: 1.8, h: 1.0, d: 0.9, mat: 'sandbag', hp: 120 },
+      { id: 'port-break-rail', x: 92.0, z: -74.0, w: 1.6, h: 1.0, d: 0.45, mat: 'metal', hp: 80 },
+      { id: 'port-break-crate2', x: 62.0, z: -90.0, w: 1.1, h: 1.1, d: 1.1, mat: 'wood', hp: 60 },
+    );
 
 
   }
