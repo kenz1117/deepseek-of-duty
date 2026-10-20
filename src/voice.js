@@ -48,6 +48,21 @@ export const VOICE_LINES = {
   op8_2: { file: 'op8_2.mp3', speaker: 'VEGA' },
   op9_1: { file: 'op9_1.mp3', speaker: 'VEGA' },
   op9_2: { file: 'op9_2.mp3', speaker: 'VEGA' },
+  op3_4: { file: 'op3_4.mp3', speaker: 'VEGA' },
+  op3_5: { file: 'op3_5.mp3', speaker: '灰狼' },
+  op3_6: { file: 'op3_6.mp3', speaker: 'VEGA' },
+  op6_3: { file: 'op6_3.mp3', speaker: 'VEGA' },
+  op6_4: { file: 'op6_4.mp3', speaker: 'MOTH' },
+  op7_4: { file: 'op7_4.mp3', speaker: 'VEGA' },
+  op7_5: { file: 'op7_5.mp3', speaker: '灰狼' },
+  op7_6: { file: 'op7_6.mp3', speaker: 'VEGA' },
+  op9_3: { file: 'op9_3.mp3', speaker: 'VEGA' },
+  op9_4: { file: 'op9_4.mp3', speaker: 'MOTH' },
+  op9_5: { file: 'op9_5.mp3', speaker: 'VEGA' },
+  op9_6: { file: 'op9_6.mp3', speaker: '灰狼' },
+  stage_clear: { file: 'stage_clear.mp3', speaker: 'VEGA' },
+  cmd_disembark: { file: 'cmd_disembark.mp3', speaker: 'VEGA' },
+  cmd_down: { file: 'cmd_down.mp3', speaker: 'VEGA' },
   hassan_1: { file: 'hassan_1.mp3', speaker: '哈桑' },
   hassan_vega: { file: 'hassan_vega.mp3', speaker: 'VEGA' },
   dispatch_1: { file: 'dispatch_1.mp3', speaker: 'DISPATCH' },
@@ -58,6 +73,7 @@ export const VOICE_LINES = {
   moth_1: { file: 'moth_1.mp3', speaker: 'MOTH' },
   moth_2: { file: 'moth_2.mp3', speaker: 'MOTH' },
   moth_3: { file: 'moth_3.mp3', speaker: 'MOTH' },
+  zone_warning: { file: 'zone_warning.mp3', speaker: 'VEGA', text: '毒圈将在十五秒后开始收缩，立即向安全区转移。' },
 };
 
 export function createVoice() {
@@ -72,6 +88,19 @@ export function createVoice() {
     }
   }
 
+  function speakFallback(text) {
+    if (!text || typeof window === 'undefined' || !window.speechSynthesis) return;
+    try {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'zh-CN';
+      u.rate = 1.05;
+      u.pitch = 0.78;
+      u.volume = Math.max(0.2, Math.min(1, volume));
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    } catch (e) { /* optional */ }
+  }
+
   function play(id) {
     if (!enabled || !id) return false;
     const line = VOICE_LINES[id];
@@ -81,10 +110,19 @@ export function createVoice() {
       el = new Audio(BASE + line.file);
       el.preload = 'auto';
       el.volume = volume;
+      let fellBack = false;
+      const onFail = () => {
+        if (fellBack) return;
+        fellBack = true;
+        el = null;
+        speakFallback(line.text);
+      };
+      el.onerror = onFail;
       const p = el.play();
-      if (p && p.catch) p.catch(() => { el = null; });
+      if (p && p.catch) p.catch(onFail);
       return true;
     } catch (e) {
+      speakFallback(line.text);
       return false;
     }
   }

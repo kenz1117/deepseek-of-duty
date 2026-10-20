@@ -1268,6 +1268,8 @@ const VERSUS_RESPAWN_MS = 5000;
 
 let versusBots = [];          // [{ e: Enemy, team, respawnAt }]
 let zoneVisual = null;        // { wall, ringNext, ringNow }
+let zonePlanes = [];          // active bombing-run flyovers
+let zoneBombT = 6;            // seconds until the next gas airstrike
 /** Per-faction squad coordination (shared intel / focus fire), host only. */
 let teamBrains = [null, null];
 let teamBrainAcc = 0;
@@ -1569,6 +1571,7 @@ function startZone() {
   if (!rect) return;
   zoneSys = createZone({ rect, startDelay: 120, warnAt: 15 });
   G.zoneWarned = false;
+  G.zoneDmgT = 0;
   ensureZoneVisual();
 }
 
@@ -1590,24 +1593,89 @@ function applyZoneDamage(amount) {
   }
 }
 
+/** A visible bomber crosses the gas target; host schedules the real shells,
+    clients receive the same point and replay only the visual/audio. */
+function spawnBombingRun(x, z, broadcast = true) {
+  if (!engine || !Number.isFinite(x) || !Number.isFinite(z)) return;
+  const mats = engine.mats;
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(5.5, 0.7, 1.0), mats.metal);
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(8.0, 0.12, 2.5), mats.metal);
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.12, 1.6), mats.metal);
+  wing.position.z = 0.1;
+  tail.position.set(-2.2, 0.35, 0);
+  body.castShadow = false; wing.castShadow = false; tail.castShadow = false;
+  g.add(body, wing, tail);
+  const dir = Math.random() * Math.PI * 2;
+  const dx = Math.cos(dir), dz = Math.sin(dir);
+  const from = new THREE.Vector3(x - dx * 80, 48, z - dz * 80);
+  const to = new THREE.Vector3(x + dx * 80, 48, z + dz * 80);
+  g.position.copy(from);
+  g.rotation.y = Math.atan2(dx, dz);
+  engine.scene.add(g);
+  zonePlanes.push({ g, from, to, t: 0, dur: 2.8, target: new THREE.Vector3(x, 0.1, z) });
+  if (audio && audio.grenadeBeep) audio.grenadeBeep(0, true);
+  if (hud && hud.toast) hud.toast('空袭警报 · 毒圈内目标', 1800);
+  if (broadcast) {
+    if (artillery) artillery.strike(new THREE.Vector3(x, 0.1, z), { shells: 2, radius: 7, spread: 9, delay: 1.5 });
+    if (lanSession) lanSession.broadcastEvent('airstrike', { x, z });
+  } else {
+    // client: no authoritative damage, just the visible bombs
+    setTimeout(() => {
+      if (!fx) return;
+      fx.explosion(new THREE.Vector3(x, 0.4, z), 1.0);
+      if (audio && audio.explosion) audio.explosion(0, 12);
+    }, 1500);
+  }
+}
+
+function updateZonePlanes(dt) {
+  for (let i = zonePlanes.length - 1; i >= 0; i -= 1) {
+    const p = zonePlanes[i];
+    p.t += dt;
+    const k = Math.min(1, p.t / p.dur);
+    p.g.position.lerpVectors(p.from, p.to, k);
+    p.g.rotation.z = Math.sin(k * Math.PI) * 0.06;
+    if (k >= 1) {
+      engine.scene.remove(p.g);
+      zonePlanes.splice(i, 1);
+    }
+  }
+}
+
+/** Host-only: every few seconds, bomb one actor that is outside the ring. */
+function updateZoneBombing(dt, zs) {
+  if (!G.versusMode || net.role !== 'host' || !zs || !zs.started) return;
+  zoneBombT -= dt;
+  if (zoneBombT > 0) return;
+  const out = [];
+  const px = controller.pos.x, pz = controller.pos.z;
+  if (zs.distance > 0.5) out.push({ x: px, z: pz });
+  for (const r of net.remote.values()) {
+    if (!r.alive) continue;
+    if (Math.hypot(r.x - zs.x, r.z - zs.z) > zs.r) out.push({ x: r.x, z: r.z });
+  }
+  for (const b of versusBots) {
+    if (!b.e || !b.e.alive) continue;
+    const p = b.e.root.position;
+    if (Math.hypot(p.x - zs.x, p.z - zs.z) > zs.r) out.push({ x: p.x, z: p.z });
+  }
+  if (!out.length) { zoneBombT = 3; return; }
+  const t = out[(Math.random() * out.length) | 0];
+  spawnBombingRun(t.x + (Math.random() - 0.5) * 4, t.z + (Math.random() - 0.5) * 4, true);
+  zoneBombT = 5 + Math.random() * 3;
+}
+
 function announceZoneWarning() {
   if (G.zoneWarned) return;
   G.zoneWarned = true;
-  if (hud && hud.radio) hud.radio('VEGA', '毒圈将在 15 秒后开始收缩。', 4800);
-  try {
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      const u = new SpeechSynthesisUtterance('毒圈将在十五秒后开始收缩');
-      u.lang = 'zh-CN';
-      u.rate = 1.05;
-      u.pitch = 0.78;
-      u.volume = 0.8;
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(u);
-    }
-  } catch (e) { /* voice is optional */ }
+  // MiniMax VEGA recording; voice.js falls back to zh-CN TTS only if the
+  // MP3 is missing or fails to decode.
+  if (hud && hud.radio) hud.radio('VEGA', '毒圈将在 15 秒后开始收缩。立即向安全区转移。', 5600, 'zone_warning');
 }
 
 function updateZone(dt) {
+  updateZonePlanes(dt);
   // authoritative on the host, mirror on the client — both drive visuals
   const zs = net.role === 'host'
     ? (zoneSys ? zoneSys.update(dt, controller.pos.x, controller.pos.z) : null)
@@ -1618,9 +1686,17 @@ function updateZone(dt) {
     if (zs.delayLeft <= 15) announceZoneWarning();
     // Ring is announced/previewed but does not hurt until its 2-minute start.
   } else if (zs.distance > 0.5) {
-    // gas damage from the authoritative-or-mirrored ring
-    applyZoneDamage(zs.dps * dt);
+    // Brutal gas: one visible 10%-of-max-HP tick every second, not a smooth chip.
+    G.zoneDmgT = (G.zoneDmgT || 0) + dt;
+    if (G.zoneDmgT >= 1) {
+      G.zoneDmgT -= 1;
+      applyZoneDamage((G.maxHp || 100) * 0.10);
+    }
+  } else {
+    G.zoneDmgT = 0;
   }
+
+  updateZoneBombing(dt, zs);
 
   if (zoneVisual) {
     zoneVisual.wall.position.x = zs.x;
@@ -1671,7 +1747,8 @@ function updateVersusBots(dt) {
         // attackerTeam undefined → the friendly-fire branch is skipped and the
         // bot dies through the normal path; halved so gas is pressure, not a
         // bot exterminator (bots do not path into the ring — known limitation).
-        const killed = e.takeDamage(zs.dps * 0.5 * dt, null, null, 'torso', undefined);
+        // gas is 10% max HP/s, same rule as humans (no half-damage discount)
+        const killed = e.takeDamage((e.maxHp || 100) * 0.10 * dt, null, null, 'torso', undefined);
         if (killed) onVersusBotDown(b, undefined);
       }
     }
@@ -3676,6 +3753,13 @@ function artilleryDamageAt(point, radius, dmg) {
   }
   const pd = point.distanceTo(engine.camera.position);
   if (pd < radius * 0.8) applyPlayerDamage(Math.max(6, 55 * (1 - pd / (radius * 0.8))), point);
+  if (G.versusMode && net.role === 'host') {
+    for (const r of net.remote.values()) {
+      if (!r.alive) continue;
+      const d = Math.hypot(r.x - point.x, r.z - point.z);
+      if (d < radius) applyLanRemoteDamage(r.id, dmg * (1 - (d / radius) * 0.35), point);
+    }
+  }
   // shake is owned by the artillery module (one per shell) — no second kick here
 }
 
@@ -4382,6 +4466,10 @@ function onLanEvent(msg) {
     if (String(msg.host) === String(net.selfId) && net.started && net.role === 'client') {
       promoteToLanHost(msg.resume || null);
     }
+    return;
+  }
+  if (msg.kind === 'airstrike' && G.versusMode && net.role !== 'host') {
+    spawnBombingRun(Number(msg.x) || 0, Number(msg.z) || 0, false);
     return;
   }
   // Versus: player-shot-player. Applies on EVERY peer's mirror for instant
@@ -5315,7 +5403,7 @@ window.__game = {
   get ai() { return { perception, director: aiDirector, barks }; },
   get equipment() { return equipment; },
   get barks() { return barks; },
-  get net() { return net; }, get zoneSys() { return zoneSys; }, get versusBots() { return versusBots; },
+  get net() { return net; }, get zoneSys() { return zoneSys; }, get zonePlanes() { return zonePlanes; }, get versusBots() { return versusBots; },
   get lan() { return lanSession; },
   get lanLobby() { return lanLobby; },
   startLanHostGame, startLanClientGame, leaveLanSession, applyLanFire,
