@@ -62,3 +62,33 @@ Content-Type: application/json
 - 每次生成前先确认当天剩余条数；**不要**再用生成接口探测模型名（模型名只接受：`MiniMax-Hailuo-2.3` / `MiniMax-Hailuo-2.3-Fast` / `MiniMax-Hailuo-02` / `I2V-01-Director` / `I2V-01-live` / `I2V-01`）。
 - 参数错误（2013）不会消耗；额度不足（2056）直接返回，不产生任务。
 - 两条一次发，串行等待，不并发（避免限流 1002）。
+
+---
+
+## 6. 结算动画（2026-10-20，2 条）— victory / defeat
+
+参考帧复用同一场景的真实游戏截图，保证与片头/片尾同一世界、同一光照：
+
+| 用途 | 参考帧 | 色调 |
+| --- | --- | --- |
+| VICTORY | `docs/refs/opening.jpg` | 金色黄昏、暖尘、街道纵深 |
+| DEFEAT | `docs/refs/ending.jpg` | 蓝调时刻、冷阴影、远处火点 |
+
+参数：`MiniMax-Hailuo-2.3`，6s，1080P，`prompt_optimizer:false`，一条一次、串行提交，不做模型/额度探测。
+
+### VICTORY prompt
+
+```
+[Slow crane up + pull back] Start exactly on this deserted, war-damaged Middle Eastern street at golden dusk and keep the same buildings, awnings, vehicles and sunlight direction. The camera rises smoothly about two meters while drifting backward at walking pace, revealing the empty street and the distant minaret; fine dust and thin smoke drift through the low sun, embers and loose paper skitter over the asphalt, awnings move slightly in the breeze. Quiet, exhausted triumph after the last fight — no celebration, no people. Natural motion only: dust, smoke, cloth, light shifting. Cinematic 35 mm anamorphic, warm amber highlights, cool teal shadows, fine film grain, shallow depth of field. No cuts, no zoom, no people, no text, no logos, no watermark, no UI.
+```
+
+### DEFEAT prompt
+
+```
+[Low dolly forward, slight tilt down] Start exactly on this silent blue-hour street and keep the same facades, shutters, cables and distant fire. Lower the camera close to the asphalt and push forward slowly through thin smoke; the orange fire at the far end pulses faintly, embers and loose paper skitter across the wet road, cables and shutters settle in the cold wind. Somber, defeated aftermath — no people, no text. Natural motion only: smoke, embers, debris, subtle light flicker. Cinematic 35 mm anamorphic, deep teal shadows with a single warm fire accent, fine film grain, shallow depth of field. No cuts, no zoom, no people, no text, no logos, no watermark, no UI.
+```
+
+### 执行
+
+- 输出：`public/media/victory.mp4`、`public/media/defeat.mp4`。
+- 不重试生成请求；额度不足（2056）直接停止，不产生任务。

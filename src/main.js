@@ -157,6 +157,7 @@ const G = {
   // off restores the PvE behaviour exactly.
   versusMode: false,
   teamScores: [0, 0],
+  ffaWinner: null, ffaResultShown: false,
   // Sprint D: run counters, streak rewards, UAV window, score multiplier
   stats: null, scoreMult: 1, uavUntil: 0, uavTick: 0,
 };
@@ -1276,12 +1277,32 @@ let teamDirectors = [null, null];
 
 /** Spawn point per team inside the site rect: team 0 at the site's objective
     zone, team 1 at the opposite end of the rect. */
-function versusTeamSpawn(team) {
+/**
+ * Spawn slot for one combatant: each faction owns one half of the site rect
+ * and spreads its four members over a 2x2 grid inside that half, so a full
+ * lobby covers the map instead of piling onto one point. `index` is the
+ * combatant's slot within its team (humans first, then fill bots).
+ */
+function versusSpawnSlot(team, index = 0, jitter = 3) {
   const rect = G.playRect || (G.site && G.site.rect) || { x0: -30, x1: 30, z0: -30, z1: 30 };
-  const cx = (rect.x0 + rect.x1) / 2;
-  const cz = (rect.z0 + rect.z1) / 2;
-  const z0 = team === 0 ? rect.z0 + 14 : rect.z1 - 14;
-  return { x: cx + (team === 0 ? -6 : 6), z: z0, y: 0 };
+  const midZ = (rect.z0 + rect.z1) / 2;
+  const hz0 = team === 0 ? rect.z0 + 14 : midZ + 12;
+  const hz1 = team === 0 ? midZ - 12 : rect.z1 - 14;
+  const col = index % 2;
+  const row = Math.floor(index / 2) % 2;
+  const x = (rect.x0 + 16) + col * ((rect.x1 - rect.x0) - 32);
+  const z = hz0 + row * (hz1 - hz0);
+  return {
+    x: x + (Math.random() - 0.5) * jitter * 2,
+    z: z + (Math.random() - 0.5) * jitter * 2,
+    y: 0,
+  };
+}
+
+/** Legacy single-point spawn kept for the win-check callers; the map spread
+    now comes from versusSpawnSlot. */
+function versusTeamSpawn(team) {
+  return versusSpawnSlot(team, Math.floor(Math.random() * VERSUS_TEAM_SIZE), 5);
 }
 
 /** Team fill: pad each faction up to VERSUS_TEAM_SIZE with AI soldiers.
@@ -1295,10 +1316,9 @@ function startVersusBots(teams, lobbyPlayers) {
   for (let team = 0; team < 2; team += 1) {
     const fill = Math.max(0, VERSUS_TEAM_SIZE - counts[team]);
     for (let i = 0; i < fill; i += 1) {
-      const sp = versusTeamSpawn(team);
-      const a = (i / Math.max(1, fill)) * Math.PI * 2 + Math.random() * 0.5;
-      const r = 5 + Math.random() * 10;
-      const e = spawnEnemy({ x: sp.x + Math.cos(a) * r, z: sp.z + Math.sin(a) * r, y: 0 });
+      // slot index continues after the humans so the whole squad spreads out
+      const sp = versusSpawnSlot(team, counts[team] + i, 2.5);
+      const e = spawnEnemy({ x: sp.x, z: sp.z, y: 0 });
       if (!e) break;
       e.team = team;
       if (e.setDifficulty) e.setDifficulty(DIFF_TIERS[3]);
@@ -1626,8 +1646,8 @@ function updateVersusBots(dt) {
       }
     }
     if (!e.alive && b.respawnAt && now >= b.respawnAt) {
-      const sp = versusTeamSpawn(b.team);
-      e.spawn(sp.x + (Math.random() - 0.5) * 8, sp.z + (Math.random() - 0.5) * 8,
+      const sp = versusSpawnSlot(b.team, Math.floor(Math.random() * VERSUS_TEAM_SIZE), 4);
+      e.spawn(sp.x, sp.z,
         Math.atan2(-(controller.pos.x - sp.x), -(controller.pos.z - sp.z)), 0);
       e.maxHp = 80; e.hp = 80;     // respawn with the tuned versus trade values
       b.respawnAt = 0;
@@ -1692,7 +1712,9 @@ function updateVersusRespawns() {
   const now = Date.now();
   for (const r of net.remote.values()) {
     if (r.alive || !r.respawnAt || now < r.respawnAt) continue;
-    const sp = versusTeamSpawn(r.team ?? 0);
+    const reg = net.spawnSlots && net.spawnSlots[String(r.id)];
+    const sp = versusSpawnSlot(reg ? reg.team : (r.team ?? 0),
+      reg ? reg.index : Math.floor(Math.random() * VERSUS_TEAM_SIZE), 4);
     r.x = sp.x; r.z = sp.z; r.y = 0;
     r.hp = 100; r.alive = true;
     r.respawnAt = 0;
@@ -3264,13 +3286,21 @@ function finishOperation() {
     const playEnding = () => cinema.play(op.outro, () => {
       hudEl.classList.remove('hidden');
       viewmodel.root.visible = true;
-      showMissionOverlay(op);
+      victoryThenMission(op);
     });
     if (videoIntro) videoIntro.play('/media/ending.mp4', playEnding);
     else playEnding();
     return;
   }
-  showMissionOverlay(op);
+  victoryThenMission(op);
+}
+
+function victoryThenMission(op) {
+  if (!SHOT_MODE && videoIntro && !videoIntro.playing) {
+    videoIntro.play('/media/victory.mp4', () => showMissionOverlay(op));
+  } else {
+    showMissionOverlay(op);
+  }
 }
 
 function closeMissionOverlay() {
@@ -3831,6 +3861,11 @@ function resubmitWithCallsign(name) {
 
 /** Called once when the operator dies: totals, dailies, board, results page. */
 function finishRun() {
+  if (SHOT_MODE || !videoIntro || videoIntro.playing) { showRunResults(); return; }
+  videoIntro.play('/media/defeat.mp4', showRunResults);
+}
+
+function showRunResults() {
   if (net.role) return;
   const s = G.stats;
   if (!s) return;
@@ -4365,7 +4400,10 @@ function syncLanAvatars(players) {
     seen.add(id);
     let r = net.remote.get(id);
     if (!r) {
-      const spawn = lanSpawnSlot(slot++);
+      const vsSlot = G.versusMode && net.spawnSlots && net.spawnSlots[id];
+      const spawn = vsSlot
+        ? versusSpawnSlot(vsSlot.team, vsSlot.index, 3)
+        : lanSpawnSlot(slot++);
       r = {
         id, name: p.name || 'OPERATOR', hp: 100, alive: true,
         x: spawn.x, z: spawn.z, y: spawn.y, yaw: 0, pitch: 0, speed: 0,
@@ -4728,9 +4766,29 @@ function startLanHostGame(opts = {}) {
   }
   if (versus) net.team = teams[String(net.selfId)] ?? 0;
   net.teamAssignments = teams;
+  // Human spawn slots: per-team join order, humans first, fill bots take the
+  // later slots, so a full lobby covers the map instead of stacking.
+  net.spawnSlots = {};
+  if (versus) {
+    const seen = [0, 0];
+    for (const p of lobbyPlayers) {
+      const t = teams[String(p.id)] ?? 0;
+      net.spawnSlots[String(p.id)] = { team: t, index: seen[t]++ };
+    }
+    if (net.selfId != null && !net.spawnSlots[String(net.selfId)]) {
+      net.spawnSlots[String(net.selfId)] = { team: net.team, index: seen[net.team]++ };
+    }
+  }
 
   startGame(false, true);
   G.state = 'playing';
+  if (versus) {
+    // spread the host player too — the site centre is a co-op convention
+    const mySlot = net.spawnSlots[String(net.selfId)];
+    const sp = versusSpawnSlot(mySlot ? mySlot.team : net.team, mySlot ? mySlot.index : 0, 3);
+    controller.revive(sp.x, sp.z);
+    controller.setLook((G.site && G.site.yaw) || -0.03, -0.015);
+  }
   if (lanSession) {
     lanSession.broadcastEvent('start', {
       wave: 1, site: G.site && G.site.id, versus, teams,
@@ -4979,6 +5037,11 @@ function updateGame(dt) {
     }
   }
 
+  if (G.versusMode && G.state === 'dead' && playing === false) {
+    updateZone(dt);
+    if (net.role === 'host') updateVersusBots(dt);
+  }
+
   // enemies
   const alive = G.hp > 0;
   enemyCtx.playerPos.copy(engine.camera.position);
@@ -5132,6 +5195,9 @@ function updateGame(dt) {
   hud.setHeading(controller.headingDeg);
   hud.setSpread(spreadToPixels(playerSpread()), controller.adsAmount > 0.6);
   if (minimap) {
+    const zoneState = G.versusMode
+      ? (net.role === 'host' ? (zoneSys && zoneSys.state) : (netZoneMirror && netZoneMirror.state))
+      : null;
     minimap.update(dt, {
       x: controller.pos.x, z: controller.pos.z,
       heading: controller.headingDeg,
@@ -5139,6 +5205,11 @@ function updateGame(dt) {
       objective: G.objective,
       uav: G.uavUntil > G.time,
       time: G.time,
+      zone: zoneState ? {
+        x: zoneState.x, z: zoneState.z, r: zoneState.r,
+        nextX: zoneState.nextX, nextZ: zoneState.nextZ, nextR: zoneState.nextR,
+        shrinking: zoneState.shrinking, finished: zoneState.finished,
+      } : null,
     });
   }
   if (worldLabels) {
