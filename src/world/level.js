@@ -1416,6 +1416,8 @@ export function createLevel(engine) {
         for (const oz of [-ww / 3, 0, ww / 3]) B(g, 0.06, 1.5, 0.06, mats.wood, x + dir * 0.19, 1.4, zc + oz, 0, { cast: false });
         for (const yy of [0.78, 1.36, 2.02]) B(g, 0.06, 0.06, ww, mats.wood, x + dir * 0.19, yy, zc, 0, { cast: false });
         for (const oz of [-ww / 2 - 0.06, ww / 2 + 0.06]) B(g, 0.09, 1.7, 0.09, mats.wood, x + dir * 0.17, 1.4, zc + oz, 0, { cast: false });
+        B(g, ww, 0.42, 0.07, mats.wood, x + dir * 0.22, 0.86, zc, 0, { cast: false });
+        B(g, ww, 0.2, 0.07, mats.wood, x + dir * 0.22, 2.06, zc, 0, { cast: false });
       }
       B(g, 0.1, 0.16, Math.min(len * 0.5, 3.4), mats.metalTan, x + dir * 0.12, 2.62, cz, 0, { uv: 0.8, cast: false });
       B(g, 1.15, 0.08, Math.min(len * 0.86, 8), mats.awning, x + dir * 0.62, 2.72, cz, 0, { rz: dir * 0.14, cast: false });
@@ -1440,6 +1442,8 @@ export function createLevel(engine) {
         for (const ox of [-ww / 3, 0, ww / 3]) B(g, 0.06, 1.5, 0.06, mats.wood, xc + ox, 1.4, z + dir * 0.19, 0, { cast: false });
         for (const yy of [0.78, 1.36, 2.02]) B(g, ww, 0.06, 0.06, mats.wood, xc, yy, z + dir * 0.19, 0, { cast: false });
         for (const ox of [-ww / 2 - 0.06, ww / 2 + 0.06]) B(g, 0.09, 1.7, 0.09, mats.wood, xc + ox, 1.4, z + dir * 0.17, 0, { cast: false });
+        B(g, ww, 0.42, 0.07, mats.wood, xc, 0.86, z + dir * 0.22, 0, { cast: false });
+        B(g, ww, 0.2, 0.07, mats.wood, xc, 2.06, z + dir * 0.22, 0, { cast: false });
       }
       B(g, Math.min(len * 0.5, 3.4), 0.16, 0.1, mats.metalTan, cx, 2.62, z + dir * 0.12, 0, { uv: 0.8, cast: false });
       B(g, Math.min(len * 0.86, 8), 0.08, 1.15, mats.awning, cx, 2.72, z + dir * 0.62, 0, { rx: -dir * 0.14, cast: false });
@@ -1515,10 +1519,10 @@ export function createLevel(engine) {
       B(S, 0.22, 0.5, 0.22, mats.plasterC, minX + Math.cos(a) * 1.7, 17.7, minZ + Math.sin(a) * 1.7, 0, { uv: 0.6, cast: false });
     }
     // fountain
-    C(S, 2.6, 2.8, 0.7, 14, mats.concrete, -95, 0.35, 50);
-    C(S, 2.1, 2.1, 0.08, 14, mats.puddle, -95, 0.55, 50, { cast: false });
-    C(S, 0.4, 0.55, 1.5, 8, mats.plasterC, -95, 1.1, 50);
-    addCollider(-95, 50, 5.0, 5.0, 0.1);
+    C(S, 2.6, 2.8, 0.7, 14, mats.concrete, -95, 0.35, 52.5);
+    C(S, 2.1, 2.1, 0.08, 14, mats.puddle, -95, 0.55, 52.5, { cast: false });
+    C(S, 0.4, 0.55, 1.5, 8, mats.plasterC, -95, 1.1, 52.5);
+    addCollider(-95, 52.5, 5.0, 5.0, 0.1);
     // arcade along the courtyard's east side
     for (let i = 0; i < 4; i++) {
       const zz = 41 + i * 4.0;
@@ -1916,10 +1920,10 @@ export function createLevel(engine) {
     B(S, 0.32, 0.28, 0.32, mats.metal, -101.0, 1.0, 47.2, 0, { uv: 0.5, cast: false });
     // fountain canopy + buckets
     for (const a of [0.2, 2.3, 4.2]) {
-      C(S, 0.05, 0.05, 2.4, 5, mats.wood, -95 + Math.cos(a) * 2.3, 2.0, 50 + Math.sin(a) * 2.3, { cast: false });
+      C(S, 0.05, 0.05, 2.4, 5, mats.wood, -95 + Math.cos(a) * 2.3, 2.0, 52.5 + Math.sin(a) * 2.3, { cast: false });
     }
-    B(S, 4.4, 0.07, 4.4, mats.awning, -95, 3.25, 50, 0.15, { uv: 0.9, cast: false });
-    B(S, 4.6, 0.2, 0.05, mats.burlap, -95, 3.12, 52.2, 0, { cast: false });
+    B(S, 4.4, 0.07, 4.4, mats.awning, -95, 3.25, 52.5, 0.15, { uv: 0.9, cast: false });
+    B(S, 4.6, 0.2, 0.05, mats.burlap, -95, 3.12, 54.7, 0, { cast: false });
     // minaret landmark details (balcony, arched openings, dome, crescent, lamps)
     B(S, 4.4, 0.26, 4.4, mats.concrete, -110, 17.5, 48, 0, { uv: 1.4, cast: false });
     for (let i = 0; i < 8; i++) {
@@ -2360,6 +2364,249 @@ export function createLevel(engine) {
     for (const x of [63, 69, 75, 81]) B(P, 0.06, 0.55, 0.06, mats.metal, x, 6.5, 7.68, 0, { cast: false });
     acUnit(P, 66, 5.2, 7.35, Math.PI);
     WIN(P, 4.0, 0.8, mats.signA, 72, 7.4, 7.66, Math.PI);
+
+
+    /* =====================================================================
+       DENSITY / COVER PASS — facilities, blockers and low cover with real
+       colliders. Stage points and the three gates keep >=2.5 m clear.
+       ===================================================================== */
+    const solidBox = (g, x, z, w, d, h, mat, rot = 0, uv = 1.0) => {
+      B(g, w, h, d, mat, x, h / 2, z, rot, { uv, collide: true });
+      B(g, w * 0.94, 0.06, d * 0.94, mat, x, h + 0.02, z, rot, { cast: false });
+    };
+    const lowCover = (g, x, z, w, d, h, mat, rot = 0, cx = 0.9, cz = 0) => {
+      solidBox(g, x, z, w, d, h, mat, rot);
+      coverPoints.push({ x: x + cx, z: z + cz, h: h >= 1.4 });
+    };
+    const crateSolid = (g, x, z, s = 1.0, rot = 0.1) => {
+      B(g, s, s, s, mats.wood, x, s / 2, z, rot, { uv: 0.9, collide: true });
+      B(g, s * 0.92, 0.06, s * 0.92, mats.wood, x, s + 0.02, z, rot, { cast: false });
+      coverPoints.push({ x: x + 0.9, z: z + 0.9, h: false });
+    };
+    const drumSolid = (g, x, z, mat = mats.rust) => {
+      C(g, 0.34, 0.34, 0.95, 10, mat, x, 0.48, z);
+      C(g, 0.35, 0.35, 0.05, 10, mats.metal, x, 0.92, z, { cast: false });
+      addCollider(x, z, 0.75, 0.75, 0.04);
+      coverPoints.push({ x: x + 0.8, z, h: false });
+    };
+    const barrierSolid = (g, x, z, w = 2.4, rot = 0) => {
+      solidBox(g, x, z, w, 0.45, 0.95, mats.concrete, rot);
+      coverPoints.push({ x: x, z: z + Math.cos(rot) * 0.9, h: false });
+    };
+    const stallSolid = (g, x, z, rot = 0, w = 3.2, d = 2.0) => {
+      B(g, w, 0.9, d * 0.6, mats.wood, x, 0.45, z, rot, { uv: 1.0, collide: true });
+      B(g, w + 0.2, 0.08, d * 0.72, mats.metalTan, x, 0.93, z, rot, { uv: 0.8, cast: false });
+      for (const s of [-1, 1]) C(g, 0.04, 0.04, 2.5, 5, mats.metal, x + s * (w / 2 - 0.12) * Math.cos(rot), 1.25, z - s * (w / 2 - 0.12) * Math.sin(rot), { cast: false });
+      for (let i = 0; i < 7; i++) {
+        const off = -w / 2 + (w / 7) * (i + 0.5);
+        B(g, w / 7 + 0.015, 0.05, d * 0.9, i % 2 ? mats.awning : mats.shop, x + off * Math.cos(rot), 2.5, z - off * Math.sin(rot), rot, { cast: false });
+      }
+      B(g, w, 0.24, 0.05, mats.burlap, x + Math.sin(rot) * d * 0.45, 2.36, z + Math.cos(rot) * d * 0.45, rot, { cast: false });
+      coverPoints.push({ x: x + 1.2 * Math.cos(rot), z: z - 1.2 * Math.sin(rot), h: false });
+    };
+    const cartSolid = (g, x, z, rot = 0) => {
+      B(g, 2.4, 0.6, 1.2, mats.wood, x, 0.8, z, rot, { uv: 1.0, collide: true });
+      for (const dx of [-0.8, 0.8]) for (const dz of [-0.45, 0.45]) C(g, 0.26, 0.26, 0.18, 8, mats.rubber, x + dx * Math.cos(rot), 0.3, z - dx * Math.sin(rot) + dz, { rz: Math.PI / 2, cast: false });
+      B(g, 0.08, 0.08, 1.4, mats.metal, x - 1.4 * Math.cos(rot), 0.75, z + 1.4 * Math.sin(rot), rot, { cast: false });
+      coverPoints.push({ x: x + 1.1, z: z + 0.8, h: false });
+    };
+    const troughSolid = (g, x, z, rot = 0) => {
+      B(g, 2.8, 0.8, 1.0, mats.concrete, x, 0.4, z, rot, { uv: 1.4, collide: true });
+      B(g, 2.4, 0.06, 0.7, mats.puddle, x, 0.82, z, rot, { cast: false });
+      coverPoints.push({ x: x + 1.2, z: z + 0.8, h: false });
+    };
+    const containerSolid = (g, x, z, n, rot = 0, base = 0) => {
+      for (let i = 0; i < n; i++) {
+        const m = PORT_PAL[(Math.abs(Math.round(x + z)) + i) % PORT_PAL.length];
+        B(g, 12, 2.6, 2.6, m, x, base + 1.32 + i * 2.65, z, rot, { uv: 1.8, collide: true });
+        for (let k = 0; k < 5; k++) B(g, 0.07, 2.3, 0.05, mats.rust, x - 5.2 + k * 2.4, base + 1.32 + i * 2.65, z + 1.32, rot, { cast: false });
+        for (const dz of [-1.2, 1.2]) B(g, 0.12, 0.12, 0.12, mats.metalTan, x + 5.9, base + 0.15 + i * 2.65, z + dz, rot, { cast: false });
+      }
+      coverPoints.push({ x: x + 7.0, z: z, h: true });
+    };
+    const trailerSolid = (g, x, z, rot = 0, mat = mats.metal) => {
+      B(g, 8.5, 2.6, 2.4, mat, x, 1.5, z, rot, { uv: 1.6, collide: true });
+      for (const dx of [-3.0, 3.0]) for (const dz of [-0.9, 0.9]) C(g, 0.36, 0.36, 0.26, 10, mats.rubber, x + dx * Math.cos(rot), 0.38, z - dx * Math.sin(rot) + dz, { rz: Math.PI / 2, cast: false });
+      coverPoints.push({ x: x + Math.cos(rot) * 5.2, z: z - Math.sin(rot) * 5.2, h: true });
+    };
+    const officeSolid = (g, x, z, w = 4.0, d = 3.0, mat = mats.plasterB) => {
+      B(g, w, 0.12, d, mats.concrete, x, 0.06, z, 0, { cast: false });
+      B(g, w, 2.8, 0.25, mat, x, 1.4, z - d / 2, 0, { collide: true, uv: 1.4 });
+      B(g, w, 2.8, 0.25, mat, x, 1.4, z + d / 2, 0, { collide: true, uv: 1.4 });
+      B(g, 0.25, 2.8, d, mat, x - w / 2, 1.4, z, 0, { collide: true, uv: 1.4 });
+      B(g, 0.25, 2.8, d / 2 - 0.9, mat, x + w / 2, 1.4, z - d / 2 + (d / 2 - 0.9) / 2, 0, { collide: true, uv: 1.2 });
+      B(g, 0.25, 2.8, d / 2 - 0.9, mat, x + w / 2, 1.4, z + d / 2 - (d / 2 - 0.9) / 2, 0, { collide: true, uv: 1.2 });
+      B(g, 0.25, 1.0, 1.8, mat, x + w / 2, 2.3, z, 0, { uv: 1.0, cast: false });
+      B(g, w + 0.4, 0.2, d + 0.4, mats.concreteDark, x, 2.9, z, 0, { uv: 1.4 });
+      B(g, 1.4, 0.8, 0.6, mats.wood, x - 0.5, 1.0, z, 0, { uv: 0.8, collide: true });
+      WIN(g, 1.2, 0.7, mats.windowLitDim, x + 0.5, 1.8, z + d / 2 + 0.03, 0);
+      coverPoints.push({ x: x + w / 2 + 1.2, z: z, h: true });
+    };
+    const fenceSolid = (g, x, z, w, rot = 0) => {
+      B(g, w, 0.08, 0.08, mats.metal, x, 1.9, z, rot, { cast: false });
+      B(g, w, 0.08, 0.08, mats.metal, x, 0.8, z, rot, { cast: false });
+      for (let i = 0; i < Math.ceil(w / 2); i++) B(g, 0.08, 2.0, 0.08, mats.metal, x - w / 2 + i * 2, 1.0, z, rot, { cast: false });
+      addColliderRot(x, z, w, 0.2, rot, 0.05);
+    };
+
+    /* ---------------- SOUK ---------------- */
+    stallSolid(S, -102.0, 42.0, 0.15);
+    stallSolid(S, -89.3, 58.5, -0.2);
+    stallSolid(S, -90.0, 57.2, 0.05);
+    cartSolid(S, -99.0, 43.0, 0.2);
+    cartSolid(S, -58.0, 5.5, -0.4);
+    troughSolid(S, -45.0, 33.0, 0);
+    for (const [x, z, rot] of [[-79.2, 15.5, 0], [-42.5, 13.5, 0], [-60.0, 30.5, 0]]) {
+      B(S, 2.2, 0.5, 0.6, mats.wood, x, 0.25, z, rot, { uv: 0.8, collide: true });
+      B(S, 2.2, 0.5, 0.1, mats.wood, x, 0.75, z - 0.28, rot, { cast: false });
+      coverPoints.push({ x: x + 0.8, z: z, h: false });
+    }
+    lowCover(S, -101.0, 40.3, 4.0, 0.6, 1.0, mats.plasterC, 0, 0.8, 0.9);
+    lowCover(S, -90.5, 55.6, 4.0, 0.6, 1.0, mats.plasterC, 0, 0.8, -0.9);
+    
+    for (const [x, z, s] of [[-98.5, 41.8, 0.85], [-94.5, 41.8, 0.8], [-103.2, 47.5, 0.9], [-102.4, 51.5, 0.8], [-90.7, 50.8, 0.9], [-90.7, 41.2, 0.8], [-97.0, 40.4, 0.9], [-92.0, 55.7, 0.8],
+      [-79.0, 6.0, 0.9], [-73.0, -2.0, 0.8], [-79.0, -14.0, 0.9],  [-79.0, 34.0, 0.9], [-79.0, 28.0, 0.8],
+      [-92.0, 17.2, 0.8], [-84.0, 22.6, 0.9], [-66.0, 17.2, 0.8], [-55.0, 22.6, 0.9], [-48.0, -14.0, 0.8], [-44.0, 12.0, 0.9], [-61.0, 11.0, 0.8]]) crateSolid(S, x, z, s, 0.15);
+    for (const [x, z] of [[-80.0, 12.0], [-72.0, 8.0], [-94.0, 40.5], [-87.5, 47.0], [-100.5, 46.0]]) drumSolid(S, x, z);
+    for (const [x, z] of [[-76.0, 20.0], [-70.0, 36.0], [-55.0, 8.0], [-46.0, 20.0]]) sack(S, x, z, 0.55);
+    B(S, 2.4, 0.12, 13.0, mats.wood, -88.0, 4.35, 47.0, 0, { cast: false });
+    for (const z of [41, 45, 49, 53]) B(S, 2.4, 0.12, 0.12, mats.wood, -88.0, 4.25, z, 0, { cast: false });
+    for (const z of [43.5, 47.0, 50.5]) lantern(S, -88.0, 4.0, z, 0.9);
+    for (const [x, z] of [[-57.4, 1.6], [-57.4, -2.2], [-57.4, 6.8], [-57.4, 10.2]]) {
+      B(S, 0.6, 1.9, 2.0, mats.wood, x, 1.0, z, 0, { uv: 0.8, collide: true });
+      B(S, 0.7, 0.06, 2.1, mats.wood, x, 1.98, z, 0, { cast: false });
+    }
+
+    /* ---------------- RAIL ---------------- */
+    B(R, 4.2, 0.14, 18.0, mats.metal, -3.4, 5.6, -174, 0, { cast: false });
+    for (const z of [-184.5, -180.0, -175.0, -170.0, -165.0]) B(R, 0.12, 4.0, 0.12, mats.metal, -5.3, 3.6, z, 0, { cast: false });
+    for (const z of [-181.5, -168.0]) {
+      B(R, 2.2, 0.8, 0.35, mats.metalTan, -5.4, 0.4, z, 0, { uv: 0.8, collide: true });
+      WIN(R, 1.6, 0.4, mats.signA, -4.28, 5.1, z, Math.PI / 2);
+    }
+    B(R, 3.6, 2.4, 0.12, mats.metal, -5.82, 1.3, -168.0, Math.PI / 2, { uv: 1.0, collide: true });
+    trailerSolid(R, 20.0, -176.0, 0, mats.metalTan);
+    containerSolid(R, 18.0, -166.0, 2, 0);
+    B(R, 2.0, 1.4, 1.4, mats.metalTan, 14.5, 1.0, -176.0, 0.3, { uv: 1.2, collide: true });
+    B(R, 1.0, 1.2, 1.2, mats.metal, 13.9, 2.2, -177.0, 0.3, { uv: 1.0 });
+    B(R, 0.18, 3.2, 0.18, mats.metal, 15.5, 2.1, -174.8, 0, { cast: false });
+    B(R, 0.18, 3.2, 0.18, mats.metal, 15.5, 2.1, -177.2, 0, { cast: false });
+    coverPoints.push({ x: 13.0, z: -176.0, h: true });
+    palletArt(R, 16.0, -170.0, 3);
+    addCollider(-30.0, -160.0, 11.0, 2.7, 0.1);
+    addCollider(28.0, -168.0, 12.0, 2.7, 0.1);
+    addCollider(34.0, -160.0, 7.0, 2.7, 0.1);
+    trainCar(R, -14.0, -160.0, 9.0, 'box');
+    addCollider(-14.0, -160.0, 9.0, 2.7, 0.1);
+    for (const [x, z] of [[-30.0, -156.6], [28.0, -164.6], [-14.0, -156.6]]) coverPoints.push({ x, z, h: true });
+    officeSolid(R, 16.0, -122.0, 3.0, 2.6, mats.plasterB);
+    for (const [x, z] of [[18.0, -140.0], [-14.0, -128.0]]) {
+      B(R, 2.2, 0.5, 0.6, mats.wood, x, 0.25, z, 0, { uv: 0.8, collide: true });
+      B(R, 2.2, 0.5, 0.1, mats.wood, x, 0.75, z - 0.28, 0, { cast: false });
+      coverPoints.push({ x: x + 0.8, z, h: false });
+    }
+    fenceSolid(R, 22.0, -106.0, 14.0, 0);
+    for (const x of [16.0, 20.0]) {
+      B(R, 0.18, 1.0, 0.18, mats.metal, x, 0.5, -106.0, 0, { collide: true });
+      B(R, 0.9, 0.08, 0.08, mats.metal, x, 1.0, -106.0, 0, { cast: false });
+    }
+    for (const [x, z, s] of [[20, -180, 0.9], [24, -172, 0.8], [26, -164, 0.9], [30, -154, 0.8], [22, -134, 0.9], [16, -118, 0.8],
+      [-14, -174, 0.9], [-20, -166, 0.8], [-24, -150, 0.9], [-28, -134, 0.8], [-20, -120, 0.9], [-16, -112, 0.8]]) crateSolid(R, x, z, s, 0.15);
+    for (const [x, z] of [[24, -160], [28, -146], [18, -126], [-30, -160], [-26, -142], [-18, -120]]) drumSolid(R, x, z);
+    for (const [x, z, w] of [[14, -150, 2.4], [20, -140, 2.2], [-14, -140, 2.4], [-20, -124, 2.2]]) barrierSolid(R, x, z, w, 0);
+    for (const [x, z] of [[-28, -150], [-18, -146], [16, -150], [26, -146]]) {
+      B(R, 1.0, 1.0, 1.0, mats.wood, x, 0.5, z, 0, { uv: 0.8, collide: true });
+      coverPoints.push({ x, z: z + 0.9, h: false });
+    }
+    for (const [x, z] of [[-16, -148], [-6, -147.5], [6, -148], [16, -147.5]]) {
+      B(R, 1.6, 0.6, 0.7, mats.wood, x, 4.5, z, 0, { uv: 0.8, cast: false });
+      B(R, 1.2, 0.5, 0.5, mats.metalTan, x + 1.1, 4.45, z, 0, { uv: 0.6, cast: false });
+    }
+    B(R, 0.25, 4.0, 6.0, mats.plasterA, -24.0, 2.0, -185.0, 0, { collide: true, uv: 1.6 });
+    B(R, 6.0, 4.0, 0.25, mats.plasterA, -21.0, 2.0, -188.0, 0, { collide: true, uv: 1.6 });
+    B(R, 6.0, 4.0, 0.25, mats.plasterA, -21.0, 2.0, -182.0, 0, { collide: true, uv: 1.6 });
+    B(R, 0.25, 3.0, 2.0, mats.plasterA, -24.0, 1.5, -188.5, 0, { collide: true, uv: 1.0 });
+    B(R, 2.0, 0.8, 0.6, mats.wood, -21.5, 1.0, -185.0, 0, { uv: 0.8, collide: true });
+    WIN(R, 1.2, 0.6, mats.windowLitDim, -21.0, 2.4, -181.86, 0);
+    for (const [x, z] of [[-30, -112], [20, -136]]) {
+      C(R, 1.0, 1.0, 0.7, 12, mats.wood, x, 1.0, z, { rx: Math.PI / 2 });
+      addCollider(x, z, 2.0, 1.0, 0.1);
+      coverPoints.push({ x: x + 1.4, z, h: true });
+    }
+
+    /* ---------------- PORT ---------------- */
+    containerSolid(P, 86.0, -66.0, 2);
+    containerSolid(P, 72.0, -38.0, 2);
+    containerSolid(P, 58.0, -36.0, 2);
+    containerSolid(P, 104.0, -38.0, 2);
+    containerSolid(P, 108.0, -62.0, 2);
+    for (const [x, z] of [[92, -60], [108, -60], [92, -36], [108, -36]]) {
+      solidBox(P, x, z, 2.2, 0.6, 0.9, mats.concrete, 0);
+      coverPoints.push({ x: x + 1.4, z, h: false });
+    }
+    officeSolid(P, 56.0, -90.0, 4.0, 3.0, mats.plasterB);
+    trailerSolid(P, 88.0, 2.0, 0, mats.metal);
+    for (const [x, z] of [[114, -20], [114, -8], [114, 4]]) {
+      B(P, 0.5, 1.0, 0.5, mats.rust, x, 0.5, z, 0, { uv: 0.6, collide: true });
+      B(P, 0.7, 0.1, 0.7, mats.metal, x, 1.05, z, 0, { cast: false });
+    }
+    for (const [x, z] of [[74, -72], [86, -72], [90, -78]]) palletArt(P, x, z, 3);
+    for (const [x, z] of [[70, -70], [94, -74], [88, -48], [100, -16]]) drumSolid(P, x, z);
+    for (const [x, z, w] of [[60, -88, 2.4], [96, -62, 2.2], [110, -40, 2.2]]) barrierSolid(P, x, z, w, 0);
+    for (const [x, z, s] of [[76, -64, 0.9], [68, -68, 0.8], [72, -52, 0.9], [56, -70, 0.8], [62, -20, 0.9], [78, -96, 0.9], [104, -80, 0.8]]) crateSolid(P, x, z, s, 0.15);
+    fenceSolid(P, 100.0, -94.0, 6.0, 0);
+    fenceSolid(P, 108.0, -10.0, 8.0, Math.PI / 2);
+    for (const [x, z] of [[60, -50], [90, -82], [110, 0], [70, 12]]) solidBox(P, x, z, 0.9, 0.9, 1.2, mats.concreteDark, 0);
+    for (const x of [61, 67, 76, 82]) B(P, 0.5, 0.5, 0.35, mats.rubber, x, 0.25, 7.4, 0, { collide: true });
+    for (const [x, z] of [[74, -76], [86, -72], [90, -78]]) coverPoints.push({ x: x + 1.6, z: z + 1.2, h: false });
+    for (const [x, z] of [[60, -84], [96, -62], [110, -40]]) coverPoints.push({ x, z: z + 0.9, h: false });
+
+    /* ---------------- stage foreground / midground cover ---------------- */
+    // souk: cart/crates/sacks in front of the well, low stall + low wall beyond
+    crateSolid(S, -101.2, 44.2, 0.9);
+    crateSolid(S, -102.4, 45.3, 0.8);
+    lowCover(S, -100.4, 44.6, 1.8, 0.7, 0.9, mats.sandbag, 0, -0.9, 0.8);
+    cartSolid(S, -103.5, 47.0, 0.8);
+    stallSolid(S, -104.5, 44.0, 0.1, 3.0, 1.8);
+    lowCover(S, -104.8, 48.8, 2.6, 0.6, 1.0, mats.plasterC, 0, 0.8, 0.8);
+    crateSolid(S, -98.9, 44.0, 0.85);
+    crateSolid(S, -99.6, 45.3, 0.8);
+    lowCover(S, -99.4, 46.8, 1.4, 0.55, 0.8, mats.sandbag, 0, -0.7, -0.6);
+    lowCover(S, -103.8, 45.8, 2.0, 0.55, 1.0, mats.plasterC, 0, 0.8, 0.8);
+    for (const [x, z] of [[-100.8, 43.6], [-101.6, 43.9], [-102.8, 46.1]]) sack(S, x, z, 0.55);
+
+    // rail: pallets/drums/buffers 5-12 m ahead, flatbed + container under the platform
+    crateSolid(R, -4.5, -158.5, 0.9);
+    crateSolid(R, 13.5, -158.0, 0.9);
+    drumSolid(R, -3.8, -159.2);
+    drumSolid(R, 14.5, -156.0);
+    barrierSolid(R, -5.5, -156.0, 2.4);
+    barrierSolid(R, 16.0, -155.5, 2.2);
+    lowCover(R, 4.0, -160.0, 1.4, 1.0, 0.8, mats.concreteDark, 0, 1.0, 0.8);
+    lowCover(R, -5.0, -160.0, 1.2, 1.0, 0.8, mats.metal, 0, 1.0, 0.8);
+    drumSolid(R, 5.8, -158.5);
+    drumSolid(R, -6.5, -158.0);
+    barrierSolid(R, 4.0, -157.5, 2.0);
+    trailerSolid(R, 20.0, -151.0);
+    containerSolid(R, -22.0, -151.0, 1);
+
+    // port: two low cover groups 4-10 m out, trailer + bollards at 12-20 m
+    lowCover(P, 83.0, -76.0, 2.2, 1.2, 0.9, mats.wood, 0, 1.6, 0.8);
+    lowCover(P, 87.0, -73.0, 2.4, 0.7, 1.0, mats.concrete, 0, 1.6, 0.8);
+    drumSolid(P, 84.6, -75.0);
+    drumSolid(P, 88.6, -72.6);
+    trailerSolid(P, 96.0, -76.0);
+    lowCover(P, 90.0, -69.0, 2.0, 1.2, 1.2, mats.metal, 0, 1.2, 0.8);
+    for (const [x, z] of [[88.0, -70.0], [92.0, -66.0]]) {
+      B(P, 0.5, 1.0, 0.5, mats.rust, x, 0.5, z, 0, { uv: 0.6, collide: true });
+      B(P, 0.7, 0.1, 0.7, mats.metal, x, 1.05, z, 0, { cast: false });
+      coverPoints.push({ x: x + 0.8, z, h: false });
+    }
+    for (const [x, z] of [[90.0, -70.0], [96.0, -66.0]]) {
+      B(P, 0.5, 1.0, 0.5, mats.rust, x, 0.5, z, 0, { uv: 0.6, collide: true });
+      B(P, 0.7, 0.1, 0.7, mats.metal, x, 1.05, z, 0, { cast: false });
+      coverPoints.push({ x: x + 0.8, z, h: false });
+    }
 
 
   }
