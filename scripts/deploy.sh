@@ -72,7 +72,7 @@ ok "已上传 → $SERVER:$APP_DIR/build/ 与 /opt/dod-leaderboard/"
 step "5/7 服务器原子部署（失败自动回滚）"
 ssh "$SERVER" "bash $APP_DIR/build/server-deploy.sh $APP_DIR/staging/dist"
 
-step "6/7 排行榜服务更新"
+step "6/7 服务端更新（排行榜 + LAN 中继）"
 ssh "$SERVER" '
   if docker ps -a --format "{{.Names}}" | grep -qx dod-leaderboard; then
     docker restart dod-leaderboard >/dev/null && echo "dod-leaderboard 已重启"
@@ -86,6 +86,16 @@ ssh "$SERVER" '
   sleep 1
   curl -fsS http://127.0.0.1:8320/api/health >/dev/null && echo "排行榜健康检查通过"
 '
+# LAN 中继（systemd 服务存在才同步；lan.mjs 依赖 ws，node_modules 常驻 /opt/dod-lan）
+HAS_LAN=$(ssh "$SERVER" 'systemctl list-unit-files dod-lan.service --no-legend 2>/dev/null | wc -l')
+if [ "${HAS_LAN:-0}" -ge 1 ]; then
+    ssh "$SERVER" "mkdir -p /opt/dod-lan/server /opt/dod-lan/src/net"
+    scp -q src/net/lanProtocol.js "$SERVER:/opt/dod-lan/src/net/"
+    scp -q server/lan.mjs "$SERVER:/opt/dod-lan/server/"
+    ssh "$SERVER" 'systemctl restart dod-lan && sleep 1 && systemctl is-active dod-lan' >/dev/null && ok "LAN 中继已更新重启"
+else
+    echo "无 dod-lan 服务，跳过 LAN 中继同步"
+fi
 
 step "7/7 线上验证"
 sleep 1
