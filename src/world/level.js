@@ -35,6 +35,8 @@ export function createLevel(engine) {
 
   const colliders = [];   // {x0,x1,z0,z1}
   const breachDoors = [];
+  const interactiveDoors = [];
+  const interactiveWindows = [];
   const bulletTargets = [];
   const spawnPoints = [];
   const coverPoints = [];
@@ -2682,11 +2684,51 @@ export function createLevel(engine) {
       B(g, 0.1, 0.12, d + 0.24, mats.wood, x - 0.03, 2.28, zc, 0, { cast: false });
       B(g, 0.5, 0.035, d + 0.2, mats.metal, x - 0.02, 0.018, zc, 0, { cast: false });
       const hz = zc + d / 2, leafD = 0.78, ang = 0.55;
-      B(g, 0.06, 2.02, leafD, mats.wood, x - 0.28, 1.03, hz - Math.cos(ang) * leafD / 2, ang, { cast: false });
+      const pivot = new THREE.Group();
+      pivot.position.set(x - 0.28, 1.03, hz);
+      const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.02, leafD), mats.wood);
+      leaf.position.set(0, 0, -leafD / 2);
+      leaf.castShadow = false; leaf.receiveShadow = true;
+      pivot.add(leaf);
+      const knob = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), mats.metalTan);
+      knob.position.set(-0.065, 0, -leafD + 0.12);
+      pivot.add(knob);
+      pivot.rotation.y = ang;
+      g.add(pivot);
       for (const yy of [0.42, 1.72]) C(g, 0.035, 0.035, 0.12, 6, mats.metal, x - 0.03, yy, hz - 0.03, { rz: Math.PI / 2, cast: false });
-      B(g, 0.07, 0.09, 0.13, mats.metalTan, x - 0.44, 1.0, hz - Math.cos(ang) * 0.7, 0, { cast: false });
       B(g, 0.05, 0.3, 0.95, signMat || mats.signB, x + 0.06, 2.55, zc, 0, { cast: false });
+      const doorRec = {
+        x: x - 0.1, z: zc, isOpen: false,
+        toggle() {
+          this.isOpen = !this.isOpen;
+          pivot.rotation.y = this.isOpen ? 1.78 : ang;
+          return this.isOpen;
+        },
+      };
+      interactiveDoors.push(doorRec);
     };
+    const windowShutter = (g, x, y, z, w, h, rot = 0) => {
+      for (const dz of [-w / 2, w / 2]) B(g, 0.08, h + 0.16, 0.08, mats.wood, x, y, z + dz, 0, { cast: false });
+      B(g, 0.1, 0.08, w + 0.16, mats.wood, x, y - h / 2 - 0.04, z, 0, { cast: false });
+      B(g, 0.1, 0.08, w + 0.16, mats.wood, x, y + h / 2 + 0.04, z, 0, { cast: false });
+      const pivot = new THREE.Group();
+      pivot.position.set(x, y, z);
+      pivot.rotation.y = rot;
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(0.05, h, w), mats.metal);
+      panel.castShadow = false; panel.receiveShadow = true;
+      pivot.add(panel);
+      g.add(pivot);
+      const rec = {
+        x, z, isOpen: false,
+        toggle() {
+          this.isOpen = !this.isOpen;
+          pivot.rotation.y = rot + (this.isOpen ? 1.35 : 0);
+          return this.isOpen;
+        },
+      };
+      interactiveWindows.push(rec);
+    };
+
     const officeChair = (g, x, z, rot = 0) => {
       B(g, 0.42, 0.07, 0.42, mats.wood, x, 0.45, z, rot, { cast: false });
       B(g, 0.42, 0.5, 0.06, mats.wood, x, 0.72, z - 0.19, rot, { cast: false });
@@ -2697,6 +2739,7 @@ export function createLevel(engine) {
     // ---- RAIL ticket / station office (4 x 6, 2.8 m, 1.6 m door) ----
     soukShop(R, 16.0, 20.0, -134.0, -128.0, 1.6, 2.8, true, false);
     officeDoor(R, 20.0, -131.0, 2.8, mats.signB);
+    windowShutter(R, 16.02, 1.55, -131.0, 1.15, 0.9, 0);
     // counter along north wall + desk/chair south + locker west + bench
     B(R, 2.2, 1.0, 0.6, mats.wood, 17.8, 0.5, -133.35, 0, { uv: 0.8, collide: true });
     B(R, 2.3, 0.06, 0.7, mats.metalTan, 17.8, 1.03, -133.35, 0, { cast: false });
@@ -2728,6 +2771,7 @@ export function createLevel(engine) {
     // ---- PORT dock office (4 x 5, 2.94 m, 1.6 m door) ----
     soukShop(P, 52, 56, -94, -89, 1.6, 2.94, false, false);
     officeDoor(P, 56.0, -91.5, 2.94, mats.signC);
+    windowShutter(P, 52.02, 1.55, -91.5, 1.1, 0.9, 0);
     B(P, 1.2, 0.75, 0.6, mats.wood, 53.4, 0.375, -90.2, 0, { uv: 0.8, collide: true });
     officeChair(P, 53.4, -90.8, 0.15);
     B(P, 0.62, 1.8, 0.55, mats.metal, 55.4, 0.9, -93.4, 0, { uv: 0.9, collide: true });
@@ -5704,11 +5748,27 @@ export function createLevel(engine) {
     dustSeed[i] = rnd() * 100;
   }
   dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+  dustGeo.setAttribute('aSeed', new THREE.BufferAttribute(dustSeed, 1));
   const dustMat = new THREE.PointsMaterial({
     size: 0.04, map: mats.sprites.glow, color: 0xffe6c4,
     transparent: true, opacity: 0.45, depthWrite: false,
     blending: THREE.AdditiveBlending, sizeAttenuation: true,
   });
+  /* Drift runs on the GPU now: the CPU version integrated 1200 particles with
+     two trig calls each and re-uploaded the whole position buffer EVERY frame
+     (~15 KB/frame upload + ~144k sin/cos per second). The shader reproduces
+     the same motion: slow rise with wraparound + gentle sway. */
+  const dustTime = { value: 0 };
+  dustMat.onBeforeCompile = (shader) => {
+    shader.uniforms.uDustTime = dustTime;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform float uDustTime;\nattribute float aSeed;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        transformed.x += sin(uDustTime * 0.35 + aSeed * 1.7) * 0.26;
+        transformed.y = mod(position.y - 0.2 + uDustTime * 0.012, 12.8) + 0.2
+                      + sin(uDustTime * 0.6 + aSeed) * 0.083;
+      `);
+  };
   const dust = new THREE.Points(dustGeo, dustMat);
   dust.frustumCulled = false;
   dynamic.add(dust);
@@ -5851,9 +5911,9 @@ export function createLevel(engine) {
 
   /* ------------------------------------------------------------------ update */
   let time = 0;
-  const pos = dust.geometry.attributes.position;
   function update(dt, camera) {
     time += dt;
+    dustTime.value = time;
     // destructible debris
     for (let i = debris.length - 1; i >= 0; i--) {
       const p = debris[i];
@@ -5870,9 +5930,26 @@ export function createLevel(engine) {
       p.m.rotation.x += p.spin * dt;
       p.m.rotation.z += p.spin * 0.7 * dt;
     }
+    /* Fires animate only near the camera: 5+ sites x 11 sprites of per-frame
+       position/scale/opacity churn (each sprite is also a draw call, so a fire
+       you cannot see is pure cost). Freeze frames beyond 80 m; light flicker
+       fades out past 45 m. */
+    const camX = camera ? camera.position.x : 0;
+    const camZ = camera ? camera.position.z : 0;
     for (const f of fires) {
-      const flick = 0.78 + Math.sin(time * 17.3 + f.base.x) * 0.1 + Math.sin(time * 7.1) * 0.08 + Math.pow(Math.random(), 3) * 0.25;
-      if (f.light) f.light.intensity = f.intensity * flick;
+      const fdx = f.base.x - camX;
+      const fdz = f.base.z - camZ;
+      const fireD2 = fdx * fdx + fdz * fdz;
+      if (f.light) {
+        if (fireD2 < 80 * 80) {
+          const flick = 0.78 + Math.sin(time * 17.3 + f.base.x) * 0.1 + Math.sin(time * 7.1) * 0.08 + Math.pow(Math.random(), 3) * 0.25;
+          const near = fireD2 < 45 * 45 ? 1 : Math.max(0, 1 - (Math.sqrt(fireD2) - 45) / 35);
+          f.light.intensity = f.intensity * flick * near;
+        } else if (f.light.intensity !== 0) {
+          f.light.intensity = 0;
+        }
+      }
+      if (fireD2 > 80 * 80) continue;
       for (const s of f.sprites) {
         s.phase += dt * (2.2 + s.s * 2);
         const wob = Math.sin(s.phase) * 0.12;
@@ -5896,14 +5973,6 @@ export function createLevel(engine) {
         s.sp.material.opacity = 0.16 * (1 - s.t) * Math.min(1, s.t * 5);
       }
     }
-    for (let i = 0; i < dustCount; i++) {
-      const s = dustSeed[i];
-      pos.array[i * 3 + 1] += (Math.sin(time * 0.6 + s) * 0.05 + 0.012) * dt;
-      pos.array[i * 3] += Math.cos(time * 0.35 + s * 1.7) * 0.09 * dt;
-      if (pos.array[i * 3 + 1] > 13) pos.array[i * 3 + 1] = 0.2;
-    }
-    pos.needsUpdate = true;
-    void camera;
   }
 
   /* ------------------------------------------------------- named regions */
@@ -5941,7 +6010,7 @@ export function createLevel(engine) {
   }
 
   return {
-    root, colliders, bulletTargets, spawnPoints, coverPoints, bvhStats, breachDoors,
+    root, colliders, bulletTargets, spawnPoints, coverPoints, bvhStats, breachDoors, interactiveDoors, interactiveWindows,
     bounds: { x0: -118, x1: 124, z0: -196, z1: 128 },
     cqbZones, objectiveZones, regionAt, regions: REGIONS,
     stages: EXPANSION_STAGES, districts: EXPANSION_DISTRICTS,

@@ -55,11 +55,12 @@ export function createInteract({ hud, input, onUse } = {}) {
   }
 
   function use(t) {
-    if (!t || t.done) return;
-    t.done = true;
+    if (!t || (t.done && !t.repeat)) return;
+    if (!t.repeat) t.done = true;
     if (hud && hud.setInteract) hud.setInteract(null);
     if (onUse) onUse(t);
     if (t.onUse) t.onUse(t);
+    // repeat targets are re-armed immediately (doors/windows/shutters)
     current = null;
   }
 

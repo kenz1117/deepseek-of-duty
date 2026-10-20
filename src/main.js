@@ -346,7 +346,9 @@ const grenades = [];
 let raycaster, clock;
 let beacon = null;
 let sunOccluded = false, sunOcclusionTimer = 0;
+let stuckTimer = 0, stuckCooldown = 0;
 const _sunRay = new THREE.Raycaster();
+_sunRay.firstHitOnly = true;   // three-mesh-bvh: stop at the first hit per mesh
 let lastTime = 0;
 
 const loadingEl = document.getElementById('loading');
@@ -1349,6 +1351,30 @@ async function boot() {
           },
         });
       }
+    }
+    for (const door of (level.interactiveDoors || [])) {
+      let rec = null;
+      rec = interact.add({
+        x: door.x, z: door.z, r: 2.4, label: 'E 开门', repeat: true,
+        onUse: () => {
+          const open = door.toggle();
+          if (rec) rec.label = open ? 'E 关门' : 'E 开门';
+          if (audio && audio.impact) audio.impact('wood', 0, 0.65);
+          if (hud && hud.toast) hud.toast(open ? '门已打开' : '门已关上', 1100);
+        },
+      });
+    }
+    for (const win of (level.interactiveWindows || [])) {
+      let rec = null;
+      rec = interact.add({
+        x: win.x, z: win.z, r: 2.2, label: 'E 开窗', repeat: true,
+        onUse: () => {
+          const open = win.toggle();
+          if (rec) rec.label = open ? 'E 关窗' : 'E 开窗';
+          if (audio && audio.impact) audio.impact('metal', 0, 0.5);
+          if (hud && hud.toast) hud.toast(open ? '窗已打开' : '窗已关上', 1000);
+        },
+      });
     }
     for (const door of (level.breachDoors || [])) {
       interact.add({
@@ -3861,6 +3887,31 @@ function updateGame(dt) {
   });
   if (jumpNow) G.tut.jumps++;
 
+  // If a prop/doorway still traps the player, nudge them to the nearest free
+  // nav cell after a short pause instead of leaving them permanently stuck.
+  if (playing && nav && !G.debugNoUnstick) {
+    stuckCooldown = Math.max(0, stuckCooldown - dt);
+    const p = controller.pos;
+    const gh = level.groundHeight ? level.groundHeight(p.x, p.z, p.y) : 0;
+    const grounded = p.y <= gh + 0.55;
+    if (!nav.isWalkableAt(p.x, p.z, p.y) && grounded && controller.state.speed < 0.45) {
+      stuckTimer += dt;
+      if (stuckTimer > 0.8 && stuckCooldown <= 0) {
+        const w = nav.closestWalkableOn(p.x, p.z, p.y);
+        if (w) {
+          const yaw = engine.camera.rotation.y, pitch = engine.camera.rotation.x;
+          controller.revive(w.x, w.z);
+          controller.setLook(yaw, pitch);
+          stuckCooldown = 1.5;
+          if (hud && hud.toast) hud.toast('已脱离卡点', 900);
+        }
+        stuckTimer = 0;
+      }
+    } else {
+      stuckTimer = Math.max(0, stuckTimer - dt * 2);
+    }
+  }
+
   if (playing) {
     updateWeaponSwap(dt);
     tryFire(dt);
@@ -4071,6 +4122,7 @@ window.__game = {
   },
   get enemies() { return enemies; }, get state() { return G; }, get hud() { return hud; },
   get fx() { return fx; }, get viewmodel() { return viewmodel; }, get input() { return input; },
+  get interact() { return interact; },
   get pickups() { return pickups; }, get streaks() { return streakSys; }, get artillery() { return artillery; },
   get leaderboard() { return leaderboard; }, get results() { return results; },
   get daily() { return loadDaily(); },
@@ -4089,6 +4141,7 @@ window.__game = {
   get lan() { return lanSession; },
   get lanLobby() { return lanLobby; },
   startLanHostGame, startLanClientGame, leaveLanSession, applyLanFire,
+  pressInteract: () => { if (interact) interact.press(); },
   aiStats: () => {
     const live = enemies.filter((e) => e.root.visible);
     return {
