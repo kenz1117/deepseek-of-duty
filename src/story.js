@@ -241,7 +241,7 @@ export const OPERATIONS = [
     waves: 2,
     atmosphere: 'night',
     hold: 60,
-    start: { x: 0, z: -180, yaw: Math.PI },
+    start: { x: 0, z: -155, yaw: Math.PI },
     spawnRect: { x0: -38, x1: 42, z0: -194, z1: -106 },
     zone: { x: 4, z: -150, r: 7 },
     intro: 'rail_intro',
