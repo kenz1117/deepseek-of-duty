@@ -13,20 +13,34 @@
  *   s->c welcome  { t:'welcome', id, host, room, players }
  *   s->c lobby    { t:'lobby', players:[{id,name,ready,host}] }
  *   s->c snapshot { t:'snapshot', tick, players, enemies, wave, kills, objective }
- *   s->c event    { t:'event', kind, ... }
+ *   s->c event    { t:'event', kind, ... }   // host_change carries `resume`
  *
  * The server stamps relayed input/fire/event messages with the sender's `id`.
+ * `host_change.resume` carries the last cached host snapshot so the promoted
+ * host can rebuild the world (see server/lan.mjs host migration).
  */
 
 export const LAN_PROTOCOL_VERSION = 1;
 export const LAN_DEFAULT_PORT = 8790;
 export const LAN_DEFAULT_URL = `ws://127.0.0.1:${LAN_DEFAULT_PORT}`;
-export const LAN_MAX_PLAYERS = 4;
+/** UDP discovery beacon port (server -> LAN broadcast, native helpers only). */
+export const LAN_BEACON_PORT = 8791;
+export const LAN_MAX_PLAYERS = 8;
 export const LAN_SNAPSHOT_HZ = 20;
 export const LAN_TICK_MS = 1000 / LAN_SNAPSHOT_HZ;
 export const LAN_MAX_MESSAGE_BYTES = 16 * 1024;
-export const LAN_RATE_LIMIT_PER_SEC = 60;
-export const LAN_RATE_BURST = 60;
+/**
+ * Inbound token-bucket budget, per WebSocket connection.
+ *
+ * Every client streams `input` at LAN_SNAPSHOT_HZ (20 Hz), so the host's
+ * inbound rate is `LAN_SNAPSHOT_HZ * (players - 1)`. At 8 players that is
+ * 20 * 7 = 140 msg/s. The previous 60/s cap made `allowMessage()` (server/
+ * lan.mjs) close the host with RATE_LIMITED before a full lobby could even
+ * play. The budget must stay above that worst case, with headroom for the
+ * client's own `fire`/event traffic.
+ */
+export const LAN_RATE_LIMIT_PER_SEC = 240;
+export const LAN_RATE_BURST = 240;
 export const LAN_HEARTBEAT_MS = 20_000;
 export const LAN_RECONNECT_TRIES = 3;
 export const LAN_RECONNECT_DELAYS_MS = [1000, 2000, 4000];
@@ -165,6 +179,10 @@ export function makeInput(input) {
     t: 'input',
     seq: toInteger(source.seq, 0),
     x: toFiniteNumber(source.x, 0),
+    // `y` used to be dropped here while senders kept sending it, so the host
+    // always read undefined and fell back to 0 — every remote avatar was
+    // interpolated at ground level (visible on stairs/roofs).
+    y: toFiniteNumber(source.y, 0),
     z: toFiniteNumber(source.z, 0),
     yaw: toFiniteNumber(source.yaw, 0),
     pitch: toFiniteNumber(source.pitch, 0),

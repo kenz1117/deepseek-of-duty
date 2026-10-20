@@ -23,6 +23,7 @@ import { createNetAvatar } from './entities/netRemote.js';
 import { Perception } from './systems/ai/perception.js';
 import { AIDirector } from './systems/ai/director.js';
 import { createBarks } from './systems/barks.js';
+import { createWeatherSystem, WEATHER_ORDER } from './systems/weather.js';
 import { createEnemyEquipment } from './systems/ai/equipment.js';
 import { createCinema } from './cinema.js';
 import { createVoice } from './voice.js';
@@ -152,6 +153,7 @@ const G = {
 };
 
 let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap, interact, intelSys;
+let weather = null;
 let lanLobby = null, lanSession = null, worldLabels = null;
 const net = {
   role: null, selfId: null, name: 'OPERATOR', hostId: null,
@@ -389,7 +391,23 @@ function applyAtmosphereForWave(n) {
   G.atmosphere = key;
   if (!engine || !engine.applyAtmosphere) return;
   const label = engine.applyAtmosphere(key);
+  applyWeatherForAtmo(key, n);
   if (hud && hud.setAtmosphere) hud.setAtmosphere(label);
+}
+
+/* 天色→默认天气的映射：天色只是光照氛围，天气独立叠加。
+   波次编号 n 决定天气轮换（晴→风→雾→雨→暴风），与天色轮换解耦。 */
+function weatherKeyForWave(n) {
+  return WEATHER_ORDER[(Math.max(1, n) - 1) % WEATHER_ORDER.length];
+}
+
+function applyWeatherForAtmo(atmoKey, waveN) {
+  if (!weather) return;
+  weather.syncBase(); // 天色刚被重设，刷新大气基线，避免互相覆盖
+  const wKey = weatherKeyForWave(waveN || 1);
+  const wLabel = weather.set(wKey);
+  G.weather = wKey;
+  if (hud && hud.setWeather) hud.setWeather(wLabel);
 }
 
 /* Difficulty ladder. The archetype table stays the baseline; every tier is a
@@ -451,6 +469,7 @@ function applySettings(initial = false) {
   controller.baseFov = G.settings.fov;
   controller.reduceMotion = G.settings.reduceMotion;
   if (audio && audio.ctx && audio.setMasterVolume) audio.setMasterVolume(G.settings.master);
+  if (engine && engine.setFrameBudget) engine.setFrameBudget(G.settings.fpsCap);
   if (initial && engine) engine.setQuality(G.settings.quality);
   if (cinema) cinema.setVoice(G.settings.voice !== false);
   if (voice) { voice.setEnabled(G.settings.voice !== false); if (voice.setVolume) voice.setVolume(G.settings.master); }
@@ -691,8 +710,9 @@ function requestGameFullscreen() {
 function launchGame() {
   requestGameFullscreen();
   closePrestart();
-  G.tutorial.done = true;
-  markTutorialDone();
+  // tutorial state is owned by localStorage (see G.tutorial.done = tutorialDone()
+  // at boot): first-time players get the 9-step in-game tutorial, returning
+  // players do not. Do not force-mark it done here.
   audio.init();
   audio.setMasterVolume(G.settings.master);
   initAudioAmbience();
@@ -991,27 +1011,74 @@ function selectOperation(id) {
   if (audio && audio.ctx) audio.ui();
 }
 
+/* Per-district objective alternates. The street table keeps the original
+   interior rotation; the three expansion districts anchor on their site zone
+   plus nearby open ground, so a district fight never teleports the beacon back
+   to the old street. */
+const OBJECTIVE_SPOTS = {
+  street: {
+    defend: [
+      { x: 0, z: -16, r: 8.5 },
+      { x: 0, z: 14, r: 8.0 },
+      { x: -14, z: 2.5, r: 3.8 },
+      { x: 0, z: 70, r: 8.0 },
+      { x: 11.5, z: 68, r: 3.6 },
+    ],
+    extract: [
+      { x: -19.2, z: 3.0, r: 3.5 },
+      { x: -13.3, z: -2.5, r: 2.7 },
+      { x: 13.3, z: -11.6, r: 3.0 },
+      { x: 11.5, z: 68, r: 3.2 },
+    ],
+  },
+  souk: {
+    defend: [
+      { x: -74, z: 12, r: 6.0 },
+      { x: -96, z: 42, r: 5.0 },
+      { x: -52, z: -6, r: 5.0 },
+    ],
+    extract: [
+      { x: -74, z: 12, r: 5.0 },
+      { x: -88, z: 30, r: 4.0 },
+      { x: -48, z: 8, r: 4.0 },
+    ],
+  },
+  rail: {
+    defend: [
+      { x: 4, z: -150, r: 7.0 },
+      { x: 0, z: -180, r: 6.0 },
+      { x: 28, z: -124, r: 5.0 },
+    ],
+    extract: [
+      { x: 4, z: -150, r: 6.0 },
+      { x: -16, z: -172, r: 4.5 },
+      { x: 24, z: -132, r: 4.5 },
+    ],
+  },
+  port: {
+    defend: [
+      { x: 98, z: -44, r: 6.0 },
+      { x: 72, z: -60, r: 5.0 },
+      { x: 104, z: -20, r: 5.0 },
+    ],
+    extract: [
+      { x: 98, z: -44, r: 5.0 },
+      { x: 84, z: -64, r: 4.5 },
+      { x: 100, z: -12, r: 4.5 },
+    ],
+  },
+};
+
 function objectiveZone(kind) {
+  const siteId = currentSiteId();
+  const table = OBJECTIVE_SPOTS[siteId] || OBJECTIVE_SPOTS.street;
+  const spots = table[kind] ? table[kind].slice() : [];
   const base = level && level.objectiveZones && level.objectiveZones[kind];
-  // Objective remix: the zone moves between street / start / alley / interiors.
-  const spots = kind === 'defend'
-    ? [
-        (base && typeof base.x === 'number') ? base : { x: 0, z: -16, r: 8.5 },
-        { x: 0, z: 14, r: 8.0 },
-        { x: -14, z: 2.5, r: 3.8 },
-        { x: 0, z: 70, r: 8.0 },
-        { x: 11.5, z: 68, r: 3.6 },
-      ]
-    : [
-        (base && typeof base.x === 'number') ? base : { x: -19.2, z: 3.0, r: 3.5 },
-        { x: -13.3, z: -2.5, r: 2.7 },
-        { x: 13.3, z: -11.6, r: 3.0 },
-        { x: 11.5, z: 68, r: 3.2 },
-      ];
+  // The legacy level zone is street geometry; only fold it in on the street.
+  if (siteId === 'street' && base && typeof base.x === 'number') spots[0] = base;
   const market = level && level.cqbZones && level.cqbZones.find((z) => /market|yard|后院|市场/.test((z.id || '') + (z.name || '')));
-  if (market) spots.push({ x: market.center.x, z: market.center.z, r: Math.min(3.6, market.radius || 3.6) });
-  const extra = level && level.objectiveZones;
-  if (kind === 'defend' && extra && extra.backyard) spots.push(extra.backyard);
+  if (siteId === 'street' && market) spots.push({ x: market.center.x, z: market.center.z, r: Math.min(3.6, market.radius || 3.6) });
+  if (siteId === 'street' && kind === 'defend' && level && level.objectiveZones && level.objectiveZones.backyard) spots.push(level.objectiveZones.backyard);
   const idx = kind === 'defend'
     ? Math.floor((G.wave || 1) / 3) % spots.length
     : Math.floor((G.wave || 1) / 5) % spots.length;
@@ -1310,6 +1377,26 @@ async function boot() {
     }
     G.tutorial.done = tutorialDone();
     engine = createEngine(document.getElementById('gl'), G.settings.quality);
+
+    // GPU context can be lost (tab backgrounded on low VRAM, driver reset).
+    // Pause and tell the player instead of silently rendering a black frame;
+    // after restore, three's GPU resources cannot be trusted — reload is the
+    // honest recovery path.
+    const glCanvas = document.getElementById('gl');
+    glCanvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      if (G.state === 'playing' || G.state === 'dead') {
+        G.state = 'paused';
+        pauseEl.classList.remove('hidden');
+        input.unlock();
+      }
+      if (hud && hud.toast) hud.toast('显卡上下文丢失，已暂停。');
+    });
+    glCanvas.addEventListener('webglcontextrestored', () => {
+      if (hud && hud.toast) hud.toast('显卡上下文已恢复，正在重新加载…');
+      setTimeout(() => location.reload(), 600);
+    });
+
     setLoading(0.34, '生成程序化 PBR 材质与大气…');
     await nextFrame();
 
@@ -1324,6 +1411,8 @@ async function boot() {
     await nextFrame();
 
     fx = createFX(engine.scene, engine.mats);
+    weather = createWeatherSystem({ scene: engine.scene, engine });
+    weather.set('clear');
     audio = createAudio();
     hud = createHUD();
     voice = createVoice();
@@ -1889,6 +1978,12 @@ function startWave(n) {
       const label = engine.applyAtmosphere(op.atmosphere);
       if (hud && hud.setAtmosphere) hud.setAtmosphere(label);
       G.atmosphere = op.atmosphere;
+      // 剧情战役天气：op.weather 指定，否则按天色语义给默认
+      const DEFAULT_W = { dusk: 'clear', noon: 'clear', storm: 'rain', night: 'fog', bluehour: 'breeze' };
+      applyWeatherForAtmo(op.atmosphere, n);
+      const wLabel = weather ? weather.set(op.weather || DEFAULT_W[op.atmosphere] || 'clear') : '';
+      G.weather = op.weather || DEFAULT_W[op.atmosphere] || 'clear';
+      if (hud && hud.setWeather && wLabel) hud.setWeather(wLabel);
     }
     const lines = op.radio.filter((r) => r.at === n || (n === 1 && r.at === 'start'));
     if (hud.radio && !(n === 1 && op.intro)) {
@@ -1972,13 +2067,47 @@ function startWave(n) {
    column is readable from anywhere, so it gives the bigger map a reason to
    rotate instead of holding one angle. Enemies are not scripted to contest it
    (they path to the player); it is a player-facing risk/reward beat. */
-const HOT_DROP_ZONES = [
-  { x: 0, z: 30, label: '街区南段' },
-  { x: -4, z: 6, label: '街区中段' },
-  { x: 20.8, z: -10.7, label: '后院市场' },
-  { x: 0, z: 70, label: '南院车场' },
-  { x: 11.5, z: 68, label: '车库' },
-];
+/* Drop candidates are keyed by district so the crate never lands 200 m away
+   from the district the player is actually fighting in (free-play/LAN rotate
+   sites; campaign ops on rail/port resolve via nearest-site fallback). */
+const HOT_DROP_ZONES_BY_SITE = {
+  street: [
+    { x: 0, z: 30, label: '街区南段' },
+    { x: -4, z: 6, label: '街区中段' },
+    { x: 20.8, z: -10.7, label: '后院市场' },
+    { x: 0, z: 70, label: '南院车场' },
+    { x: 11.5, z: 68, label: '车库' },
+  ],
+  souk: [
+    { x: -74, z: 12, label: '集市水井' },
+    { x: -96, z: 44, label: '集市西口' },
+    { x: -50, z: -4, label: '集市东摊' },
+  ],
+  rail: [
+    { x: 4, z: -150, label: '站台调度台' },
+    { x: 28, z: -124, label: '货场东侧' },
+    { x: -22, z: -168, label: '平车掩体' },
+  ],
+  port: [
+    { x: 98, z: -44, label: '吊臂下' },
+    { x: 72, z: -60, label: '集装箱阵' },
+    { x: 104, z: -20, label: '码头栈桥' },
+  ],
+};
+
+/** District the current fight belongs to: LAN/free-play use the rotated site;
+    campaign ops (which clear G.site) fall back to the nearest site centroid. */
+function currentSiteId() {
+  if (G.site) return G.site.id;
+  const p = controller ? controller.pos : { x: 0, z: 0 };
+  let best = MAP_SITES[0];
+  let bestD = Infinity;
+  for (const s of MAP_SITES) {
+    const d = Math.hypot(p.x - s.zone.x, p.z - s.zone.z);
+    if (d < bestD) { bestD = d; best = s; }
+  }
+  return best.id;
+}
 const hotDrop = { active: false, x: 0, z: 0, t: 0, group: null, beam: null, ring: null };
 let dropMat = null;
 
@@ -2006,11 +2135,12 @@ function ensureDropVisual() {
 function spawnHotDrop(n) {
   if (!pickups || !level) return;
   ensureDropVisual();
-  const zones = HOT_DROP_ZONES.filter((z) => {
+  const all = HOT_DROP_ZONES_BY_SITE[currentSiteId()] || HOT_DROP_ZONES_BY_SITE.street;
+  const zones = all.filter((z) => {
     const p = nav && nav.closestWalkable(z.x, z.z);
     return !!p;
   });
-  const zone = zones.length ? zones[(Math.random() * zones.length) | 0] : HOT_DROP_ZONES[0];
+  const zone = zones.length ? zones[(Math.random() * zones.length) | 0] : all[0];
   const spot = (nav && nav.closestWalkable(zone.x, zone.z)) || { x: zone.x, z: zone.z };
   hotDrop.active = true;
   hotDrop.x = spot.x;
@@ -2401,6 +2531,26 @@ function fireShot() {
   if (perception) {
     perception.noise(engine.camera.position.x, engine.camera.position.z, 42, 1, 0.55);
     perception.applySuppression(enemies, _endFirst.x, _endFirst.z, 3.4, 0.55);
+    // every bullet-impact crumb feeds the bullet-impact awareness loop:
+    // a soldier whose cover just got hit learns which side of the wall
+    // the fire is coming from. Only register when the round actually hit
+    // geometry — we detect this by checking whether _endFirst is closer
+    // than 60 m, which means at least one pellet hit something short of
+    // the max-range fallback. We don't have direct access to the per-pellet
+    // hit from this scope; `_endFirst` is updated whenever p === 0
+    // connects, so the first-pellet result is good enough as a proxy for
+    // "something got hit on this shot".
+    const shotHitSomething = _endFirst.distanceToSquared(engine.camera.position) < 60 * 60;
+    if (shotHitSomething) {
+      const ix = _endFirst.x;
+      const iz = _endFirst.z;
+      // the normal in world space points out of the surface; reversing it
+      // gives the unit vector pointing back at the shooter.
+      const nx = -(ix - engine.camera.position.x);
+      const nz = -(iz - engine.camera.position.z);
+      const nl = Math.hypot(nx, nz) || 1;
+      perception.impact(ix, iz, nx / nl, nz / nl, 6);
+    }
   }
   fx.tracer(mz, _endFirst, { color: 0xffce8f, width: 0.028, life: 0.055 });
   if (G.mag === 0 && G.reserve > 0) setTimeout(() => { if (G.state === 'playing') reload(); }, 160);
@@ -2543,6 +2693,12 @@ function onEnemyKilled(enemy, headshot, cause = 'bullet') {
   hud.addKillFeed(headshot ? 'HOSTILE' : 'INSURGENT', headshot, currentWeapon().name);
   G.hitStop = 0.055;
   audio.killConfirm();
+  // squad-casualty broadcast: nearby soldiers see / hear their friend die
+  // and lift awareness faster than a generic noise event. This is what
+  // makes a kill feel like it cost the squad something.
+  if (perception && enemy && enemy.root) {
+    perception.casualty(enemy.root.position.x, enemy.root.position.z, 22);
+  }
   if (G.stats) {
     G.stats.kills++;
     if (headshot) G.stats.headshots++;
@@ -3315,8 +3471,16 @@ function updateWayfinder(dt, playing) {
 }
 
 /* ------------------------------------------------------------------ main loop */
+let lastFrameAt = -1e9;
+let pauseRenderT = 0;
 function loop(now) {
   requestAnimationFrame(loop);
+  /* FPS cap: skip whole frames (sim + render). rAF still drives the cadence,
+     so on a 120/144Hz panel this halves GPU load and heat versus running
+     uncapped. Sim timing derives from lastTime, so pacing stays correct. */
+  const cap = G.settings && G.settings.fpsCap != null ? G.settings.fpsCap : 60;
+  if (cap > 0 && now - lastFrameAt < 1000 / cap - 0.25) return;
+  lastFrameAt = now;
   const rawDt = Math.min(0.05, (now - lastTime) / 1000 || 0.016);
   lastTime = now;
   let dt = rawDt;
@@ -3342,6 +3506,11 @@ function loop(now) {
     if (input.endFrame) input.endFrame();
   } else if (G.state === 'paused') {
     engine.update(dt, controller.pos);
+    // the pause menu covers the game: keep the backdrop alive at ~12 fps
+    // instead of burning full-rate frames nobody is looking at
+    pauseRenderT -= dt;
+    if (pauseRenderT > 0) return;
+    pauseRenderT = 0.085;
   } else if (G.state === 'cinema') {
     if (cinema) cinema.update(dt);
     engine.update(dt, controller.pos);
@@ -3353,6 +3522,7 @@ function loop(now) {
   // the route marker is a gameplay aid: never leave it floating over menus
   if (G.state !== 'playing' && G.state !== 'dead') hideWaypoint();
 
+  if (weather) weather.update(dt);
   engine.render(dt);
 
   if (SHOT_MODE) {
@@ -3437,6 +3607,7 @@ async function joinLan(data) {
     url: data.server || data.url,
     room: data.room || 'ALPHA',
     name: net.name,
+    p2p: data.p2p === true,
     onLobby: onLanLobby,
     onSnapshot: onLanSnapshot,
     onEvent: onLanEvent,
@@ -3502,6 +3673,14 @@ function onLanEvent(msg) {
     startLanClientGame(msg.site);
     return;
   }
+  if (msg.kind === 'host_change') {
+    // Server picked us as the new host mid-game: take over authority and
+    // rebuild the world from the resume snapshot (last host snapshot).
+    if (String(msg.host) === String(net.selfId) && net.started && net.role === 'client') {
+      promoteToLanHost(msg.resume || null);
+    }
+    return;
+  }
   if (msg.target && String(msg.target) !== String(net.selfId)) return;
   if (msg.kind === 'damage' && G.state === 'playing') {
     const from = Array.isArray(msg.from) ? new THREE.Vector3(msg.from[0], msg.from[1], msg.from[2]) : null;
@@ -3519,19 +3698,34 @@ function onLanEvent(msg) {
   }
 }
 
+/** Spread co-op spawn positions so 8 players do not stack on one line.
+    Two staggered rows in front of the host keep everyone inside the spawn
+    area while staying clear of the very first engagement distance. */
+function lanSpawnSlot(index) {
+  const row = Math.floor(index / 4);
+  const col = index % 4;
+  return {
+    x: 1.2 + 2.4 * col + row * 1.6,
+    z: 33.5 + row * 2.8 - col * 0.4,
+    y: 0,
+  };
+}
+
 function syncLanAvatars(players) {
   if (!engine || !net.started) return;
   const seen = new Set();
+  let slot = 0;
   for (const p of players || []) {
     if (String(p.id) === String(net.selfId)) continue;
     const id = String(p.id);
     seen.add(id);
     let r = net.remote.get(id);
     if (!r) {
+      const spawn = lanSpawnSlot(slot++);
       r = {
         id, name: p.name || 'OPERATOR', hp: 100, alive: true,
-        x: 1.2 + 2.2 * (net.remote.size + 1), z: 33.5, y: 0, yaw: 0, pitch: 0, speed: 0,
-        avatar: createNetAvatar({ scene: engine.scene, mats: engine.mats, name: p.name || 'OPERATOR', variant: net.remote.size % 3 }),
+        x: spawn.x, z: spawn.z, y: spawn.y, yaw: 0, pitch: 0, speed: 0,
+        avatar: createNetAvatar({ scene: engine.scene, mats: engine.mats, name: p.name || 'OPERATOR', variant: slot % 3 }),
       };
       net.remote.set(id, r);
     } else if (p.name && r.name !== p.name) {
@@ -3750,6 +3944,46 @@ function sendLanSnapshot() {
   });
 }
 
+/* Host migration: a client promoted to host mid-game rebuilds the world from
+   the resume snapshot the relay cached (see server/lan.mjs). The replica
+   enemies it was rendering become authoritative; wave/kills/score carry over.
+   Honest limits: grenade/projectile in-flight state and AI micro-state are not
+   transferred — enemies continue from their snapshot position/hp. */
+function promoteToLanHost(resume) {
+  if (!lanSession || !lanSession.isHost || !net.started || net.role !== 'client') return;
+  net.role = 'host';
+  net.hostId = net.selfId;
+  if (resume && typeof resume === 'object') {
+    if (resume.site) {
+      G.site = siteById(resume.site);
+      if (G.site) G.playRect = G.site.rect;
+    }
+    if (Number.isFinite(Number(resume.wave)) && Number(resume.wave) > 0) G.wave = Number(resume.wave);
+    if (Number.isFinite(Number(resume.kills))) G.kills = Number(resume.kills);
+    if (Number.isFinite(Number(resume.score))) G.score = Number(resume.score);
+    // Replica enemies (netRemote) become the authoritative set. Their ids were
+    // the host's _netId values, so future snapshots keep the same identity.
+    // Keep net.enemies populated: getOrCreateNetEnemy below must find (not
+    // recreate) these instances.
+    for (const [id, e] of net.enemies) {
+      e.netRemote = false;
+      e._netId = id;
+    }
+    const list = Array.isArray(resume.enemies) ? resume.enemies : [];
+    for (const d of list) {
+      if (!d || d.id == null) continue;
+      getOrCreateNetEnemy(d);
+    }
+    // New spawns must never collide with ids inherited from the old host.
+    netEnemySeq = 1000000;
+  }
+  if (hud) {
+    hud.setWave(G.wave);
+    hud.setScore(G.score, G.kills);
+    if (hud.toast) hud.toast('你已成为新任房主 · 世界状态已接管');
+  }
+}
+
 function startLanHostGame() {
   if (!lanSession || !lanSession.isHost) return;
   requestGameFullscreen();
@@ -3963,6 +4197,30 @@ function updateGame(dt) {
   enemyCtx.playerGroundY = controller.pos.y;
   enemyCtx.playerAlive = alive;
   enemyCtx.playerSpeed = controller.state.speed;
+  // lateral movement direction (X / Z) feeds AI aim lead: a soldier aiming
+  // at a sprinting player puts the muzzle where the target is going, not
+  // where it is. We estimate the direction from the player-position delta
+  // each frame so the value decays naturally when the player stops.
+  {
+    const px = engine.camera.position.x;
+    const pz = engine.camera.position.z;
+    const lastX = enemyCtx._lastPlayerX ?? px;
+    const lastZ = enemyCtx._lastPlayerZ ?? pz;
+    const dx = px - lastX;
+    const dz = pz - lastZ;
+    const dl = Math.hypot(dx, dz);
+    if (dl > 0.04) {
+      // smoothly blend toward the new direction so a single frame of jitter
+      // does not flip the lead vector
+      enemyCtx.playerDirX = (enemyCtx.playerDirX || 0) * 0.5 + (dx / dl) * 0.5;
+      enemyCtx.playerDirZ = (enemyCtx.playerDirZ || 0) * 0.5 + (dz / dl) * 0.5;
+    } else if (controller.state.speed < 0.08) {
+      enemyCtx.playerDirX *= 0.7;
+      enemyCtx.playerDirZ *= 0.7;
+    }
+    enemyCtx._lastPlayerX = px;
+    enemyCtx._lastPlayerZ = pz;
+  }
   // AI v2: tick the shared senses, then hand out squad roles once per 0.3 s
   if (net.role !== 'client') {
   if (perception) perception.update(dt);
@@ -4132,6 +4390,7 @@ window.__game = {
   get videoIntro() { return videoIntro; },
   get minimap() { return minimap; },
   get audio() { return audio; },
+  get weather() { return weather; },
   get mothAlly() { return mothAlly; },
   get mothInfo() { return mothAlly && mothAlly.info; },
   get ai() { return { perception, director: aiDirector, barks }; },

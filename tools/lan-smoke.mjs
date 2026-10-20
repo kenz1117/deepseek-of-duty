@@ -8,7 +8,7 @@
  *   - host snapshot relay and client input/fire relay
  *   - ready event updates the lobby
  *   - host event broadcast
- *   - room cap (4 players)
+ *   - room cap (LAN_MAX_PLAYERS, imported from the protocol)
  *   - host promotion on disconnect
  *   - per-client message rate limit
  *   - 16 KB WebSocket payload cap
@@ -23,6 +23,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocket } from 'ws';
+import { LAN_MAX_PLAYERS, LAN_RATE_LIMIT_PER_SEC } from '../src/net/lanProtocol.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -406,28 +407,40 @@ async function main() {
   );
 
   // --- room cap -----------------------------------------------------------
-  const c = new TestClient(wsBase);
-  await c.open();
-  c.send({ t: 'join', room: 'COOP', name: 'THIRD' });
-  await c.waitFor((message) => message.t === 'welcome', { label: 'welcome for C' });
+  // Fill the room to LAN_MAX_PLAYERS, then assert the next joiner is rejected
+  // with ROOM_FULL (4004). Capacity comes from the protocol constant so this
+  // test follows the real rule instead of hard-coding a player count.
+  const fillers = [];
+  for (let i = 2; i < LAN_MAX_PLAYERS; i++) {
+    const filler = new TestClient(wsBase);
+    await filler.open();
+    filler.send({ t: 'join', room: 'COOP', name: `FILLER${i}` });
+    await filler.waitFor((message) => message.t === 'welcome', { label: `welcome for filler ${i}` });
+    fillers.push(filler);
+  }
 
-  const d = new TestClient(wsBase);
-  await d.open();
-  d.send({ t: 'join', room: 'COOP', name: 'FOURTH' });
-  await d.waitFor((message) => message.t === 'welcome', { label: 'welcome for D' });
+  const overflow = new TestClient(wsBase);
+  await overflow.open();
+  overflow.send({ t: 'join', room: 'COOP', name: 'OVERFLOW' });
+  const overflowClose = await overflow.waitClose(4000);
+  check(
+    `room cap: 第 ${LAN_MAX_PLAYERS + 1} 人被拒绝（4004）`,
+    overflowClose.code === 4004,
+    JSON.stringify(overflowClose)
+  );
 
-  const e = new TestClient(wsBase);
-  await e.open();
-  e.send({ t: 'join', room: 'COOP', name: 'FIFTH' });
-  const eClose = await e.waitClose(4000);
-  check('room cap: 第 5 人被拒绝（4004）', eClose.code === 4004, JSON.stringify(eClose));
+  // Drop the fillers so the host-promotion check below still sees 1 remaining
+  // player after A leaves.
+  for (const filler of fillers) filler.close();
+  await sleep(300);
 
   // --- host promotion -----------------------------------------------------
+  // The room is back to A + B, so after A leaves only B remains.
   a.close();
   const promotedLobby = await b.waitFor(
     (message) =>
       message.t === 'lobby' &&
-      message.players.length === 3 &&
+      message.players.length === 1 &&
       message.players.some((player) => player.id === bWelcome.id && player.host === true),
     { label: 'lobby after host promotion' }
   );
@@ -446,20 +459,24 @@ async function main() {
   );
 
   b.close();
-  c.close();
-  d.close();
   await sleep(200);
 
   // --- rate limit ---------------------------------------------------------
+  // Burst past the inbound budget; the budget itself is imported so this test
+  // tracks LAN_RATE_LIMIT_PER_SEC rather than a frozen number.
   const rate = new TestClient(`ws://127.0.0.1:${port}/?room=RATE`);
   await rate.open();
   rate.send({ t: 'join', room: 'RATE', name: 'SPAM' });
   await rate.waitFor((message) => message.t === 'welcome', { label: 'welcome for rate client' });
-  for (let i = 0; i < 70; i += 1) {
+  for (let i = 0; i < LAN_RATE_LIMIT_PER_SEC + 40; i += 1) {
     rate.send({ t: 'event', kind: 'noop', i });
   }
   const rateClose = await rate.waitClose(5000);
-  check('rate limit: 超过 60 条/秒被关闭（4029）', rateClose.code === 4029, JSON.stringify(rateClose));
+  check(
+    `rate limit: 超过 ${LAN_RATE_LIMIT_PER_SEC} 条/秒被关闭（4029）`,
+    rateClose.code === 4029,
+    JSON.stringify(rateClose)
+  );
 
   // --- 16 KB payload cap --------------------------------------------------
   const big = new TestClient(`ws://127.0.0.1:${port}/?room=BIG`);

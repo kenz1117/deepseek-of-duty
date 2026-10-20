@@ -12,6 +12,11 @@
    ========================================================================= */
 
 const $ = (id) => document.getElementById(id);
+/* Single source of truth for the lobby slot count. Importing the protocol
+   constant keeps the UI honest when LAN_MAX_PLAYERS changes; the previous
+   hard-coded 4 let the server accept more players than the lobby could show. */
+import { LAN_MAX_PLAYERS } from '../net/lanProtocol.js';
+
 const KNOWN_STATES = new Set(['idle', 'connecting', 'connected', 'hosting', 'joined', 'error', 'closed']);
 const STATE_KIND = {
   idle: 'idle', closed: 'idle', standby: 'idle',
@@ -23,6 +28,7 @@ const STATE_KIND = {
 const STORE = {
   server: 'dod.lan.server.v1',
   room: 'dod.lan.room.v1',
+  p2p: 'dod.lan.p2p.v1',
 };
 
 function readStore(key, fallback = '') {
@@ -83,6 +89,19 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
   let players = [];
   let keyHandler = null;
 
+  /* Discovery, browser edition: we cannot receive UDP/mDNS beacons from a
+     page, but when the game itself is served over the LAN the relay almost
+     always lives on the same host. Prefill `ws://<page-host>:8790` unless a
+     saved address exists, so players only need the room code. */
+  try {
+    if (serverEl && !serverEl.value && !readStore(STORE.server)) {
+      const h = (typeof location !== 'undefined' && location.hostname) || '';
+      if (h && h !== 'localhost' && h !== '127.0.0.1' && !h.endsWith('.local')) {
+        serverEl.value = `ws://${h}:8790`;
+      }
+    }
+  } catch (e) { /* storage disabled — leave the field empty */ }
+
   const api = {
     open,
     close,
@@ -100,7 +119,10 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
     const server = normalizeServer(serverEl ? serverEl.value : '');
     const room = normalizeRoom(roomEl ? roomEl.value : '');
     const name = normalizeName(nameEl ? nameEl.value : '');
-    return { server, url: server, room, name, callsign: name };
+    const p2pEl = $('lan-p2p');
+    const p2p = p2pEl ? p2pEl.checked : false;
+    try { localStorage.setItem(STORE.p2p, p2p ? '1' : '0'); } catch (e) { /* ignore */ }
+    return { server, url: server, room, name, callsign: name, p2p };
   }
 
   function normalizeServer(value) {
@@ -274,15 +296,15 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
       list = list.players;
     }
     if (!Array.isArray(list)) list = [];
-    players = list.slice(0, 4).map((p) => ({ ...p }));
+    players = list.slice(0, LAN_MAX_PLAYERS).map((p) => ({ ...p }));
     if (options.selfId != null) {
       for (const p of players) if (String(p.id) === String(options.selfId)) p.self = true;
     }
     if (options.isHost !== undefined) setHost(options.isHost);
-    if (countEl) countEl.textContent = `${players.length}/4`;
+    if (countEl) countEl.textContent = `${players.length}/${LAN_MAX_PLAYERS}`;
     if (listEl) {
       listEl.textContent = '';
-      for (let i = 0; i < 4; i++) listEl.appendChild(playerRow(players[i], i));
+      for (let i = 0; i < LAN_MAX_PLAYERS; i++) listEl.appendChild(playerRow(players[i], i));
     }
     syncYou();
   }
@@ -304,6 +326,11 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
       roomEl.value = readStore(STORE.room, fromUrl || randomRoom()).toUpperCase();
     }
     if (nameEl) nameEl.value = menuCallsign();
+    const p2pEl = $('lan-p2p');
+    if (p2pEl && !p2pEl.dataset.restored) {
+      p2pEl.dataset.restored = '1';
+      p2pEl.checked = readStore(STORE.p2p, '1') !== '0'; // default ON
+    }
     syncYou();
     if (!players.length) setPlayers([]);
     setHost(localHost, false);

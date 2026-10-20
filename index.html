@@ -208,7 +208,7 @@
               </button>
               <button type="button" id="lan-open" class="big-mode" data-big-mode="lan" aria-pressed="false">
                 <span class="bm-index">03</span>
-                <span class="bm-body"><b>LAN CO-OP</b><em>联机模式</em><span class="bm-sub">2–4 人 · 合作生存</span></span>
+                <span class="bm-body"><b>LAN CO-OP</b><em>联机模式</em><span class="bm-sub">2–8 人 · 合作生存</span></span>
                 <span class="bm-flag">LAN</span>
               </button>
             </div>
@@ -282,7 +282,7 @@
               </div>
               <div id="ops-archive" class="hidden">
                 <div class="arc-block"><h5>CHARACTERS <em>人物</em></h5><div id="arc-characters"></div></div>
-                <div class="arc-block"><h5>INTEL <em>情报</em><b id="arc-intel-count">0/6</b></h5><div id="arc-intel"></div></div>
+                <div class="arc-block"><h5>INTEL <em>情报</em><b id="arc-intel-count">0/12</b></h5><div id="arc-intel"></div></div>
                 <div class="arc-block"><h5>LOG <em>任务记录</em></h5><div id="arc-log"></div></div>
               </div>
             </div>
@@ -295,7 +295,7 @@
       </div>
 
       <footer class="menu-foot">
-        <span class="foot-left"><i class="fmark"></i>程序化生成资产 · 无外部贴图下载</span>
+        <span class="foot-left"><i class="fmark"></i>贴图与几何程序化生成 · 无人机模型为 CC0 外部资产</span>
         <span class="foot-right">若帧率不足请在暂停菜单降低画质<i class="fdiv"></i><b id="menu-version">V0.3.0</b></span>
       </footer>
     </div>
@@ -441,7 +441,7 @@
         <div>
           <div class="overlay-tag"><i></i>LAN CO-OP · 局域网联机</div>
           <h2 class="ll-title" id="lan-title">CO-OP<span>LOBBY</span></h2>
-          <p class="ll-sub">2–4 人合作生存 · 房主权威 · 20 Hz 同步</p>
+          <p class="ll-sub">2–8 人合作生存 · 房主权威 · 20 Hz 同步</p>
         </div>
         <button id="lan-close" class="set-close" type="button" aria-label="关闭 LAN 大厅"><i></i><i></i></button>
       </header>
@@ -466,6 +466,10 @@
                 placeholder="OPERATOR-0000" aria-label="呼号" />
             </div>
           </div>
+          <label class="ll-check" for="lan-p2p">
+            <input id="lan-p2p" type="checkbox" checked />
+            <span><b>直连模式 <em>P2P DIRECT</em></b><i>游戏数据点对点直传（WebRTC），绕开服务器中继，显著降低延迟；建连信令仍走中继，直连不通时自动回落中继模式</i></span>
+          </label>
           <div class="ll-actions">
             <button id="lan-host" class="ll-btn" type="button"><span>HOST</span><em>创建房间</em></button>
             <button id="lan-join" class="ll-btn" type="button"><span>JOIN</span><em>加入房间</em></button>
@@ -476,7 +480,7 @@
         <section class="ll-squad">
           <header class="ll-squad-head">
             <h3 class="ll-sec-title"><span class="num">02</span>SQUAD <em>小队</em><i class="hrule"></i></h3>
-            <span class="ll-count" id="lan-count">0/4</span>
+            <span class="ll-count" id="lan-count">0/8</span>
           </header>
           <ul id="lan-player-list" class="ll-player-list" aria-label="LAN 玩家列表"></ul>
           <div id="lan-status" class="ll-status" data-state="idle" role="status" aria-live="polite">
@@ -820,6 +824,15 @@
               <button data-q="medium" type="button">MED</button>
               <button data-q="high" class="active" type="button">HIGH</button>
               <button data-q="ultra" type="button">ULTRA</button>
+            </div>
+          </div>
+          <div class="set-row">
+            <div class="set-line"><span class="lbl">帧率上限</span><em>FPS LIMIT · 降低发热</em></div>
+            <div class="fps-pills set-fps">
+              <button data-fps="30" type="button">30</button>
+              <button data-fps="60" class="active" type="button">60</button>
+              <button data-fps="120" type="button">120</button>
+              <button data-fps="0" type="button">MAX</button>
             </div>
           </div>
         </section>

@@ -591,7 +591,7 @@ node --check tools/lb-smoke.mjs
   服务端只负责把快照转发给同房间的 client。
 - **client-local movement**：客户端本地移动，通过 `input` 把位置/朝向发给 host；
   服务端不校验移动、不校验命中，也不做回滚/对账。
-- 2–4 人同房间；服务端不做静态文件服务，静态页面仍由 Vite / nginx 提供。
+- 2–8 人同房间；服务端不做静态文件服务，静态页面仍由 Vite / nginx 提供。
 
 启动：
 
@@ -628,7 +628,12 @@ http://HOST:5173/?lan=ws://LAN-HOST:8790
 - 房间由 WebSocket URL 的 `?room=` 决定（缺省 `lobby`）；`join` 消息里的 `room` 只在 URL 没有房间时作为回退。
 - 每个房间最多 **4** 人；第 5 人收到 `room_full` 错误并以 close code **4004** 断开。
 - 第一个成功 `join` 的玩家是 host；host 断开后，按加入顺序把下一位提升为 host，
-  广播新的 `lobby` 和 `{t:'event',kind:'host_change',host}`。
+  广播新的 `lobby` 和 `{t:'event',kind:'host_change',host,resume}`。
+- **Host 迁移带世界快照（resume）**：中继为每个房间缓存最近一条 host `snapshot`
+  （内存中，≤16 KB）。host 离开时被提升的新 host 会在 `host_change.resume` 里收到
+  这份快照，客户端据此重建敌人/波次/比分，而不是重置世界。快照仍是 host 自己
+  上报的数据，中继不做模拟，也不改变信任模型。host 在首个 snapshot 前离开时
+  `resume` 为 `null`。
 - 房间之间完全隔离；最后一个玩家离开时房间被删除。
 - 中继规则：
 
@@ -646,8 +651,14 @@ http://HOST:5173/?lan=ws://LAN-HOST:8790
 - `event.kind === 'ready'` 会更新服务端保存的 `ready` 状态并广播 `lobby`。
 - 服务端自己产生的事件：
   - `{t:'event',kind:'error',code,message}`：`room_full`、`rate_limited`、`bad_message`、`not_joined`、`not_host`、`unknown_type` 等；
-  - `{t:'event',kind:'host_change',host}`；
+  - `{t:'event',kind:'host_change',host,resume}`：`resume` 为该房间最后一条 host snapshot（无则 `null`）；
   - `{t:'event',kind:'leave',id}`。
+- **UDP 发现信标**：服务启动后每 3 秒向 `255.255.255.255:8791` 广播一条
+  `{"app":"dod-lan","port":<WS端口>}` JSON 数据报（常量 `LAN_BEACON_PORT`，见
+  `src/net/lanProtocol.js`）。这只对能收 UDP 的原生辅助工具有用；**浏览器页面
+  收不到 UDP**，浏览器端的发现路径是大厅自动预填 `ws://<页面主机>:8790`。
+  局域网禁用广播时信标静默失败，不影响 WS 服务。启动日志会打印所有可用的
+  局域网地址（`[lan] LAN address: ws://<ip>:<port>`）。
 - 限制：
   - 单条消息上限 **16 KB**（WebSocket `maxPayload`；超限由 ws 以 close code **1009** 断开）；
   - 每连接 **60 条/秒** 的 token bucket（容量 60）；超限发送 `rate_limited` 并以 **4029** 断开；
@@ -727,6 +738,10 @@ http://HOST:5173/?lan=ws://LAN-HOST:8790
 - 客户端收到的 `input`/`fire` 一定带 `id`；host 收到的 `event` 也带 `id`。
 - `event` 的业务字段由 host/client 自行约定（`damage`、`kill`、`hit`、`respawn` 等），
   服务端只特殊处理 `ready`。
+- **P2P 信令事件**（`kind` 为 `p2p_offer` / `p2p_answer` / `p2p_ice`）对服务端是
+  普通事件，按上面的中继规则转发（host 发 → 全员，client 发 → host）；内容是
+  WebRTC 的 SDP/ICE candidate，客户端在 `src/net/lanClient.js` 内消费，不进游戏
+  逻辑。详见 §11.7。
 
 ### 11.4 客户端 API `src/net/lanClient.js`
 
@@ -839,16 +854,48 @@ node tools/lan-smoke.mjs
 1. **没有服务端权威模拟，也没有反作弊**。host 就是权威；host 可以改敌人血量/位置/分数，
    服务端无法验证。client 本地移动、射击也被信任。
 2. **没有账号/鉴权**。房间码不是密码，同一网络内知道地址和房间码的人都能加入。
-3. **无持久化、无断线续局**。服务重启清空房间；重连会得到新玩家 id；
-   host 迁移不传输战局状态，新 host 需要自己继续维护世界状态。
+3. **无账号鉴权、无持久化**。房间码不是密码，同一网络内知道地址和房间码的人都能加入；
+   服务重启清空房间；重连会得到新玩家 id。host 迁移现在会通过 `host_change.resume`
+   下发最后一条快照，新 host 可重建敌人/波次/比分，但**手雷在飞、AI 微观状态
+   （当前掩体/开火节奏）不迁移**——敌人从快照位置/血量继续。
 4. **JSON 文本 + 20 Hz**。带宽随玩家/敌人数量增长；没有二进制协议、压缩或 delta 编码。
-5. **最多 4 人**，固定 60 条/秒/连接；高频特效/输入可能触发 4029。
+5. **最多 8 人**，入站令牌桶 240 条/秒/连接（8 人时房主最坏入站 140/s，留 100/s 余量）；仍超限会触发 4029。
 6. **16 KB 单帧上限**；大快照需要 host 自己裁剪。
 7. **没有 TLS**。默认 `ws://`，适合 LAN/VPN；公网部署应放在 wss 反向代理后，
    并注意房间码仍然不是安全边界。
 8. **心跳 20 秒**才能发现死连接；移动端切后台可能被误判断线。
 9. **`ready` 只是大厅状态**，是否开始、何时开始由 host/UI 决定，服务端不强制。
 10. **`ws` 是 devDependency**；只装生产依赖时 LAN 服务不会启动，需要额外安装 `ws`。
+
+### 11.7 传输模式：中继 vs 直连（P2P）
+
+LAN CO-OP 有两种传输模式，在大厅用「**直连模式 P2P DIRECT**」开关切换
+（`index.html #lan-p2p`，默认开启，状态存 `dod.lan.p2p.v1`）：
+
+| | 中继模式（开关关） | 直连模式（开关开，默认） |
+| --- | --- | --- |
+| snapshot / input / fire（20 Hz 大流量） | 全部经 WS 中继转发 | **WebRTC DataChannel 点对点直传** |
+| 大厅 / start / damage / hit / host_change | WS 中继 | 仍走 WS 中继（必须在无直连路径时也可用） |
+| 建连信令（offer/answer/ICE） | — | WS 中继（几 KB，仅建连时） |
+| host 迁移 / resume | 支持 | 支持（信令与快照都走中继） |
+
+实现：`src/net/lanP2P.js`（RTCPeerConnection 封装）+ `src/net/lanClient.js`
+（路由与回落）。路由策略是**原子的**：
+
+- host 广播 snapshot 前，检查是否**所有**远端 peer 的 DataChannel 都已打开；
+  全通 → 纯直连发送（跳过中继一跳，这是延迟改善的来源）；任一未通 → 整条
+  消息回落中继，避免有人拿到半更新世界。
+- client 的 input/fire：到 host 的通道打开 → 直连；否则回落中继。
+
+诚实的边界：
+
+1. **浏览器做不了原始 UDP/TCP**，"纯局域网"实际是 WebRTC DataChannel。
+   ICE 只用 host candidate（`iceServers: []`，无 STUN/TURN）：同一局域网内
+   通常直连成功；跨公网/NAT 一般失败并**自动回落中继**，不会断线。
+2. 信令走中继意味着**中继必须在线**才能建连；中继挂了直连模式也无法开始
+   新对局（已建立的 DataChannel 不受影响，直到对局结束）。
+3. DataChannel 是可靠有序 JSON 文本通道，单帧上限仍是 16 KB；与中继模式
+   相同的信任模型，直连不改变权威归属（host 仍是权威）。
 
 
 ## 12. Hosted WSS relay (dod.goodpoint.top)

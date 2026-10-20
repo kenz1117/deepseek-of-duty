@@ -149,13 +149,13 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:19px
 .quality-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
 .q-label{font-family:var(--mono);font-size:8px;letter-spacing:.26em;color:var(--ui-faint);white-space:nowrap;}
 .q-label em{font-style:normal;color:var(--ui-ghost);margin-left:4px;letter-spacing:.1em;}
-.quality-pills{display:flex;border:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.02);}
-.quality-pills button{background:transparent;border:none;border-left:1px solid rgba(255,255,255,.09);
+.quality-pills,.fps-pills{display:flex;border:1px solid rgba(255,255,255,.13);background:rgba(255,255,255,.02);}
+.quality-pills button,.fps-pills button{background:transparent;border:none;border-left:1px solid rgba(255,255,255,.09);
   color:var(--ui-faint);font-family:var(--mono);font-size:8px;letter-spacing:.16em;padding:6px 9px;
   cursor:pointer;transition:color .15s ease,background .15s ease;}
-.quality-pills button:first-child{border-left:none;}
-.quality-pills button:hover{color:var(--ui);background:rgba(255,255,255,.06);}
-.quality-pills button.active{background:var(--amber);color:#0a0c0e;font-weight:700;box-shadow:0 0 18px rgba(227,178,106,.25);}
+.quality-pills button:first-child,.fps-pills button:first-child{border-left:none;}
+.quality-pills button:hover,.fps-pills button:hover{color:var(--ui);background:rgba(255,255,255,.06);}
+.quality-pills button.active,.fps-pills button.active{background:var(--amber);color:#0a0c0e;font-weight:700;box-shadow:0 0 18px rgba(227,178,106,.25);}
 
 .menu-foot{display:flex;align-items:center;justify-content:space-between;gap:24px;
   border-top:1px solid var(--line);padding-top:clamp(10px,1.6vh,16px);
@@ -1791,6 +1791,14 @@ html.reduce-motion .cine-bar{height:8vh;}
 .ll-btn:disabled{opacity:.34;cursor:not-allowed;box-shadow:none;}
 .ll-btn:disabled:hover{border-color:rgba(255,255,255,.16);background:rgba(255,255,255,.035);}
 .ll-btn.ll-ghost{border-color:rgba(255,255,255,.1);background:transparent;}
+.ll-check{display:flex;gap:7px;align-items:flex-start;margin:10px 0 0;cursor:pointer;
+  font-family:var(--mono);letter-spacing:.04em;}
+.ll-check input{margin:1px 0 0;accent-color:var(--ui);}
+.ll-check span{display:block;}
+.ll-check b{display:block;font-size:6.5px;color:var(--ui);font-weight:400;}
+.ll-check b em{font-style:normal;color:var(--ui-ghost);margin-left:4px;}
+.ll-check i{display:block;margin-top:2px;font-style:normal;font-size:5.8px;line-height:1.7;
+  color:var(--ui-ghost);}
 .ll-help{margin:12px 0 0;font-family:var(--mono);font-size:6.5px;line-height:1.7;letter-spacing:.04em;
   color:var(--ui-ghost);}
 .ll-help kbd{font-family:var(--mono);font-size:6.5px;color:var(--ui-dim);border:1px solid var(--line);
@@ -1798,9 +1806,16 @@ html.reduce-motion .cine-bar{height:8vh;}
 .ll-squad-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
 .ll-squad-head .ll-sec-title{flex:1;}
 .ll-count{font-family:var(--mono);font-size:8px;letter-spacing:.14em;color:var(--amber);white-space:nowrap;}
-.ll-player-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;}
+/* Up to 8 slots at 48px + 5px gaps is ~420px, which overflows the lobby panel
+   on shorter viewports. Compact the rows and cap the list height so the panel
+   scrolls internally instead of pushing the status row off-screen. */
+.ll-player-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;
+  max-height:min(46vh,360px);overflow-y:auto;overscroll-behavior:contain;
+  scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.14) transparent;}
+.ll-player-list::-webkit-scrollbar{width:4px;}
+.ll-player-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:2px;}
 .ll-player{display:grid;grid-template-columns:25px minmax(0,1fr) auto;align-items:center;gap:9px;
-  min-height:48px;padding:6px 9px;border:1px solid rgba(255,255,255,.075);
+  min-height:38px;padding:5px 9px;border:1px solid rgba(255,255,255,.075);
   background:rgba(255,255,255,.022);transition:border-color .15s,background .15s;}
 .ll-player.is-you{border-left:2px solid rgba(227,178,106,.62);background:rgba(227,178,106,.055);}
 .ll-player.is-host{border-color:rgba(227,178,106,.25);}
@@ -1849,8 +1864,8 @@ html.reduce-motion .cine-bar{height:8vh;}
   .ll-sec-title{font-size:7.5px;margin-bottom:11px;}
   .ll-field{gap:5px;margin-bottom:10px;}
   .ll-field input{height:31px;font-size:9px;}
-  .ll-player{min-height:42px;padding:5px 8px;gap:7px;}
-  .ll-player-list{gap:4px;}
+  .ll-player{min-height:34px;padding:4px 8px;gap:7px;}
+  .ll-player-list{gap:3px;max-height:min(42vh,300px);}
   .ll-status{margin-top:10px;padding:7px 9px;font-size:6.2px;}
   .ll-foot{padding:11px 24px 15px;}
   .ll-btn{height:33px;}
