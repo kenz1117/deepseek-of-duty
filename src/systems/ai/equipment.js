@@ -27,10 +27,11 @@ const MAX_ACTIVE_TACTICAL = 1;
 
 // cooldown ranges in seconds; D1 (training) throws nothing
 const TIER_UTILITY = {
-  D2: { frag: [18, 26] },
-  D3: { frag: [14, 20], flash: [24, 34] },
-  D4: { frag: [10, 15], flash: [18, 26], smoke: [26, 36] },
-  D5: { frag: [8, 12], flash: [13, 20], smoke: [18, 28] },
+  // utilities are an escalation, not an opening move: D1/D2 teach the fight
+  // without them, D3 adds frags, D4 adds flashes, D5 adds smoke
+  D3: { frag: [22, 30] },
+  D4: { frag: [20, 28], flash: [34, 44] },
+  D5: { frag: [16, 22], flash: [28, 36], smoke: [40, 50] },
 };
 
 const WARN_LABEL = { frag: '手雷', flash: '闪光', smoke: '烟幕' };
@@ -116,8 +117,10 @@ export function createEnemyEquipment(opts) {
       if (type === 'smoke' && d > 34) continue;
       let score = 12 - Math.abs(d - 16) * 0.8;
       if (e.canSee) score += 4;
-      if (e.aiRole === 'assault') score += 2;
-      if (e.aiRole === 'suppress') score += 1.5;
+      // support troops throw; the assault element keeps its gun up
+      if (e.aiRole === 'assault') score -= 2;
+      if (e.aiRole === 'suppress') score += 3;
+      if (e.aiRole === 'hold') score += 1;
       if (e.state === 'cover') score -= 3;            // busy hiding
       if (score > bestScore) { bestScore = score; best = e; }
     }
@@ -249,7 +252,7 @@ export function createEnemyEquipment(opts) {
     _ray.far = Math.max(0.2, dist - 0.45);
     _ray.firstHitOnly = true;
     const hits = _ray.intersectObjects(level.bulletTargets, false);
-    return hits.length ? 0.32 : 1;
+    return hits.length ? 0.25 : 1;
   }
 
   function panFor(pos) {
@@ -271,9 +274,9 @@ export function createEnemyEquipment(opts) {
       audio.explosion(pan, dist);
       if (onShake) onShake(clamp(1.1 - dist / 18, 0.15, 0.85));
       if (onNoise) onNoise(pos, 42, 1);
-      if (dist < 7.5) {
-        const falloff = Math.pow(1 - dist / 7.5, 1.25);
-        const dmg = 95 * falloff * coverMultiplier(pos);
+      if (dist < 6) {
+        const falloff = Math.pow(1 - dist / 6, 1.25);
+        const dmg = 60 * falloff * coverMultiplier(pos);
         if (dmg > 1) damagePlayer(dmg, pos);
       }
     } else if (p.type === 'flash') {

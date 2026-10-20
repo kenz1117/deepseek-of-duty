@@ -344,9 +344,9 @@ function applyAtmosphereForWave(n) {
 const DIFF_TIERS = [
   { id: 'D1', label: 'TRAINING', wave: 1, accuracy: 0.62, damage: 0.55, firstShot: 1.9, burst: 0.65, maxFiring: 2 },
   { id: 'D2', label: 'CONTACT', wave: 3, accuracy: 0.72, damage: 0.72, firstShot: 1.5, burst: 0.80, maxFiring: 2 },
-  { id: 'D3', label: 'PRESSURE', wave: 5, accuracy: 0.85, damage: 0.85, firstShot: 1.3, burst: 0.90, maxFiring: 3 },
-  { id: 'D4', label: 'VETERAN', wave: 8, accuracy: 1.00, damage: 1.00, firstShot: 1.1, burst: 1.00, maxFiring: 4 },
-  { id: 'D5', label: 'ELITE', wave: 12, accuracy: 1.08, damage: 1.10, firstShot: 0.9, burst: 1.10, maxFiring: 5 },
+  { id: 'D3', label: 'PRESSURE', wave: 5, accuracy: 0.82, damage: 0.82, firstShot: 1.3, burst: 0.90, maxFiring: 2 },
+  { id: 'D4', label: 'VETERAN', wave: 8, accuracy: 0.94, damage: 0.94, firstShot: 1.1, burst: 1.00, maxFiring: 2 },
+  { id: 'D5', label: 'ELITE', wave: 12, accuracy: 0.96, damage: 0.95, firstShot: 0.9, burst: 1.05, maxFiring: 2 },
 ];
 
 function diffForWave(n) {
@@ -1586,6 +1586,7 @@ function startGame(lock = true, silent = false) {
     audio.init();
     if (audio.resume) audio.resume();
     audio.setMasterVolume(G.settings.master);
+    if (barks) barks.preload();
   }
   // a keyboard-activated START must never leave the board modal over the game
   closeBoardModal();
@@ -2514,11 +2515,11 @@ function geoDispose(m) { if (m.geometry) m.geometry.dispose(); if (m.material) m
 /** Flashbang on the player: white-out + tinnitus + shake, distance/angle scaled. */
 function applyFlashbang(intensity = 0.5) {
   if (SHOT_MODE) return;
-  const a = Math.max(0, Math.min(1, intensity));
+  const a = Math.max(0, Math.min(0.7, intensity));
   G.flashA = Math.max(G.flashA, a);
   if (hud && hud.setFlash) hud.setFlash(G.flashA);
-  if (audio) { audio.ringing(a); audio.hurt(); }
-  if (controller) controller.addShake(0.4 * a);
+  if (audio) { audio.ringing(a * 0.8); audio.hurt(); }
+  if (controller) controller.addShake(0.35 * a);
 }
 
 /** Hostile breach: kick a closed door open, re-bake nav, kick up dust. */
@@ -2548,7 +2549,7 @@ function applyPlayerDamage(amount, fromPos) {
   G.hurtTimer = 0.3;
   let dmg = amount;
   if (G.armor > 0) {
-    const absorbed = Math.min(G.armor, dmg * 0.6);
+    const absorbed = Math.min(G.armor, dmg * 0.75);
     G.armor -= absorbed;
     dmg -= absorbed;
   }
@@ -3217,7 +3218,7 @@ function updateGame(dt) {
 
     // health regen
     G.sinceDamage += dt;
-    if (G.sinceDamage > 4.2 && G.hp < G.maxHp) {
+    if (G.sinceDamage > 3.2 && G.hp < G.maxHp) {
       G.hp = Math.min(G.maxHp, G.hp + G.regenRate * dt);
       hud.setHealth(G.hp, pipsFor(G.armor));
       if (G.hp > 40) audio.setLowHealth(false);
@@ -3271,7 +3272,7 @@ function updateGame(dt) {
     });
   }
   if (G.flashA > 0) {
-    G.flashA = Math.max(0, G.flashA - dt * 0.55);
+    G.flashA = Math.max(0, G.flashA - dt * 0.8);
     if (hud && hud.setFlash) hud.setFlash(G.flashA);
   }
   for (const e of enemies) {

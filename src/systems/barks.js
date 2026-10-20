@@ -26,6 +26,18 @@ const LINES = {
   down:     ['有人倒了！', '失去一个兄弟！'],
 };
 
+const VOICE_BASE = '/audio/voice/enemy/';
+const VOICE_FILES = {
+  contact:  ['contact_1.mp3', 'contact_2.mp3'],
+  frag:     ['frag_1.mp3', 'frag_2.mp3'],
+  flash:    ['flash_1.mp3'],
+  smoke:    ['smoke_1.mp3'],
+  breach:   ['breach_1.mp3'],
+  flank:    ['flank_1.mp3'],
+  suppress: ['suppress_1.mp3'],
+  down:     ['down_1.mp3'],
+};
+
 const COOLDOWN = {
   contact: 6500,
   frag: 8000,
@@ -45,8 +57,22 @@ export function createBarks({ hud, audio, camera, enabled = true } = {}) {
   let on = !!enabled;
   const last = Object.create(null);
   const pickIndex = Object.create(null);
+  const buffers = new Map();
   let sayCount = 0;
   let seq = 1;
+  let preloaded = false;
+
+  /** Decode the bark clips once the audio context exists (after START). */
+  function preload() {
+    if (preloaded || !audio || !audio.loadBuffer || !audio.ctx) return;
+    preloaded = true;
+    for (const files of Object.values(VOICE_FILES)) {
+      for (const f of files) {
+        const url = VOICE_BASE + f;
+        audio.loadBuffer(url).then((buf) => { if (buf) buffers.set(url, buf); }).catch(() => {});
+      }
+    }
+  }
 
   /** Stereo pan for a world position, using the camera's right vector. */
   function panFor(pos) {
@@ -80,7 +106,16 @@ export function createBarks({ hud, audio, camera, enabled = true } = {}) {
     const text = lines[i];
     const pan = panFor(pos);
     const dist = pos ? distanceTo(pos) : 12;
-    if (audio && audio.enemyBark) audio.enemyBark(pan, dist, (seq = (seq * 73 + kind.length * 17) % 9973));
+    const files = VOICE_FILES[kind] || [];
+    const fileUrl = files.length ? VOICE_BASE + files[i % files.length] : null;
+    const buf = fileUrl ? buffers.get(fileUrl) : null;
+    const gain = Math.max(0.2, Math.min(0.95, 1 - dist / 75));
+    if (buf && audio.playBuffer) {
+      audio.playBuffer(buf, { pan, gain, send: 0.18 });
+    } else if (audio && audio.enemyBark) {
+      // fallback until the clips decode (or if the files are missing)
+      audio.enemyBark(pan, dist, (seq = (seq * 73 + kind.length * 17) % 9973));
+    }
     if (hud && hud.bark) hud.bark(text, opts.who || '敌军');
     sayCount++;
     return true;
@@ -92,8 +127,9 @@ export function createBarks({ hud, audio, camera, enabled = true } = {}) {
   }
 
   return {
-    say, reset, panFor,
+    say, reset, panFor, preload,
     setEnabled(v) { on = !!v; },
     get count() { return sayCount; },
+    get ready() { return buffers.size; },
   };
 }

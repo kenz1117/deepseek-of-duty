@@ -64,7 +64,7 @@ export const AI_BEHAVIOR = {
   },
   D5: {
     label: 'ELITE',
-    assault: 3, flank: 2, suppress: 2,
+    assault: 2, flank: 2, suppress: 2,
     cover: 0.88,
     reaction: [0.32, 0.62],
     fov: 1.28, sight: 92,

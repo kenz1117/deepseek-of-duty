@@ -308,6 +308,35 @@ export function createAudio() {
     if (drone) { try { drone.stop(); } catch (e) { } drone = null; }
   }
 
+  /* ---------------- buffered VO playback ---------------- */
+  const bufferCache = new Map();
+  async function loadBuffer(url) {
+    if (!ctx) return null;
+    if (bufferCache.has(url)) return bufferCache.get(url);
+    try {
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const arr = await res.arrayBuffer();
+      const buf = await ctx.decodeAudioData(arr);
+      bufferCache.set(url, buf);
+      return buf;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function playBuffer(buf, { pan = 0, gain = 1, send = 0.12 } = {}) {
+    if (!ctx || !buf) return false;
+    const t = now();
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const g = chain(pan, send, gain);
+    src.connect(g);
+    src.start(t);
+    src.onended = () => { try { src.disconnect(); g.disconnect(); } catch (e) { } };
+    return true;
+  }
+
   /* ---------------- enemy radio chatter / tactical cues ---------------- */
   /**
    * Unintelligible radio bark: squelch, then 2–4 formant bursts. The subtitle
@@ -381,6 +410,7 @@ export function createAudio() {
     explosion, footstep, hitmarker, ui, uiConfirm, death, hurt, killConfirm,
     ambient, stopAmbient, setLowHealth, setMasterVolume,
     enemyBark, ringing, grenadeBeep, doorBreach, flashbang, smokePop,
+    loadBuffer, playBuffer,
     get ctx() { return ctx; },
     get debug() {
       return {
