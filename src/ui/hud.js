@@ -64,6 +64,9 @@ export function createHUD() {
     modeFill: $('mode-progress-fill'), modeProgressText: $('mode-progress-text'),
     modeZone: $('zone-distance'), modeZoneText: $('zone-distance-text'),
     msList: $('ms-list'),
+    gearRow: $('gear-row'), gearArmor: $('gear-armor'), gearHelmet: $('gear-helmet'),
+    invRow: $('inv-row'), invBandage: $('inv-bandage'), invMedkit: $('inv-medkit'), invDrink: $('inv-drink'),
+    useChannel: $('use-channel'), useChannelLabel: $('use-channel-label'), useChannelFill: $('use-channel-fill'),
     modeSelect: $('mode-select'), modeSelectCurrent: $('mode-select-current'),
     modeSelectBtns: Array.from(document.querySelectorAll('#mode-select-pills button')),
     bigModeCards: Array.from(document.querySelectorAll('.big-mode')),
@@ -621,6 +624,58 @@ export function createHUD() {
     const txt = `ZONE ${n < 10 ? n.toFixed(1) : Math.round(n)}m`;
     if (txt !== zoneTextShown) { zoneTextShown = txt; el.modeZoneText.textContent = txt; }
     el.modeZone.classList.remove('hidden');
+  }
+
+  /* ---- battle-royale loadout: gear tiers / consumable pack / use channel --- */
+
+  let gearShown = { a: -1, h: -1 };
+  /** armorLevel / helmetLevel: 0 = none. Only rewrites on change. */
+  function setGear(armorLevel, helmetLevel) {
+    if (!el.gearRow) return;
+    const a = Math.max(0, Math.min(3, Number(armorLevel) || 0));
+    const h = Math.max(0, Math.min(3, Number(helmetLevel) || 0));
+    if (a === gearShown.a && h === gearShown.h) return;
+    gearShown = { a, h };
+    el.gearRow.hidden = a === 0 && h === 0;
+    el.gearArmor.hidden = a === 0;
+    el.gearHelmet.hidden = h === 0;
+    el.gearArmor.textContent = `甲 · ${a}`;
+    el.gearHelmet.textContent = `盔 · ${h}`;
+  }
+
+  let invShown = null;
+  /** pack = { bandage, medkit, drink } — counts only, DOM writes on change. */
+  function setInventory(pack) {
+    if (!el.invRow) return;
+    const b = Math.max(0, Number(pack && pack.bandage) || 0);
+    const m = Math.max(0, Number(pack && pack.medkit) || 0);
+    const d = Math.max(0, Number(pack && pack.drink) || 0);
+    if (invShown && invShown.b === b && invShown.m === m && invShown.d === d) return;
+    invShown = { b, m, d };
+    el.invRow.hidden = b + m + d === 0;
+    el.invBandage.querySelector('b').textContent = b;
+    el.invMedkit.querySelector('b').textContent = m;
+    el.invDrink.querySelector('b').textContent = d;
+    el.invBandage.classList.toggle('is-empty', b === 0);
+    el.invMedkit.classList.toggle('is-empty', m === 0);
+    el.invDrink.classList.toggle('is-empty', d === 0);
+  }
+
+  /** channel = { label, pct } or null. Quantized like the mode progress bar. */
+  let ucShown = null;
+  function setUseChannel(channel) {
+    if (!el.useChannel) return;
+    if (!channel) {
+      if (ucShown !== null) { ucShown = null; el.useChannel.classList.add('hidden'); }
+      return;
+    }
+    const q = Math.round(Math.max(0, Math.min(1, channel.pct)) * 100) / 100;
+    const label = String(channel.label || '');
+    if (ucShown && ucShown.label === label && ucShown.q === q) return;
+    ucShown = { label, q };
+    el.useChannel.classList.remove('hidden');
+    el.useChannelLabel.textContent = label;
+    el.useChannelFill.style.width = `${q * 100}%`;
   }
 
   /**
@@ -1524,6 +1579,10 @@ export function createHUD() {
     state.lowHp = false; state.kills = 0;
     state.pings.length = 0;
     hideMilestones();
+    gearShown = { a: -1, h: -1 }; invShown = null;
+    if (el.gearRow) el.gearRow.hidden = true;
+    if (el.invRow) el.invRow.hidden = true;
+    setUseChannel(null);
 
     el.killfeed.innerHTML = '';
     el.dmgDirs.style.opacity = '0'; dmgShown = 0;
@@ -1574,6 +1633,7 @@ export function createHUD() {
     get isSettingsOpen() { return settingsOpen; },
     showUpgrades, hideUpgrades, showTutorial, hideTutorial, setAtmosphere, setWeather,
     setMode, setModeProgress, setZoneDistance, hideMode, setMilestones, hideMilestones,
+    setGear, setInventory, setUseChannel,
     bindModeSelect, setModeSelect,
     bindBigModes, setBigMode, setPlaylist, openPlaylist, closePlaylist,
     openLanModal, closeLanModal, get bigMode() { return bigMode; },

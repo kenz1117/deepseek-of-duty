@@ -61,7 +61,11 @@ export function defaultPhases(rectW = 72, rectH = 110) {
     // Phase 1 is forced to cover the whole rect (plus 3% so a spawn in a
     // corner is safely inside rather than on the exact circle edge); easing it
     // would leave rect corners outside the opening ring, spawning in the gas.
-    const r = i === 0 ? Math.max(10, cover * 0.94) : cover + (finalR - cover) * (t * t * 0.7 + t * 0.3);
+    // Opening ring MUST cover the whole rect (x1.03 so a corner spawn is
+    // safely inside, not on the exact edge). Spread spawn slots sit near the
+    // rect edges; a smaller first ring would put corner players in the gas
+    // the moment the start delay ends. Do not "optimize" this below 1.0.
+    const r = i === 0 ? Math.max(10, cover * 1.03) : cover + (finalR - cover) * (t * t * 0.7 + t * 0.3);
     phases.push({
       wait: Math.max(8, 20 - i * 2),       // seconds the ring is announced
       shrink: Math.max(6, 24 - i * 3),     // seconds to interpolate inward
@@ -108,7 +112,8 @@ export function createZone({
   const phases = defaultPhases(w, d);
   // Opening circle must cover the map; phase 0 shrinks inward from here.
   const startR = Math.max(phases[0].radius, Math.hypot(w, d) / 2 * 1.03);
-  const preDelay = Math.max(0, Number(startDelay) || 0);
+  // `let`: applyRemote() re-syncs this from the host's snapshot on clients
+  let preDelay = Math.max(0, Number(startDelay) || 0);
   const warnLead = Math.max(1, Number(warnAt) || 15);
   let started = preDelay <= 0;
   let preT = 0;

@@ -97,6 +97,20 @@
           <div class="hp-num" id="hp-num">100</div>
           <div class="hp-bar"><i id="hp-fill"></i></div>
         </div>
+        <!-- gear tiers + consumable pack (battle-royale loadout) -->
+        <div class="gear-row" id="gear-row" hidden>
+          <span class="gear-tag" id="gear-armor" hidden>甲·—</span>
+          <span class="gear-tag" id="gear-helmet" hidden>盔·—</span>
+        </div>
+        <div class="inv-row" id="inv-row" hidden>
+          <span class="inv-slot" id="inv-bandage"><em>4</em><b>0</b></span>
+          <span class="inv-slot" id="inv-medkit"><em>5</em><b>0</b></span>
+          <span class="inv-slot" id="inv-drink"><em>6</em><b>0</b></span>
+        </div>
+        <div class="use-channel hidden" id="use-channel">
+          <span class="uc-label" id="use-channel-label">使用中</span>
+          <div class="uc-bar"><i id="use-channel-fill"></i></div>
+        </div>
       </div>
     </div>
 
@@ -530,8 +544,12 @@
         </section>
         <section class="prestart-controls">
           <h3>CONTROLS <em>操作教学</em><i class="hrule"></i></h3>
+          <button id="prestart-keymap" class="pc-map-open" type="button" data-open-keymap>
+            <i class="pc-map-ico" aria-hidden="true"></i>
+            <span>查看键位图</span><em>KEY MAP</em>
+          </button>
           <div class="pc-grid" id="prestart-controls"></div>
-          <p class="pc-tip">鼠标锁定后移动鼠标转向 · 按 <kbd>ESC</kbd> 解锁并暂停</p>
+          <p class="pc-tip">鼠标锁定后移动鼠标转向 · 按 <kbd>ESC</kbd> 解锁并暂停 · 键位图随时可查</p>
         </section>
       </div>
       <footer class="prestart-foot">
@@ -623,6 +641,7 @@
 
         <section class="manual-page" data-page="controls">
           <h3 class="manual-h3">全部键位 CONTROLS</h3>
+          <div class="kbd-host" id="manual-keyboard" data-keymap></div>
           <div class="pc-grid" id="manual-controls"></div>
           <p class="pc-tip">鼠标锁定后移动鼠标转向 · 按 <kbd>ESC</kbd> 解锁并暂停</p>
         </section>
@@ -757,6 +776,7 @@
         </div>
         <button id="controls-close" class="set-close" type="button" aria-label="关闭键位"><i></i><i></i></button>
       </header>
+      <div class="kbd-host" id="controls-keyboard" data-keymap></div>
       <div class="pc-grid controls-grid" id="controls-grid"></div>
       <p class="pc-tip">按 <kbd>ESC</kbd> 释放鼠标并暂停 · 小地图按 <kbd>M</kbd> 开关 · 情报与破门靠近后按 <kbd>E</kbd></p>
     </div>

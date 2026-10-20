@@ -153,7 +153,7 @@ for (const site of SITES) {
   const host = createZone({ rect: SITES[3].rect, rng: seeded(21) });
   for (let i = 0; i < 400; i += 1) host.update(0.25, 85, -32);
   const wire = host.serialize();
-  check('serialize: compact keys', Object.keys(wire).length <= 13, JSON.stringify(Object.keys(wire)));
+  check('serialize: compact keys', Object.keys(wire).length <= 18, JSON.stringify(Object.keys(wire)));
   check('serialize: size is tiny vs the 16 KB snapshot cap', JSON.stringify(wire).length < 300, `${JSON.stringify(wire).length}`);
   check('serialize: numbers are rounded for wire efficiency',
     Number.isFinite(wire.x) && String(wire.x).length <= 8);

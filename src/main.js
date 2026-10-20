@@ -16,6 +16,7 @@ import { createStreaks } from './systems/streaks.js';
 import { createMilestones, stepLabel } from './systems/milestones.js';
 import { createZone } from './systems/zone.js';
 import { createTeamBrain } from './systems/ai/teamBrain.js';
+import { createInventory, ITEMS } from './systems/inventory.js';
 import { createArtillery } from './systems/artillery.js';
 import { createLeaderboard } from './net/leaderboard.js';
 import { createNavGrid } from './systems/navgrid.js';
@@ -575,7 +576,7 @@ function pickUpgrade(index) {
   }
   if (card.id === 'armor' || card.id === 'health') hud.setHealth(G.hp, pipsFor(G.armor));
   if (card.id === 'grenade') hud.setGrenades(G.grenades);
-  if (card.id === 'speed') controller.speedMult = 1 + G.upgrades.speed;
+  if (card.id === 'speed') applyMoveSpeedMult();
   if (card.id === 'regen') G.regenRate = 26 * G.upgrades.regen;
   G.upgradeCards = [];
   if (hud.hideUpgrades) hud.hideUpgrades();
@@ -1273,6 +1274,9 @@ let zoneBombT = 6;            // seconds until the next gas airstrike
 /** Per-faction squad coordination (shared intel / focus fire), host only. */
 let teamBrains = [null, null];
 let teamBrainAcc = 0;
+/** Carry/use inventory: gear tiers + consumable pack (systems/inventory.js). */
+let inventory = null;
+let speedBoostT = 0;
 /** One director per faction in versus — the PvE single instance scores one
     playerPos, which cannot serve two teams with different objectives. */
 let teamDirectors = [null, null];
@@ -2215,6 +2219,7 @@ async function boot() {
       onNotify: (kind) => { if (hud && hud.toast) hud.toast(PICKUP_LABEL[kind] || ''); },
     });
     streakSys = createStreaks({ onReward: onStreakReward });
+    inventory = createInventory();
     artillery = createArtillery({
       scene: engine.scene, level, fx, audio,
       damageAt: artilleryDamageAt,
@@ -2463,6 +2468,10 @@ async function boot() {
       if (code === 'Digit2') switchWeapon(1);
       if (code === 'Digit3') switchWeapon(2);
       if (code === 'KeyQ') switchWeapon(G.lastWeapon);
+      // consumables: press to channel, press again to cancel
+      if (code === 'Digit4' && inventory) startUseItem('bandage');
+      if (code === 'Digit5' && inventory) startUseItem('medkit');
+      if (code === 'Digit6' && inventory) startUseItem('drink');
       if (code === 'KeyP') { G.state = 'paused'; pauseEl.classList.remove('hidden'); input.unlock(); }
     });
     engine.renderer.domElement.addEventListener('click', () => {
@@ -2602,6 +2611,10 @@ function startGame(lock = true, silent = false) {
 }
 
 function resetGame() {
+  if (inventory) inventory.reset();
+  speedBoostT = 0; G.speedBoost = 0;
+  applyMoveSpeedMult();
+  G.maxArmor = 60; G.armor = 60;
   if (mothAlly) { mothAlly.remove(); mothAlly = null; }
   const perks = dailyPerks();
   G.maxHp = 100;
@@ -3498,9 +3511,19 @@ function onEnemyKilled(enemy, headshot, cause = 'bullet') {
     const roll = Math.random();
     const ox = (Math.random() - 0.5) * 0.9;
     const oz = (Math.random() - 0.5) * 0.9;
-    if (roll < 0.12) pickups.spawn('ammo', pos.x + ox, pos.y, pos.z + oz);
-    else if (roll < 0.18) pickups.spawn('armor', pos.x + ox, pos.y, pos.z + oz);
-    else if (roll < 0.22) pickups.spawn('grenade', pos.x + ox, pos.y, pos.z + oz);
+    if (roll < 0.10) pickups.spawn('ammo', pos.x + ox, pos.y, pos.z + oz);
+    else if (roll < 0.15) pickups.spawn('armor', pos.x + ox, pos.y, pos.z + oz);
+    else if (roll < 0.19) pickups.spawn('grenade', pos.x + ox, pos.y, pos.z + oz);
+    // battle-royale gear + consumables (weighted toward consumables)
+    else if (roll < 0.27) pickups.spawn('bandage', pos.x + ox, pos.y, pos.z + oz);
+    else if (roll < 0.31) pickups.spawn('drink', pos.x + ox, pos.y, pos.z + oz);
+    else if (roll < 0.335) pickups.spawn('medkit', pos.x + ox, pos.y, pos.z + oz);
+    else if (roll < 0.355) {
+      // gear tier roughly tracks wave difficulty
+      const gearRoll = Math.random();
+      const lv = gearRoll < 0.55 ? 1 : gearRoll < 0.87 ? 2 : 3;
+      pickups.spawn(Math.random() < 0.5 ? `armor${lv}` : `helmet${lv}`, pos.x + ox, pos.y, pos.z + oz);
+    }
   }
 
   // limit corpse count
@@ -3655,6 +3678,11 @@ function onEnemyBreach(door) {
 function applyPlayerDamage(amount, fromPos) {
   if (G.state !== 'playing' || G.hp <= 0) return;
   if (SHOT_MODE) return;
+  // helmet tier: flat damage reduction (lv1 8% / lv2 15% / lv3 22%)
+  if (inventory) {
+    const st = inventory.gearStats();
+    if (st.damageReduction > 0) amount *= (1 - st.damageReduction);
+  }
   if (G.stats) G.stats.damagedThisWave = true;
   G.sinceDamage = 0;
   G.hurtTimer = 0.3;
@@ -3681,12 +3709,99 @@ function applyPlayerDamage(amount, fromPos) {
 }
 
 /* ---------------------------------------------- loot, streaks, artillery, runs */
-const PICKUP_LABEL = { ammo: '+90 弹药', armor: '+25 护甲', grenade: '+1 手雷', supply: '战地补给' };
+const PICKUP_LABEL = {
+  ammo: '+90 弹药', armor: '+25 护甲', grenade: '+1 手雷', supply: '战地补给',
+  armor1: '一级甲', armor2: '二级甲', armor3: '三级甲',
+  helmet1: '一级盔', helmet2: '二级盔', helmet3: '三级盔',
+  bandage: '绷带 (4 使用)', medkit: '急救包 (5 使用)', drink: '能量饮料 (6 使用)',
+};
+
+/** One formula for the move-speed multiplier (upgrade card + energy drink),
+    so every writer stays consistent. */
+function applyMoveSpeedMult() {
+  if (controller) {
+    controller.speedMult = 1 + (G.upgrades.speed || 0) + (speedBoostT > 0 ? (G.speedBoost || 0) : 0);
+  }
+}
+
+/** Press-to-use a consumable: rules live in systems/inventory.js, this only
+    surfaces HUD feedback and forwards the press. */
+function startUseItem(item) {
+  const r = inventory.press(item, G.hp, G.maxHp);
+  if (!r.ok) {
+    const why = { empty: '没有', busy: '正在使用其他物品', no_need: '状态良好' }[r.reason] || '';
+    if (hud && hud.toast && why) hud.toast(`${ITEMS[item].label} · ${why}`, 1200);
+    return;
+  }
+  if (r.reason === 'cancelled') {
+    if (hud && hud.toast) hud.toast('使用已取消', 1000);
+    hud.setUseChannel(null);
+  }
+}
+
+/** Per-frame: advance the active channel; on completion apply the effect.
+    Firing is locked while channeling (the weapon gate reads inventory.channel). */
+function updateInventory(dt) {
+  if (!inventory) return;
+  const done = inventory.update(dt);
+  const ch = inventory.channel;
+  if (hud && hud.setUseChannel) {
+    hud.setUseChannel(ch ? { label: ITEMS[ch.item].label, pct: ch.t / ITEMS[ch.item].channelTime } : null);
+  }
+  if (done) {
+    const eff = inventory.effectOf(done);
+    if (eff.heal > 0) {
+      G.hp = Math.min(eff.healCap, Math.min(G.maxHp, G.hp + eff.heal));
+      hud.setHealth(G.hp, pipsFor(G.armor));
+    }
+    if (eff.speedBoost > 0) { speedBoostT = eff.boostTime; G.speedBoost = eff.speedBoost; }
+    hud.setInventory(inventory.pack);
+    if (hud && hud.toast) hud.toast(`${ITEMS[done].label} 已使用`, 1200);
+  }
+  if (speedBoostT > 0) {
+    speedBoostT -= dt;
+    if (speedBoostT <= 0) G.speedBoost = 0;
+    applyMoveSpeedMult();
+  }
+}
 
 function onPickupCollected(kind, amount) {
   const num = (v, d) => (typeof v === 'number' && v > 0 ? v : d);
   const ammo = num(kind === 'supply' && amount && amount.ammo, num(amount, 90));
   const armor = num(kind === 'supply' && amount && amount.armor, num(amount, 25));
+
+  // ---- battle-royale gear: level-exclusive per slot ------------------
+  if (inventory && ITEMS[kind] && ITEMS[kind].family === 'gear') {
+    const verdict = inventory.equip(kind);
+    if (!verdict.ok) {
+      // worse or equal tier: refuse, leave it for a teammate
+      if (hud && hud.toast) hud.toast(`${ITEMS[kind].label} · 已有同级或更好`, 1400);
+      return false;
+    }
+    const st = inventory.gearStats();
+    if (st.armorMax > 0) {
+      G.maxArmor = st.armorMax;
+      G.armor = st.armorMax;              // fresh durability on equip
+    }
+    hud.setHealth(G.hp, pipsFor(G.armor));
+    hud.setGear(st.armorLevel, st.helmetLevel);
+    if (hud && hud.toast) {
+      hud.toast(`${ITEMS[kind].label} 装备${verdict.replaced ? ' · 替换旧装备' : ''}`, 1800);
+    }
+    return true;
+  }
+
+  // ---- consumables: into the pack, used on a key ----------------------
+  if (inventory && ITEMS[kind] && ITEMS[kind].family === 'use') {
+    const added = inventory.add(kind, 1);
+    if (!added) {
+      if (hud && hud.toast) hud.toast(`${ITEMS[kind].label} · 背包已满`, 1400);
+      return false;
+    }
+    hud.setInventory(inventory.pack);
+    if (hud && hud.toast) hud.toast(`${ITEMS[kind].label} · 按 ${ITEMS[kind].key} 使用`, 1600);
+    return true;
+  }
   if (kind === 'ammo' || kind === 'supply') {
     const w = currentWeapon();
     // shells top up the shotgun; rifle boxes feed the current rifle + half to the other
@@ -5138,6 +5253,7 @@ function updateGame(dt) {
         updateVersusRespawns();
       }
     }
+    updateInventory(dt);
     if (net.role !== 'client') {
       if (!G.versusMode) {
         updateObjective(dt);
