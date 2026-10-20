@@ -1277,6 +1277,14 @@ export function createLevel(engine) {
     for (const [x, z, len, ry] of [[187, -19.5, 8, 0.55], [187, -17.0, 8, 0.45], [186, -21.0, 6, 0.7]]) {
       meshBox(0.035, 0.035, len, mats.rust, x, 0.9, z, ry, { group: statics, cast: false });
     }
+
+    // moored patrol boat alongside the north edge + mooring ropes
+    meshBox(9.0, 2.0, 3.2, mats.metal, 160, 0.35, -25.5, 0.02, { group: statics, uv: 1.6, cast: false });
+    meshBox(4.0, 1.6, 2.6, mats.plasterB, 160, 1.9, -25.5, 0.02, { group: statics, uv: 1.4, cast: false });
+    meshBox(2.0, 1.2, 1.2, mats.rust, 162, 3.1, -25.5, 0.02, { group: statics, cast: false });
+    meshBox(0.1, 3.0, 0.1, mats.metal, 158, 2.4, -25.5, 0, { group: statics, cast: false });
+    for (const x of [155, 165]) meshBox(0.035, 0.035, 3.2, mats.rust, x, 0.85, -23.6, 0, { group: statics, cast: false });
+    for (const x of [153, 167]) meshBox(0.06, 0.55, 0.06, mats.rust, x, 0.9, -22.2, 0, { group: statics, cast: false });
     const dockLight = new THREE.PointLight(0xffc48a, 0.5, 18, 1.8);
     dockLight.position.set(160, 4.2, -12); root.add(dockLight);
 
@@ -1394,10 +1402,15 @@ export function createLevel(engine) {
       meshBox(0.07, 0.07, 4.5, mats.wood, -212, yy, 6, 0, { cast: false });
       meshBox(0.07, 0.07, 4.5, mats.wood, -208, yy, 6, 0, { cast: false });
     }
-    for (let i = 0; i < 10; i++) {
-      const tt = i / 9;
-      meshBox(1.4, 0.12, 0.9, mats.wood, -206.1, 4.2 * tt + 0.05, 16 - 8 * tt, 0, { cast: false });
+    const towerRamp = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.16, 9.1), mats.wood);
+    towerRamp.position.set(-206.1, 2.1, 12);
+    towerRamp.rotation.x = Math.atan2(4.2, 8);
+    towerRamp.castShadow = false; towerRamp.receiveShadow = false; statics.add(towerRamp);
+    for (let i = 0; i < 9; i++) {
+      const tt = i / 8;
+      meshBox(1.36, 0.05, 0.12, mats.metal, -206.1, 4.2 * tt + 0.12, 16 - 8 * tt, 0, { cast: false });
     }
+    meshBox(2.8, 0.28, 2.2, mats.wood, -206.7, 4.0, 7.0, 0, { cast: false });
     ROOF_ZONES.push({ x0: -212, x1: -208, z0: 4, z1: 8, y: 4.2 });
     ROOF_ZONES.push({ x0: -208, x1: -205.4, z0: 6, z1: 8, y: 4.2 });
     ROOF_SPAWNS.push({ x: -210, z: 6, y: 4.2 }); spawnPoints.push({ x: -210, z: 6, y: 4.2 });

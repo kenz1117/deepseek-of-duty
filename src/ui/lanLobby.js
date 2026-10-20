@@ -29,6 +29,7 @@ const STORE = {
   server: 'dod.lan.server.v1',
   room: 'dod.lan.room.v1',
   p2p: 'dod.lan.p2p.v1',
+  versus: 'dod.lan.versus.v1',
 };
 
 function readStore(key, fallback = '') {
@@ -81,6 +82,7 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
   const statusTextEl = $('lan-status-text');
   const youEl = $('lan-you');
   const entry = $('lan-coop-open');
+  const versusEntry = $('lan-versus-open');
 
   let isOpen = false;
   let localHost = false;
@@ -122,7 +124,10 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
     const p2pEl = $('lan-p2p');
     const p2p = p2pEl ? p2pEl.checked : false;
     try { localStorage.setItem(STORE.p2p, p2p ? '1' : '0'); } catch (e) { /* ignore */ }
-    return { server, url: server, room, name, callsign: name, p2p };
+    const versusEl = $('lan-versus');
+    const versus = versusEl ? versusEl.checked : false;
+    try { localStorage.setItem(STORE.versus, versus ? '1' : '0'); } catch (e) { /* ignore */ }
+    return { server, url: server, room, name, callsign: name, p2p, versus };
   }
 
   function normalizeServer(value) {
@@ -288,6 +293,11 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
     return li;
   }
 
+  function capacity() {
+    const ve = $('lan-versus');
+    return (ve && ve.checked) ? 8 : 4;
+  }
+
   function setPlayers(next, opts = {}) {
     let list = next;
     let options = opts || {};
@@ -296,15 +306,15 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
       list = list.players;
     }
     if (!Array.isArray(list)) list = [];
-    players = list.slice(0, LAN_MAX_PLAYERS).map((p) => ({ ...p }));
+    players = list.slice(0, capacity()).map((p) => ({ ...p }));
     if (options.selfId != null) {
       for (const p of players) if (String(p.id) === String(options.selfId)) p.self = true;
     }
     if (options.isHost !== undefined) setHost(options.isHost);
-    if (countEl) countEl.textContent = `${players.length}/${LAN_MAX_PLAYERS}`;
+    if (countEl) countEl.textContent = `${players.length}/${capacity()}`;
     if (listEl) {
       listEl.textContent = '';
-      for (let i = 0; i < LAN_MAX_PLAYERS; i++) listEl.appendChild(playerRow(players[i], i));
+      for (let i = 0; i < capacity(); i++) listEl.appendChild(playerRow(players[i], i));
     }
     syncYou();
   }
@@ -330,6 +340,12 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
     if (p2pEl && !p2pEl.dataset.restored) {
       p2pEl.dataset.restored = '1';
       p2pEl.checked = readStore(STORE.p2p, '1') !== '0'; // default ON
+    }
+    const versusEl = $('lan-versus');
+    if (versusEl && !versusEl.dataset.restored) {
+      versusEl.dataset.restored = '1';
+      versusEl.checked = readStore(STORE.versus, '0') === '1'; // default OFF
+      versusEl.addEventListener('change', () => { setPlayers(players); });
     }
     syncYou();
     if (!players.length) setPlayers([]);
@@ -460,6 +476,15 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
   if (nameEl) {
     nameEl.addEventListener('input', () => { syncYou(); });
     nameEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); host(); } });
+  }
+  if (versusEntry && !versusEntry.dataset.lanBound) {
+    versusEntry.dataset.lanBound = '1';
+    versusEntry.addEventListener('click', () => {
+      const ve = $('lan-versus');
+      if (ve) ve.checked = true;
+      try { localStorage.setItem(STORE.versus, '1'); } catch (e) { /* ignore */ }
+      open();
+    });
   }
   if (entry && !entry.dataset.lanBound) {
     entry.dataset.lanBound = '1';

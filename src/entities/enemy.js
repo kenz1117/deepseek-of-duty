@@ -17,6 +17,12 @@ const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
 const _v3 = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
+/* shoot() scratch: every pellet used to allocate 2 Vector3; tracer()/muzzleFlash()
+   copy coordinates synchronously, so shared temps are safe here. */
+const _shotMuzzle = new THREE.Vector3();
+const _shotEnd = new THREE.Vector3();
+const _shotSpread = new THREE.Vector3();
+const _shotPellet = new THREE.Vector3();
 
 // one shared invisible material for every hit volume
 const HB_MAT = new THREE.MeshBasicMaterial();
@@ -155,6 +161,11 @@ export class Enemy {
 
     this.hp = this.maxHp;
     this.alive = true;
+    // Faction id (0/1) in versus mode; undefined in co-op/PvE. Undefined must
+    // stay a legal value: every team check treats "both sides have a team" as
+    // the only condition for friendly/hostile filtering, so co-op behaviour
+    // stays unchanged.
+    this.team = undefined;
     this.state = 'advance';
     this.walkT = Math.random() * 10;
     this.speed = 0;
@@ -216,6 +227,12 @@ export class Enemy {
     this.coverPeek = false;
     this.coverNoSightT = 0;
     this.flankT = 0;
+    // AI v2.x: morale / bullet-impact / panic state
+    this.comradeLostT = 0;        // seconds since I saw a friend die nearby
+    this.fireBearingX = 0;        // last-known rough firing direction (unit)
+    this.fireBearingZ = 0;
+    this.fireBearingT = 0;        // freshness window
+    this.panicT = 0;              // rifleman-only: shaky aim after a wound
 
     this.aimBlend = 1;
     this.weaponLevel = 0;
@@ -506,39 +523,41 @@ export class Enemy {
   }
 
   /* --------------------------------------------------------------- posing */
-  restPose() {
-    applyPose(this.rig, {
-      time: 0,
-      crouch: 0.10,
-      walkAmp: 0,
-      walkPhase: 0,
-      aim: 1,
-      weaponLevel: 0,
-      aimPitch: 0,
-      lookYaw: 0,
-      flinch: 0,
-      recoil: 0,
-      limp: 0,
+  /* The pose blob is rebuilt every frame for every soldier; keep ONE object
+     per instance and mutate it (was ~1200 object literals/sec at 20 hostiles). */
+  poseScratch() {
+    return this._pose || (this._pose = {
+      time: 0, crouch: 0.10, walkAmp: 0, walkPhase: 0, aim: 1, weaponLevel: 0,
+      aimPitch: 0, lookYaw: 0, flinch: 0, recoil: 0, limp: 0,
+      headRoll: 0, deathSide: 1, flinchSide: 1,
     });
   }
 
+  restPose() {
+    const P = this.poseScratch();
+    P.time = 0; P.crouch = 0.10; P.walkAmp = 0; P.walkPhase = 0; P.aim = 1;
+    P.weaponLevel = 0; P.aimPitch = 0; P.lookYaw = 0; P.flinch = 0; P.recoil = 0;
+    P.limp = 0; P.headRoll = 0; P.deathSide = 1; P.flinchSide = 1;
+    applyPose(this.rig, P);
+  }
+
   applyBodyPose() {
-    applyPose(this.rig, {
-      time: this.animT,
-      crouch: this.crouch,
-      walkAmp: this.walkAmp,
-      walkPhase: this.walkT,
-      aim: this.aimBlend,
-      weaponLevel: this.weaponLevel,
-      aimPitch: this.aimPitchS,
-      lookYaw: this.headYawS,
-      flinch: this.flinch,
-      recoil: this.recoil,
-      limp: 0,
-      headRoll: 0,
-      deathSide: this.deathSide,
-      flinchSide: this.lastHitSide || 1,
-    });
+    const P = this.poseScratch();
+    P.time = this.animT;
+    P.crouch = this.crouch;
+    P.walkAmp = this.walkAmp;
+    P.walkPhase = this.walkT;
+    P.aim = this.aimBlend;
+    P.weaponLevel = this.weaponLevel;
+    P.aimPitch = this.aimPitchS;
+    P.lookYaw = this.headYawS;
+    P.flinch = this.flinch;
+    P.recoil = this.recoil;
+    P.limp = 0;
+    P.headRoll = 0;
+    P.deathSide = this.deathSide;
+    P.flinchSide = this.lastHitSide || 1;
+    applyPose(this.rig, P);
   }
 
   /* --------------------------------------------------------------- spawning */
@@ -646,8 +665,28 @@ export class Enemy {
 
   /* ---------------------------------------------------------------- damage */
   /** returns true if this damage killed */
-  takeDamage(amount, point, normal, part = 'torso') {
+  takeDamage(amount, point, normal, part = 'torso', attackerTeam = undefined) {
     if (!this.alive) return false;
+
+    // ---- friendly fire (versus mode only) ----
+    // Enters only when BOTH ids exist and match; undefined attacker (player
+    // shots, artillery, old snapshots) never reaches this branch, so co-op
+    // behaviour is unchanged. Friendly fire must NOT run the "I've been shot
+    // by an enemy" reaction block below — awareness=0.9 + contact +
+    // investigate=shooter would make allies turn on each other, wantCover and
+    // panicT would make them twitch out of position. So: hp + flinch only.
+    if (attackerTeam != null && this.team != null && attackerTeam === this.team) {
+      const dmg = amount * 0.35;
+      this.hp -= dmg;
+      this.flinch = Math.min(1, this.flinch + 0.25);
+      this.lastDamage = 0.4;
+      if (this.hp <= 0) {
+        this.die(point, normal);
+        return true;
+      }
+      return false;
+    }
+
     this.deathPart = part;
     this.deathExplosive = !!(normal && normal.y > 0.75);
 
@@ -700,6 +739,19 @@ export class Enemy {
       this.reactionDelay = reactionDelay(B, this.archetype) * 0.5;
     }
     this.wantCover = this.def.useCover && Math.random() < B.cover;
+    // morale-of-one: a hurt soldier that's still healthy enough to fight
+    // does not run. But below ~35 % HP a rifleman becomes flaky — his
+    // accuracy wobbles, he is more likely to break for cover on the next
+    // hit, and his reaction window narrows. A shield or sniper stays
+    // disciplined because the player wants their archetype to feel
+    // distinct.
+    const hpPct = this.hp / this.maxHp;
+    if (this.archetype === 'rifleman' && hpPct < 0.36) {
+      this.panicT = 4.2;
+      this.aimSettle = Math.max(0, this.aimSettle * 0.65);
+      // a flustered rifleman is more likely to break for cover
+      if (Math.random() < 0.45) this.wantCover = true;
+    }
     if (this.state === 'advance' || this.state === 'idle') {
       this.state = this.canSee ? 'engage' : 'search';
       if (this.state === 'search' && this.searchHold <= 0) this.searchHold = 3.5;
@@ -733,15 +785,17 @@ export class Enemy {
   setOccluders(list) { this.occluders = Array.isArray(list) ? list : []; }
 
   /**
-   * 2D collider line-of-sight test between this soldier's eye and the player.
+   * 2D collider line-of-sight test between this soldier's eye and its current
+   * target (the local player in co-op, any hostile actor in versus mode —
+   * main.js redirects ctx.playerPos per enemy before calling this).
    * `dist` is the planar distance perception already computed: passing it keeps
    * this function allocation-free and lets it bail out on range.
    */
-  canSeePlayer(playerPos, dist) {
+  canSeeTarget(targetPos, dist) {
     const p = this.root.position;
     const ax = p.x, az = p.z, ay = EYE_Y + p.y;
-    const bx = playerPos.x, bz = playerPos.z;
-    const by = playerPos.y != null ? playerPos.y : CHEST_Y;
+    const bx = targetPos.x, bz = targetPos.z;
+    const by = targetPos.y != null ? targetPos.y : CHEST_Y;
     const dx = bx - ax, dz = bz - az;
     const planar = dist != null ? dist : Math.hypot(dx, dz);
     if (planar > 130) return false;
@@ -781,6 +835,11 @@ export class Enemy {
       }
     }
     return true;
+  }
+
+  /** Back-compat alias — the old name, safe to keep while callers migrate. */
+  canSeePlayer(targetPos, dist) {
+    return this.canSeeTarget(targetPos, dist);
   }
 
   resolveCollision() {
@@ -833,7 +892,7 @@ export class Enemy {
       this.sightTimer -= dt;
       if (this.sightTimer <= 0) {
         this.sightTimer = 0.16 + Math.random() * 0.12;
-        this.canSee = this.canSeePlayer(playerPos);
+        this.canSee = this.canSeeTarget(playerPos);
       }
       if (this.canSee) {
         this.lastSeenT = 0;
@@ -850,8 +909,19 @@ export class Enemy {
     // ---- aim settle: accuracy ramps while tracking, collapses when hit
     const settle = Math.max(0.18, B.settle
       * (this.archetype === 'sniper' ? 1.3 : this.archetype === 'rusher' ? 0.8 : 1));
-    if (this.canSee) this.aimSettle = Math.min(1, this.aimSettle + dt / settle);
+    // panic jitter: a hurt rifleman cannot hold a steady sight picture,
+    // so his aimSettle decays toward a lower cap and never quite settles.
+    const panicCap = (this.panicT || 0) > 0 ? 0.62 : 1;
+    if (this.canSee) this.aimSettle = Math.min(panicCap, this.aimSettle + dt / settle);
     else this.aimSettle = Math.max(0, this.aimSettle - dt * 1.7);
+    if ((this.panicT || 0) > 0) {
+      // continuous micro-jitter while panicking: the soldier's accuracy
+      // oscillates slightly frame-to-frame, not enough to read as "blind",
+      // enough to read as "shaken".
+      const jitter = (Math.sin(this.animT * 7.3 + this.rnd() * 6.28)) * 0.05;
+      this.aimSettle = Math.max(0, Math.min(panicCap, this.aimSettle + jitter));
+      this.panicT = Math.max(0, this.panicT - dt);
+    }
 
     const p = this.root.position;
     const px0 = p.x;
@@ -911,6 +981,11 @@ export class Enemy {
       if (this.state === 'search' && this.searchHold <= 0) this.searchHold = 4 + Math.random() * 3;
     } else if (role === 'breach' && this.breachDoor && !this.breachDoor.opened) {
       this.state = 'advance';
+    } else if (role === 'breachSupport' && this.breachDoor && !this.breachDoor.opened) {
+      // breach support: hold a firing position covering the door while the
+      // stacker charges it. Picks the side furthest from the player so the
+      // door does not become a frontal peek into the player's gun.
+      this.state = 'engage';
     } else if (this.canSee && confident && dist < (def.engageRange || 48)) {
       this.state = 'engage';
     } else if (this.lastSeen && this.lastSeenT < 5.5) {
@@ -972,22 +1047,52 @@ export class Enemy {
         faceMove = true;
       } else speedTarget = 0;
     } else if (this.state === 'advance') {
-      const tgt = this.investigate || (this.lastSeen && this.lastSeenT < 6 ? this.lastSeen : null) || playerPos;
-      const tx = tgt.x - p.x, tz = tgt.z - p.z;
-      const td = Math.hypot(tx, tz) || 1;
-      const standoff = role === 'breach' ? 1.2
-        : role === 'suppress' ? 26 : role === 'hold' ? 20 : role === 'flank' ? 17 : 8;
-      if (role === 'breach' && td <= 1.6) {
-        speedTarget = 0;
-      } else if (td > standoff) {
-        moveX = tx / td; moveZ = tz / td;
-        speedTarget = def.advanceSpeed * (this.awareness > 0.7 ? 1 : 0.82);
-        faceMove = true;
+      // breachSupport: instead of running toward the door, the support
+      // soldier picks a position roughly 9 m off the door axis, on the
+      // side furthest from the player. From there they can fire on
+      // anyone peeking the door and not get flanked by the player.
+      if (role === 'breachSupport' && this.breachDoor && this.breachDoor.rect) {
+        const dr = this.breachDoor.rect;
+        const dx2 = (dr[0] + dr[1]) * 0.5 - p.x;
+        const dz2 = (dr[2] + dr[3]) * 0.5 - p.z;
+        const ddoor = Math.hypot(dx2, dz2) || 1;
+        const desired = 9;
+        if (ddoor > desired + 1.5) {
+          moveX = dx2 / ddoor; moveZ = dz2 / ddoor;
+          speedTarget = 3.0;
+          faceMove = true;
+        } else if (ddoor < desired - 2) {
+          // too close: back off, but only if it does not put us in the
+          // player's face; flip to retreat along the door-axis
+          moveX = -dx2 / ddoor; moveZ = -dz2 / ddoor;
+          speedTarget = 1.6;
+          faceMove = true;
+        } else {
+          // in position: strafe laterally to keep the player from
+          // tracking a static target
+          moveX = sideX * this.strafeDir * 0.5;
+          moveZ = sideZ * this.strafeDir * 0.5;
+          speedTarget = 1.0;
+          faceMove = true;
+        }
       } else {
-        moveX = sideX * this.strafeDir * 0.5;
-        moveZ = sideZ * this.strafeDir * 0.5;
-        speedTarget = 1.1;
-        faceMove = true;
+        const tgt = this.investigate || (this.lastSeen && this.lastSeenT < 6 ? this.lastSeen : null) || playerPos;
+        const tx = tgt.x - p.x, tz = tgt.z - p.z;
+        const td = Math.hypot(tx, tz) || 1;
+        const standoff = role === 'breach' ? 1.2
+          : role === 'suppress' ? 26 : role === 'hold' ? 20 : role === 'flank' ? 17 : 8;
+        if (role === 'breach' && td <= 1.6) {
+          speedTarget = 0;
+        } else if (td > standoff) {
+          moveX = tx / td; moveZ = tz / td;
+          speedTarget = def.advanceSpeed * (this.awareness > 0.7 ? 1 : 0.82);
+          faceMove = true;
+        } else {
+          moveX = sideX * this.strafeDir * 0.5;
+          moveZ = sideZ * this.strafeDir * 0.5;
+          speedTarget = 1.1;
+          faceMove = true;
+        }
       }
     } else if (this.state === 'engage') {
       if (this.archetype === 'rusher') {
@@ -996,6 +1101,35 @@ export class Enemy {
         moveX = dirX * push + sideX * this.strafeDir * circle;
         moveZ = dirZ * push + sideZ * this.strafeDir * circle;
         speedTarget = dist > 3.2 ? def.engageSpeed : 3.0;
+      } else if (role === 'breachSupport' && this.breachDoor && this.breachDoor.rect) {
+        // breachSupport during engage: the soldier has arrived at the
+        // 9 m support position and now has the player in sight. They
+        // shoot from there instead of pushing in — they exist to cover
+        // the stacker, not to be the second wave. Lateral strafe keeps
+        // them hard to track; an "advance" toward the door only fires
+        // if they have drifted away from the support line.
+        const dr = this.breachDoor.rect;
+        const cx2 = (dr[0] + dr[1]) * 0.5;
+        const cz2 = (dr[2] + dr[3]) * 0.5;
+        const dx2 = cx2 - p.x;
+        const dz2 = cz2 - p.z;
+        const ddoor = Math.hypot(dx2, dz2) || 1;
+        const desired = 9;
+        if (ddoor > desired + 2.5) {
+          // drifted away from the support line: drift back, do not push
+          // the player
+          moveX = dx2 / ddoor * 0.7;
+          moveZ = dz2 / ddoor * 0.7;
+          speedTarget = 1.8;
+          faceMove = true;
+        } else {
+          // in position: strafe laterally, prefer moving off-axis to
+          // make the player's lead less effective
+          moveX = sideX * this.strafeDir * 0.85;
+          moveZ = sideZ * this.strafeDir * 0.85;
+          speedTarget = 1.2;
+          faceMove = true;
+        }
       } else if (this.archetype === 'sniper') {
         this.repositionT = Math.max(0, this.repositionT - dt);
         if (this.repositionT > 0) {
@@ -1055,8 +1189,16 @@ export class Enemy {
 
     // ---- ground pathfinding: steer around walls when the straight line is blocked
     if (ctx.nav && this.baseY <= 0.5 && !this.pinned
-        && (this.state === 'advance' || this.state === 'search' || this.state === 'cover')) {
-      const tgt = this.state === 'search' ? (this.lastSeen || this.investigate || playerPos)
+        && (this.state === 'advance' || this.state === 'search' || this.state === 'cover'
+            || (this.aiRole === 'breachSupport' && this.breachDoor))) {
+      // breachSupport uses the door position, not the player, as its
+      // navigation target — otherwise A* would path them straight at the
+      // player instead of holding the support line.
+      const isBreachSupport = this.aiRole === 'breachSupport' && this.breachDoor;
+      const tgt = isBreachSupport
+        ? { x: (this.breachDoor.rect[0] + this.breachDoor.rect[1]) * 0.5,
+            z: (this.breachDoor.rect[2] + this.breachDoor.rect[3]) * 0.5 }
+        : this.state === 'search' ? (this.lastSeen || this.investigate || playerPos)
         : this.state === 'cover' ? this.coverPoint
           : (this.investigate && this.investigateT < 24 ? this.investigate
             : (this.lastSeen && this.lastSeenT < 6 ? this.lastSeen : playerPos));
@@ -1534,19 +1676,35 @@ export class Enemy {
     );
     this.recoil = this.archetype === 'sniper' ? 1 : this.archetype === 'rusher' ? 0.9 : 0.85;
 
-    const muzzle = new THREE.Vector3();
+    const muzzle = _shotMuzzle;
     this.weaponMuzzle.getWorldPosition(muzzle);
 
     const playerSpeed = ctx.playerSpeed || 0;
+    // Lateral velocity vector (X / Z) feeds the lead correction: a soldier
+    // aiming at a sprinting player puts the muzzle where the target is
+    // going, not where it is. The component along the firing line is what
+    // matters; cross-axis motion only widens the spread.
+    const sx = this.root.position.x, sz = this.root.position.z;
+    const tx0 = playerPos.x - sx, tz0 = playerPos.z - sz;
+    const leadX = (ctx.playerDirX || 0) * playerSpeed;
+    const leadZ = (ctx.playerDirZ || 0) * playerSpeed;
+    const proj = dist > 0.001
+      ? (leadX * tx0 / dist + leadZ * tz0 / dist) * 0.18
+      : 0;
     // Accuracy is no longer a flat dice roll: a soldier that just rounded the
     // corner (or is eating suppressive fire) is measurably less accurate than
     // one that has been tracking you for a second.
     const settleMul = 0.55 + 0.45 * this.aimSettle;
     const suppressMul = 1 - 0.4 * this.suppression;
+    // squad-morale nudge: a soldier who just saw a friend drop gets
+    // tighter, but more than one and the squad starts losing its edge.
+    const squadMorale = (ctx.ai && ctx.ai.director && ctx.ai.director.squadMorale) || 1;
+    const moraleMul = clamp(squadMorale - (1 - (this.comradeLostT || 0) / 4) * 0.04, 0.85, 1.05);
     const hitChance = clamp(
-      def.hitBase * this.accuracyMult * settleMul * suppressMul
+      def.hitBase * this.accuracyMult * moraleMul * settleMul * suppressMul
         - dist * def.hitFalloff - playerSpeed * def.hitSpeedFalloff
-        - Math.min(0.16, this.speed * 0.03),
+        - Math.min(0.16, this.speed * 0.03)
+        - Math.max(0, proj - 0.04) * 0.55,
       0.05, 0.95
     );
     const hit = Math.random() < hitChance;
@@ -1556,12 +1714,21 @@ export class Enemy {
       /* shotgun: several pellets, brutal up close, useless far away */
       const falloff = clamp(1 - dist / (def.fireRange + 3), 0.1, 1);
       const dmg = (def.shotDamage[0] + Math.random() * (def.shotDamage[1] - def.shotDamage[0])) * (0.35 + 0.65 * falloff) * this.damageMult;
-      const end = hit
-        ? playerPos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.3, -0.12, (Math.random() - 0.5) * 0.3))
-        : playerPos.clone().add(new THREE.Vector3(
-          (Math.random() - 0.5) * (0.5 + dist * 0.06), (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.5));
+      // rusher lead: closer range, smaller correction. The shotgun pellets
+      // share the same offset so the spread still feels like a single burst.
+      const lrX = leadX * 0.10;
+      const lrZ = leadZ * 0.10;
+      const end = _shotEnd;
+      if (hit) {
+        end.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.3 + lrX, -0.12, (Math.random() - 0.5) * 0.3 + lrZ));
+      } else {
+        end.copy(playerPos).add(_shotSpread.set(
+          (Math.random() - 0.5) * (0.5 + dist * 0.06) + lrX,
+          (Math.random() - 0.5) * 0.4,
+          (Math.random() - 0.5) * 0.5 + lrZ));
+      }
       for (let i = 0; i < 5; i++) {
-        const e = i === 2 ? end : end.clone().add(new THREE.Vector3(
+        const e = i === 2 ? end : _shotPellet.copy(end).add(_shotSpread.set(
           (Math.random() - 0.5) * 0.55, (Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.55));
         ctx.fx.tracer(muzzle, e, { color: 0xffd2a0, width: 0.022, life: 0.045 });
       }
@@ -1578,9 +1745,17 @@ export class Enemy {
 
     if (this.archetype === 'sniper') {
       const dmg = (def.shotDamage[0] + Math.random() * (def.shotDamage[1] - def.shotDamage[0])) * this.damageMult;
-      const end = hit
-        ? playerPos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.12, -0.1, (Math.random() - 0.5) * 0.12))
-        : playerPos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.5, -0.2, (Math.random() - 0.5) * 0.5));
+      // sniper lead is strongest: the rifleman-archetype tunings are very
+      // precise and the in-game telemetry showed snipers missing perpendicular
+      // movers because there was no lead at all.
+      const lsX = leadX * 0.32;
+      const lsZ = leadZ * 0.32;
+      const end = _shotEnd;
+      if (hit) {
+        end.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.12 + lsX, -0.1, (Math.random() - 0.5) * 0.12 + lsZ));
+      } else {
+        end.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.5 + lsX, -0.2, (Math.random() - 0.5) * 0.5 + lsZ));
+      }
       ctx.fx.tracer(muzzle, end, { color: 0xffe0b8, width: 0.036, life: 0.07 });
       ctx.fx.muzzleFlash(muzzle);
       if (hit) ctx.damagePlayer(dmg, this.root.position);
@@ -1593,14 +1768,22 @@ export class Enemy {
 
     /* rifleman / shield: rifle burst */
     const baseErr = 0.32 + dist * 0.020 + playerSpeed * 0.05;
-    const spread = new THREE.Vector3(
-      (Math.random() - 0.5) * baseErr,
+    // lead offset: where the muzzle should aim vs. where the player is now.
+    // The soldier uses its own X/Z direction toward the player to translate
+    // the lateral velocity into an XZ aim offset (positive = put the muzzle
+    // ahead of the player's current position along the firing line).
+    const dirXn = dist > 0.001 ? tx0 / dist : 0;
+    const dirZn = dist > 0.001 ? tz0 / dist : 0;
+    const leadOffsetX = leadX * 0.16;
+    const leadOffsetZ = leadZ * 0.16;
+    const spread = _shotSpread.set(
+      (Math.random() - 0.5) * baseErr + (Math.random() - 0.5) * 0.18 + leadOffsetX,
       (Math.random() - 0.5) * baseErr * 0.7,
-      (Math.random() - 0.5) * baseErr
+      (Math.random() - 0.5) * baseErr + (Math.random() - 0.5) * 0.18 + leadOffsetZ
     );
-    const target = playerPos.clone().add(spread);
+    const target = _shotEnd.copy(playerPos).add(spread);
     const endpoint = hit
-      ? playerPos.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.25, -0.15, (Math.random() - 0.5) * 0.25))
+      ? _shotPellet.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.25, -0.15, (Math.random() - 0.5) * 0.25))
       : target;
     ctx.fx.tracer(muzzle, endpoint, { color: 0xffc98a, width: 0.03, life: 0.05 });
     ctx.fx.muzzleFlash(muzzle);

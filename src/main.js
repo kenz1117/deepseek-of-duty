@@ -14,6 +14,7 @@ import { createRunStats, runPayload, recordRun, applyDailyProgress, loadDaily, d
 import { createPickups } from './world/pickups.js';
 import { createStreaks } from './systems/streaks.js';
 import { createMilestones, stepLabel } from './systems/milestones.js';
+import { createZone } from './systems/zone.js';
 import { createArtillery } from './systems/artillery.js';
 import { createLeaderboard } from './net/leaderboard.js';
 import { createNavGrid } from './systems/navgrid.js';
@@ -149,6 +150,12 @@ const G = {
   tutorial: { active: false, step: 0, t: 0, stepT: 0, done: false, lastX: 0, lastZ: 0 },
   shotsFired: 0, regenRate: 26, atmosphere: 'dusk',
   mode: 'survival', objective: null, operation: null, boss: null,
+  // Versus master switch. false in co-op; when true, teams exist, friendly
+  // fire is filtered, breach/equipment AI subsystems are disabled (their
+  // single-target assumptions do not hold) and the safe zone runs. Turning it
+  // off restores the PvE behaviour exactly.
+  versusMode: false,
+  teamScores: [0, 0],
   // Sprint D: run counters, streak rewards, UAV window, score multiplier
   stats: null, scoreMult: 1, uavUntil: 0, uavTick: 0,
 };
@@ -158,12 +165,16 @@ let weather = null;
 let lanLobby = null, lanSession = null, worldLabels = null;
 const net = {
   role: null, selfId: null, name: 'OPERATOR', hostId: null,
+  team: undefined,               // 0 | 1 in versus; undefined in co-op
   remote: new Map(), enemies: new Map(),
   inputT: 0, snapT: 0, tick: 0, seq: 0, started: false, respawnT: 0, lastError: null,
 };
 let netEnemySeq = 1;
 /** Client-side read-only mirror of the host's milestone chain. */
 let netMilestoneMirror = null;
+/** Host-authoritative safe zone; clients hold a read-only mirror. */
+let zoneSys = null;
+let netZoneMirror = null;
 let perception = null, aiDirector = null, barks = null, equipment = null;
 let codex = { intel: [] };
 let mothAlly = null;
@@ -1190,7 +1201,7 @@ function startMilestones() {
     onChainAdvance: (step) => mountMilestoneStep(step),
     onStep: (step) => {
       if (hud && hud.toast) hud.toast(`阶段完成 · ${stepLabel(step)}`, 2000);
-      if (hud && hud.radio) hud.radio('VEGA', '阶段完成。推进到下一个目标。', 2600);
+      if (hud && hud.radio) hud.radio('VEGA', '阶段完成。推进到下一个目标。', 2600, 'stage_clear');
     },
     onAllDone: () => {
       if (hud && hud.toast) hud.toast('任务链完成 · 干得漂亮', 3200);
@@ -1235,6 +1246,312 @@ function updateMilestones(dt) {
   if (step && (step.kind === 'reach' || step.kind === 'hold') && hud && hud.setZoneDistance) {
     const d = Math.hypot(controller.pos.x - step.x, controller.pos.z - step.z);
     hud.setZoneDistance(inside ? null : d);
+  }
+}
+
+/* ==========================================================================
+   VERSUS MODE — two factions, AI fill, shrinking ring.
+   Host-authoritative like everything else in LAN: the host simulates the
+   zone, the fill bots and team scores; clients mirror via the snapshot.
+
+   Honest limits (see docs/PROPOSAL-VERSUS-ZONE-MILESTONE.md §8):
+   - Bots fight whoever is nearest — no squad coordination, no focus fire.
+   - Bots do not path INTO the ring; outside damage eventually kills them.
+   - Balance numbers (fill=4/side, 5s respawn, bot dps) are untested guesses.
+   ========================================================================== */
+
+const VERSUS_TEAM_SIZE = 4;
+const VERSUS_RESPAWN_MS = 5000;
+
+let versusBots = [];          // [{ e: Enemy, team, respawnAt }]
+let zoneVisual = null;        // { wall, ringNext, ringNow }
+
+/** Spawn point per team inside the site rect: team 0 at the site's objective
+    zone, team 1 at the opposite end of the rect. */
+function versusTeamSpawn(team) {
+  const rect = G.playRect || (G.site && G.site.rect) || { x0: -30, x1: 30, z0: -30, z1: 30 };
+  const cx = (rect.x0 + rect.x1) / 2;
+  const cz = (rect.z0 + rect.z1) / 2;
+  const z0 = team === 0 ? rect.z0 + 14 : rect.z1 - 14;
+  return { x: cx + (team === 0 ? -6 : 6), z: z0, y: 0 };
+}
+
+/** Team fill: pad each side up to VERSUS_TEAM_SIZE with AI soldiers. */
+function startVersusBots(teams, lobbyPlayers) {
+  versusBots = [];
+  const counts = [0, 0];
+  for (const id of Object.keys(teams || {})) counts[teams[id]] += 1;
+  for (let team = 0; team < 2; team += 1) {
+    const fill = Math.max(0, VERSUS_TEAM_SIZE - counts[team]);
+    for (let i = 0; i < fill; i += 1) {
+      const sp = versusTeamSpawn(team);
+      sp.x += (Math.random() - 0.5) * 8;
+      sp.z += (Math.random() - 0.5) * 8;
+      const e = spawnEnemy({ x: sp.x, z: sp.z, y: sp.y });
+      if (!e) break;
+      e.team = team;
+      if (e._netId == null) e._netId = netEnemySeq++;
+      versusBots.push({ e, team, respawnAt: 0 });
+    }
+  }
+}
+
+/** Nearest hostile actor for one AI soldier: humans first-class, plus fill
+    bots of the other team. Co-op callers keep using nearestLanTarget. */
+function nearestHostileActor(pos, selfTeam) {
+  const human = nearestLanTarget(pos, selfTeam);
+  let best = human;
+  let bestD = Math.hypot(pos.x - best.x, pos.z - best.z);
+  for (const b of versusBots) {
+    const e = b.e;
+    if (!e || !e.alive) continue;
+    if (selfTeam != null && b.team === selfTeam) continue;
+    const d = Math.hypot(pos.x - e.root.position.x, pos.z - e.root.position.z);
+    if (d < bestD) {
+      bestD = d;
+      best = {
+        id: `bot:${e._netId}`,
+        x: e.root.position.x, y: e.root.position.y, z: e.root.position.z,
+        hp: e.hp, alive: true, speed: e.speed || 0, team: b.team, isBot: true,
+      };
+    }
+  }
+  return best;
+}
+
+function botById(netId) {
+  for (const b of versusBots) {
+    if (b.e && String(b.e._netId) === String(netId)) return b;
+  }
+  return null;
+}
+
+/** Host-side versus kill bookkeeping: team score + respawn scheduling. */
+function onVersusDeath(victimTeam, killerTeam, victimLabel) {
+  if (!G.versusMode) return;
+  if (Number.isFinite(killerTeam) && killerTeam !== victimTeam) {
+    G.teamScores[killerTeam] = (G.teamScores[killerTeam] || 0) + 1;
+  }
+  if (hud && hud.addKillFeed) {
+    const who = killerTeam === 0 ? '蓝军' : '红军';
+    hud.addKillFeed(`${who} 击杀 ${victimLabel || '目标'}`);
+  }
+  checkVersusWin();
+}
+
+function checkVersusWin() {
+  const target = 40;
+  if (G.teamScores[0] >= target || G.teamScores[1] >= target) {
+    const win = G.teamScores[0] >= target ? '蓝军' : '红军';
+    if (hud && hud.toast) hud.toast(`${win} 达到 ${target} 杀 · 获胜`, 5000);
+    if (hud && hud.setObjective) hud.setObjective(`${win} 获胜`);
+    G.state = 'debrief';
+  }
+}
+
+/* ---- ring: host authority + shared visuals -------------------------------- */
+
+function ensureZoneVisual() {
+  if (zoneVisual || !engine) return;
+  const THREE_ = engine.THREE || THREE;
+  const wallMat = new THREE_.MeshBasicMaterial({
+    color: 0x59d6c9, transparent: true, opacity: 0.14,
+    side: THREE_.DoubleSide, depthWrite: false,
+  });
+  const wall = new THREE_.Mesh(new THREE_.CylinderGeometry(1, 1, 30, 72, 1, true), wallMat);
+  wall.position.y = 12;
+  wall.renderOrder = 5;
+  engine.scene.add(wall);
+
+  const ringMat = new THREE_.MeshBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.35, side: THREE_.DoubleSide, depthWrite: false,
+  });
+  const ringNext = new THREE_.Mesh(new THREE_.RingGeometry(0.96, 1, 72), ringMat);
+  ringNext.rotation.x = -Math.PI / 2;
+  ringNext.position.y = 0.12;
+  ringNext.renderOrder = 5;
+  engine.scene.add(ringNext);
+
+  const ringNowMat = new THREE_.MeshBasicMaterial({
+    color: 0x59d6c9, transparent: true, opacity: 0.5, side: THREE_.DoubleSide, depthWrite: false,
+  });
+  const ringNow = new THREE_.Mesh(new THREE_.RingGeometry(0.985, 1, 96), ringNowMat);
+  ringNow.rotation.x = -Math.PI / 2;
+  ringNow.position.y = 0.1;
+  ringNow.renderOrder = 5;
+  engine.scene.add(ringNow);
+
+  zoneVisual = { wall, ringNext, ringNow };
+}
+
+function disposeZoneVisual() {
+  if (!zoneVisual) return;
+  for (const key of ['wall', 'ringNext', 'ringNow']) {
+    const m = zoneVisual[key];
+    if (m) {
+      engine.scene.remove(m);
+      m.geometry.dispose();
+      m.material.dispose();
+    }
+  }
+  zoneVisual = null;
+}
+
+function startZone() {
+  // Versus/BR zone covers the whole playable map (city + dock + foothills);
+  // co-op keeps the site rect.
+  const rect = G.versusMode && level && level.bounds
+    ? { ...level.bounds }
+    : (G.playRect || (G.site && G.site.rect));
+  if (!rect) return;
+  zoneSys = createZone({ rect });
+  ensureZoneVisual();
+}
+
+function stopZone() {
+  zoneSys = null;
+  disposeZoneVisual();
+}
+
+/** Zone damage: no red flash, no shake, no hurt sound — the player must be
+    able to TELL gas apart from being shot. Blocks regen while active. */
+function applyZoneDamage(amount) {
+  if (amount <= 0 || G.state !== 'playing') return;
+  G.hp = Math.max(0, G.hp - amount);
+  G.sinceDamage = 99;             // no passive regen inside the gas
+  if (hud && hud.setHealth) hud.setHealth(G.hp, pipsFor(G.armor));
+  if (G.hp <= 0 && net.role !== 'client') {
+    playerDie();
+  }
+}
+
+function updateZone(dt) {
+  // authoritative on the host, mirror on the client — both drive visuals
+  const zs = net.role === 'host'
+    ? (zoneSys ? zoneSys.update(dt, controller.pos.x, controller.pos.z) : null)
+    : (netZoneMirror ? netZoneMirror.update(dt, controller.pos.x, controller.pos.z) : null);
+  if (!zs) return;
+
+  // gas damage from the authoritative-or-mirrored ring
+  if (zs.distance > 0.5) applyZoneDamage(zs.dps * dt);
+
+  if (zoneVisual) {
+    zoneVisual.wall.position.x = zs.x;
+    zoneVisual.wall.position.z = zs.z;
+    zoneVisual.wall.scale.set(zs.r, 1, zs.r);
+    zoneVisual.ringNow.position.x = zs.x;
+    zoneVisual.ringNow.position.z = zs.z;
+    zoneVisual.ringNow.scale.set(zs.r, zs.r, 1);
+    zoneVisual.ringNext.visible = !zs.finished && zs.nextR > 1;
+    if (zoneVisual.ringNext.visible) {
+      zoneVisual.ringNext.position.x = zs.nextX;
+      zoneVisual.ringNext.position.z = zs.nextZ;
+      zoneVisual.ringNext.scale.set(zs.nextR, zs.nextR, 1);
+      zoneVisual.ringNext.material.opacity = zs.shrinking ? 0.12 : 0.3;
+    }
+  }
+
+  if (hud && hud.setZoneDistance && zs.distance > 0.5) {
+    hud.setZoneDistance(Math.round(zs.distance));
+  }
+
+  // objective line: team score + ring countdown, replaces "clear hostiles"
+  if (hud && hud.setObjective) {
+    const mins = Math.floor(zs.eta / 60);
+    const secs = String(Math.floor(zs.eta % 60)).padStart(2, '0');
+    const phase = zs.finished ? '最终圈' : (zs.shrinking ? '收缩中' : `缩圈 ${mins}:${secs}`);
+    hud.setObjective(`蓝 ${G.teamScores[0]} : ${G.teamScores[1]} 红 · ${phase}`);
+  }
+}
+
+/** Host: respawn dead fill bots; gas also kills bots outside the ring. */
+function updateVersusBots(dt) {
+  if (!G.versusMode || net.role !== 'host') return;
+  const zs = zoneSys ? zoneSys.state : null;
+  const now = Date.now();
+  for (const b of versusBots) {
+    const e = b.e;
+    if (!e) continue;
+    if (e.alive && zs && !zs.finished) {
+      const d = Math.hypot(e.root.position.x - zs.x, e.root.position.z - zs.z);
+      if (d > zs.r) {
+        // attackerTeam undefined → the friendly-fire branch is skipped and the
+        // bot dies through the normal path; halved so gas is pressure, not a
+        // bot exterminator (bots do not path into the ring — known limitation).
+        const killed = e.takeDamage(zs.dps * 0.5 * dt, null, null, 'torso', undefined);
+        if (killed) onVersusBotDown(b, undefined);
+      }
+    }
+    if (!e.alive && b.respawnAt && now >= b.respawnAt) {
+      const sp = versusTeamSpawn(b.team);
+      e.spawn(sp.x + (Math.random() - 0.5) * 8, sp.z + (Math.random() - 0.5) * 8,
+        Math.atan2(-(controller.pos.x - sp.x), -(controller.pos.z - sp.z)), 0);
+      b.respawnAt = 0;
+    }
+  }
+}
+
+/** AI bots are killed through takeDamage from other bots; route that through
+    the versus bookkeeping and schedule the respawn (host only). */
+function onVersusBotDown(bot, killerTeam) {
+  if (net.role !== 'host') return;
+  bot.respawnAt = Date.now() + VERSUS_RESPAWN_MS;
+  onVersusDeath(bot.team, killerTeam, bot.team === 0 ? '蓝军AI' : '红军AI');
+}
+
+/* ---- player vs player ---------------------------------------------------- */
+
+/** Shooter side: the local player hit a remote avatar. Same team → warning
+    only; hostile → broadcast pdmg and apply locally for instant feedback. */
+function versusPlayerHit(targetId, amount, headshot) {
+  if (!G.versusMode) return false;
+  const r = net.remote.get(String(targetId));
+  if (!r || !r.alive) return false;
+  if (net.team != null && r.team != null && r.team === net.team) {
+    if (hud && hud.toast) hud.toast('友军 · 停止射击', 1200);
+    return true; // consumed, no damage
+  }
+  if (lanSession) {
+    lanSession.broadcastEvent('pdmg', {
+      target: String(targetId), amount, headshot, team: net.team,
+    });
+  }
+  versusApplyPlayerDamage(String(targetId), amount, net.team, headshot);
+  return true;
+}
+
+/** Receiver side: apply one player-inflicted hit to the local mirror. */
+function versusApplyPlayerDamage(targetId, amount, killerTeam, headshot) {
+  const r = net.remote.get(String(targetId));
+  if (!r || !r.alive) return;
+  r.hp = Math.max(0, r.hp - amount);
+  if (hud && hud.hit) hud.hit(!!headshot, r.hp <= 0);
+  if (r.hp <= 0) {
+    r.alive = false;
+    if (r.avatar) r.avatar.alive = false;
+    if (net.role === 'host') {
+      r.respawnAt = Date.now() + VERSUS_RESPAWN_MS;
+      onVersusDeath(r.team, Number.isFinite(killerTeam) ? killerTeam : undefined,
+        String(r.name || '玩家'));
+    }
+    if (hud && hud.addKillFeed) {
+      const who = Number.isFinite(killerTeam) ? (killerTeam === 0 ? '蓝军' : '红军') : '?';
+      hud.addKillFeed(`${who} 击倒 ${r.name || '玩家'}`);
+    }
+  }
+}
+
+/** Host: respawn downed humans at their team spawn (snapshot carries it). */
+function updateVersusRespawns() {
+  if (!G.versusMode || net.role !== 'host') return;
+  const now = Date.now();
+  for (const r of net.remote.values()) {
+    if (r.alive || !r.respawnAt || now < r.respawnAt) continue;
+    const sp = versusTeamSpawn(r.team ?? 0);
+    r.x = sp.x; r.z = sp.z; r.y = 0;
+    r.hp = 100; r.alive = true;
+    r.respawnAt = 0;
+    if (r.avatar) r.avatar.alive = true;
   }
 }
 
@@ -1543,9 +1860,9 @@ async function boot() {
     await nextFrame();
 
     fx = createFX(engine.scene, engine.mats);
-    weather = createWeatherSystem({ scene: engine.scene, engine });
-    weather.set('clear');
     audio = createAudio();
+    weather = createWeatherSystem({ scene: engine.scene, engine, audio });
+    weather.set('clear');
     hud = createHUD();
     voice = createVoice();
     voice.setEnabled(G.settings.voice !== false);
@@ -1661,7 +1978,7 @@ async function boot() {
     lanLobby = createLanLobby({
       onHost: (data) => joinLan(data),
       onJoin: (data) => joinLan(data),
-      onStart: () => startLanHostGame(),
+      onStart: (data) => startLanHostGame(data),
       onLeave: () => leaveLanLobby(),
     });
     try {
@@ -1708,6 +2025,16 @@ async function boot() {
       glowTexture: engine.mats.sprites.glow,
       targetId: null,
   damagePlayer: (amount, from) => {
+    // Versus: the current target may be a fill bot, not a human. Route by the
+    // id prefix before the human branches; co-op never produces bot: ids.
+    if (G.versusMode && enemyCtx.targetId && String(enemyCtx.targetId).startsWith('bot:')) {
+      const bot = botById(String(enemyCtx.targetId).slice(4));
+      if (bot && bot.e && bot.e.alive) {
+        const killed = bot.e.takeDamage(amount, from, null, 'torso', enemyCtx.attackerTeam);
+        if (killed) onVersusBotDown(bot, enemyCtx.attackerTeam);
+      }
+      return;
+    }
     if (net.role === 'host' && enemyCtx.targetId && String(enemyCtx.targetId) !== String(net.selfId)) {
       applyLanRemoteDamage(enemyCtx.targetId, amount, from);
     } else {
@@ -2389,6 +2716,7 @@ function spawnEnemy(pos) {
   e._netId = netEnemySeq++;
   e.root.visible = true;
   if (SHOT_MODE) e.state = 'engage';
+  return e;
 }
 
 function updateWaves(dt) {
@@ -2587,6 +2915,18 @@ function fireShot() {
   const pellets = w.pellets || 1;
   const targets = level.bulletTargets.slice();
   for (const e of enemies) if (e.alive) targets.push(...e.hitboxes);
+  // Versus: remote avatars are shootable. Collect their meshes once per shot.
+  if (G.versusMode) {
+    for (const r of net.remote.values()) {
+      if (!r.alive || !r.avatar || !r.avatar.group) continue;
+      r.avatar.group.traverse((o) => {
+        if (o.isMesh && o.visible) {
+          o.userData.pdTarget = r.id;
+          targets.push(o);
+        }
+      });
+    }
+  }
   const baseDir = _dir;
   engine.camera.getWorldDirection(baseDir);
   _right.set(1, 0, 0).applyQuaternion(engine.camera.quaternion);
@@ -2631,12 +2971,19 @@ function fireShot() {
         if (effects < 3) { fx.impact(hit.point, _normal, 'wood'); audio.impact('wood'); effects++; }
       } else {
         const enemy = hit.object.userData.enemy;
-        if (enemy && enemy.alive) {
+        const pdId = hit.object.userData.pdTarget;
+        if (pdId != null && versusPlayerHit(pdId, w.dmg * G.upgrades.damage * (hit.object.userData.dmg || 1), hit.object.userData.part === 'head')) {
+          const headshot2 = hit.object.userData.part === 'head';
+          if (G.stats) G.stats.hits++;
+          if (effects < 3) { fx.blood(hit.point, _normal, _dir); audio.impact('flesh'); effects++; }
+          if (!hitMarked) { hitMarked = true; audio.hitmarker(headshot2); hud.hit(headshot2, false); }
+        } else if (enemy && enemy.alive) {
           const part = hit.object.userData.part;
           const mult = hit.object.userData.dmg || 1;
           const headshot = part === 'head';
           const falloff = w.falloff ? w.falloff(hit.distance) : 1;
-          const killed = enemy.takeDamage(w.dmg * falloff * G.upgrades.damage * mult, hit.point, _normal, part);
+          const myTeam = net.team != null ? net.team : (enemy.team != null ? (enemy.team === 0 ? 1 : 0) : undefined);
+          const killed = enemy.takeDamage(w.dmg * falloff * G.upgrades.damage * mult, hit.point, _normal, part, myTeam);
           if (G.stats) G.stats.hits++;
           if (effects < 3) { fx.blood(hit.point, _normal, _dir); audio.impact('flesh'); effects++; }
           if (!hitMarked) { hitMarked = true; audio.hitmarker(headshot); hud.hit(headshot, killed); }
@@ -2723,7 +3070,8 @@ function spawnBoss(op) {
     hud.toast(`${op.bossName || '指挥官'} · 重甲`, 2600);
     hud.setObjective(`击杀 ${op.bossName || '敌方指挥官'}`);
   }
-  if (hud && hud.radio) hud.radio('VEGA', op.radio.find((r) => r.at === op.bossWave)?.text || '指挥官下车了。', 5600);
+  const bossLine = op.radio.find((r) => r.at === op.bossWave);
+    if (hud && hud.radio) hud.radio('VEGA', bossLine?.text || '指挥官下车了。', 5600, bossLine?.voice || 'cmd_disembark');
 }
 
 function showMissionOverlay(op) {
@@ -2818,6 +3166,16 @@ function returnToMenu() {
 }
 
 function onEnemyKilled(enemy, headshot, cause = 'bullet') {
+  // Versus: a downed fill bot is a team point and a respawn timer, not PvE
+  // score — the wave/upgrade economy does not run in versus at all.
+  if (G.versusMode && enemy && enemy.team != null) {
+    const bot = versusBots.find((b) => b.e === enemy);
+    if (bot) onVersusBotDown(bot, net.team);
+    else onVersusDeath(enemy.team, net.team, enemy.team === 0 ? '蓝军' : '红军');
+    hud.addKillFeed(headshot ? '爆头击杀' : '击杀', headshot, currentWeapon().name);
+    if (perception && enemy.root) perception.casualty(enemy.root.position.x, enemy.root.position.z, 22);
+    return;
+  }
   G.kills++;
   G.waveRemaining = Math.max(0, G.waveRemaining - 1);
   G.score += Math.round((headshot ? 150 : 100) * G.scoreMult);
@@ -2840,7 +3198,7 @@ function onEnemyKilled(enemy, headshot, cause = 'bullet') {
     G.score += Math.round(1500 * G.scoreMult);
     hud.setScore(G.score, G.kills);
     hud.toast('指挥官击毙 · +1500', 2400);
-    if (hud.radio) hud.radio('VEGA', '指挥官倒了。车队失去指挥，正在撤离。', 5200);
+    if (hud.radio) hud.radio('VEGA', '指挥官倒了。车队失去指挥，正在撤离。', 5200, 'cmd_down');
     G.boss = null;
   }
   // killstreak kills must not feed the next streak (CoD rule) or artillery chains forever
@@ -3803,7 +4161,7 @@ function onLanEvent(msg) {
   }
   if (msg.t !== 'event') return;
   if (msg.kind === 'start' && net.role === 'client' && !net.started) {
-    startLanClientGame(msg.site);
+    startLanClientGame(msg.site, msg);
     return;
   }
   if (msg.kind === 'host_change') {
@@ -3812,6 +4170,12 @@ function onLanEvent(msg) {
     if (String(msg.host) === String(net.selfId) && net.started && net.role === 'client') {
       promoteToLanHost(msg.resume || null);
     }
+    return;
+  }
+  // Versus: player-shot-player. Applies on EVERY peer's mirror for instant
+  // feedback; the host's snapshot hp/alive values stay authoritative.
+  if (msg.kind === 'pdmg' && G.versusMode) {
+    versusApplyPlayerDamage(msg.target, msg.amount || 0, msg.team, !!msg.headshot);
     return;
   }
   if (msg.target && String(msg.target) !== String(net.selfId)) return;
@@ -3858,11 +4222,20 @@ function syncLanAvatars(players) {
       r = {
         id, name: p.name || 'OPERATOR', hp: 100, alive: true,
         x: spawn.x, z: spawn.z, y: spawn.y, yaw: 0, pitch: 0, speed: 0,
+        team: p.team,
+        respawnAt: 0,
         avatar: createNetAvatar({ scene: engine.scene, mats: engine.mats, name: p.name || 'OPERATOR', variant: slot % 3 }),
       };
+      // Versus: mark every avatar mesh so raycasts can hit players.
+      if (r.avatar && r.avatar.group) {
+        r.avatar.group.traverse((o) => { if (o.isMesh) o.userData.pdTarget = id; });
+      }
       net.remote.set(id, r);
-    } else if (p.name && r.name !== p.name) {
-      r.name = p.name;
+    } else {
+      if (p.name && r.name !== p.name) r.name = p.name;
+      if (p.team !== undefined && r.team !== p.team) {
+        r.team = p.team;
+      }
     }
   }
   for (const [id, r] of net.remote) {
@@ -3963,6 +4336,20 @@ function applyLanSnapshot(snap) {
     hud.setScore(G.score, G.kills);
   }
   onLanSnapshotApplyPlayers(snap.players || []);
+  if (snap.versus && !G.versusMode) {
+    // missed the start event: adopt versus defensively from the snapshot
+    G.versusMode = true;
+    net.team = net.team ?? 0;
+    netZoneMirror = createZone({ rect: (G.versusMode && level.bounds) ? { ...level.bounds } : (G.playRect || (G.site && G.site.rect) || { x0: -30, x1: 30, z0: -30, z1: 30 }) });
+    if (hud && hud.setMode) hud.setMode('VERSUS', '蓝军 vs 红军');
+  }
+  if (G.versusMode) {
+    if (Array.isArray(snap.vscores) && snap.vscores.length === 2) {
+      G.teamScores[0] = Number(snap.vscores[0]) || 0;
+      G.teamScores[1] = Number(snap.vscores[1]) || 0;
+    }
+    if (snap.zone && netZoneMirror) netZoneMirror.applyRemote(snap.zone);
+  }
   applyLanMilestones(snap.milestones || null);
   const seen = new Set();
   const list = Array.isArray(snap.enemies) ? snap.enemies : [];
@@ -3980,17 +4367,23 @@ function applyLanSnapshot(snap) {
   if (hud && hud.setWaveProgress) hud.setWaveProgress(G.waveTotal ? 1 - G.waveRemaining / G.waveTotal : 1);
 }
 
-function nearestLanTarget(pos) {
+function nearestLanTarget(pos, selfTeam = undefined) {
   let best = {
     id: net.selfId || 'local',
     x: controller.pos.x, y: controller.pos.y, z: controller.pos.z,
     hp: G.hp, alive: G.hp > 0, speed: controller.state.speed,
+    team: selfTeam,
   };
   let bestD = Math.hypot(pos.x - best.x, pos.z - best.z);
   for (const r of net.remote.values()) {
     if (!r.alive || r.hp <= 0) continue;
+    // Versus filter: skip teammates. The double null-check matters — in co-op
+    // or with old snapshots team is undefined on BOTH sides, and a naive
+    // `r.team === selfTeam` compares undefined === undefined, treats the whole
+    // squad as hostile and makes everyone shoot their own teammates.
+    if (selfTeam != null && r.team != null && r.team === selfTeam) continue;
     const d = Math.hypot(pos.x - r.x, pos.z - r.z);
-    if (d < bestD) { bestD = d; best = { id: r.id, x: r.x, y: r.y, z: r.z, hp: r.hp, alive: true, speed: r.speed || 0 }; }
+    if (d < bestD) { bestD = d; best = { id: r.id, x: r.x, y: r.y, z: r.z, hp: r.hp, alive: true, speed: r.speed || 0, team: r.team }; }
   }
   return best;
 }
@@ -4071,14 +4464,14 @@ function applyLanFire(msg) {
 function sendLanSnapshot() {
   if (!lanSession || net.role !== 'host') return;
   const players = [{
-    id: net.selfId, name: net.name,
+    id: net.selfId, name: net.name, team: net.team,
     x: +controller.pos.x.toFixed(2), y: +controller.pos.y.toFixed(2), z: +controller.pos.z.toFixed(2),
     yaw: +controller.yaw.toFixed(3), pitch: +controller.pitch.toFixed(3),
     hp: Math.round(G.hp), alive: G.hp > 0, speed: +controller.state.speed.toFixed(2),
   }];
   for (const r of net.remote.values()) {
     players.push({
-      id: r.id, name: r.name,
+      id: r.id, name: r.name, team: r.team,
       x: +r.x.toFixed(2), y: +(r.y || 0).toFixed(2), z: +r.z.toFixed(2),
       yaw: +r.yaw.toFixed(3), pitch: +r.pitch.toFixed(3),
       hp: Math.round(r.hp), alive: r.alive, speed: r.speed || 0,
@@ -4097,11 +4490,17 @@ function sendLanSnapshot() {
   lanSession.broadcastSnapshot({
     tick: ++net.tick, players, enemies: es,
     site: G.site && G.site.id,
+    versus: G.versusMode, teams: net.teamAssignments || null,
+    teamScores: G.teamScores,
+    zone: zoneSys ? zoneSys.serialize() : null,
     wave: G.wave, kills: G.kills, score: G.score,
     objective: G.objective ? { type: G.objective.type, done: !!G.objective.done } : null,
     // host-authoritative milestone chain; makeSnapshot() is a pass-through so
     // no protocol change is needed for this field
     milestones: milestones ? milestones.serialize() : null,
+    versus: G.versusMode,
+    vscores: G.versusMode ? G.teamScores.slice() : null,
+    zone: (G.versusMode && zoneSys) ? zoneSys.serialize() : null,
   });
 }
 
@@ -4145,7 +4544,7 @@ function promoteToLanHost(resume) {
   }
 }
 
-function startLanHostGame() {
+function startLanHostGame(opts = {}) {
   if (!lanSession || !lanSession.isHost) return;
   requestGameFullscreen();
   if (net.started) return;
@@ -4158,20 +4557,53 @@ function startLanHostGame() {
   G.operation = null;
   G.tutorial.done = true;
   G.tutorial.active = false;
+
+  // ---- versus setup: teams alternate by lobby join order; host is team 0 ----
+  const versus = opts.versus === true;
+  G.versusMode = versus;
+  G.teamScores = [0, 0];
+  net.team = undefined;
+  const lobbyPlayers = (opts.players && opts.players.length)
+    ? opts.players
+    : (lanSession.players || []);
+  const teams = {};
+  lobbyPlayers.forEach((p, i) => { teams[String(p.id)] = i % 2; });
+  if (net.selfId != null && teams[String(net.selfId)] === undefined) teams[String(net.selfId)] = 0;
+  if (versus) net.team = teams[String(net.selfId)] ?? 0;
+  net.teamAssignments = teams;
+
   startGame(false, true);
   G.state = 'playing';
-  if (lanSession) lanSession.broadcastEvent('start', { wave: 1, site: G.site && G.site.id });
+  if (lanSession) {
+    lanSession.broadcastEvent('start', {
+      wave: 1, site: G.site && G.site.id, versus, teams,
+    });
+  }
   if (lanLobby) lanLobby.setPlayers(lanSession.players || []);
   syncLanAvatars(lanSession.players || []);
-  // Co-op previously started with G.operation = null, so the only thing the HUD
-  // could report was "clear hostiles" — players had no idea what they were
-  // meant to be doing. The host now owns a milestone chain and relays it.
-  startMilestones();
-  if (hud && hud.setMode) hud.setMode('OBJECTIVE', '推进任务链');
-  if (hud && hud.toast) hud.toast('LAN CO-OP · 等待队友');
+  for (const [id, team] of Object.entries(teams)) {
+    const r = net.remote.get(String(id));
+    if (r) r.team = team;
+  }
+
+  if (versus) {
+    // Versus runs team deathmatch + the shrinking ring; the PvE wave director
+    // and the milestone chain assume one hostile faction, so both stay off.
+    startZone();
+    startVersusBots(teams, lobbyPlayers);
+    if (hud && hud.setMode) hud.setMode('VERSUS', '蓝军 vs 红军');
+    if (hud && hud.toast) hud.toast(`对抗模式 · 你是${net.team === 0 ? '蓝军' : '红军'}`, 3200);
+  } else {
+    // Co-op previously started with G.operation = null, so the only thing the HUD
+    // could report was "clear hostiles" — players had no idea what they were
+    // meant to be doing. The host now owns a milestone chain and relays it.
+    startMilestones();
+    if (hud && hud.setMode) hud.setMode('OBJECTIVE', '推进任务链');
+    if (hud && hud.toast) hud.toast('LAN CO-OP · 等待队友');
+  }
 }
 
-function startLanClientGame(siteId = 'street') {
+function startLanClientGame(siteId = 'street', startMsg = null) {
   if (net.started) return;
   // LAN START is a host event, not a local gesture; browsers may deny this.
   requestGameFullscreen();
@@ -4185,6 +4617,18 @@ function startLanClientGame(siteId = 'street') {
   G.operation = null;
   G.tutorial.done = true;
   G.tutorial.active = false;
+
+  // versus flag + team assignment arrive with the host's start event
+  const versus = startMsg && startMsg.versus === true;
+  G.versusMode = versus;
+  G.teamScores = [0, 0];
+  net.team = undefined;
+  if (versus) {
+    const teams = (startMsg && startMsg.teams) || {};
+    net.team = teams[String(net.selfId)] ?? 0;
+    net.teamAssignments = teams;
+  }
+
   resetGame();
   G.state = 'playing';
   menuEl.classList.add('hidden');
@@ -4197,8 +4641,15 @@ function startLanClientGame(siteId = 'street') {
   G.wave = 1;
   G.reserve = Math.max(G.reserve, 240);
   hideObjectiveUI();
+  if (versus) {
+    // Client mirrors the host's ring read-only; visuals + damage below.
+    netZoneMirror = createZone({ rect: G.site.rect });
+    ensureZoneVisual();
+    if (hud && hud.setMode) hud.setMode('VERSUS', '蓝军 vs 红军');
+    if (hud && hud.toast) hud.toast(`对抗模式 · 你是${net.team === 0 ? '蓝军' : '红军'}`, 3200);
+  }
   if (hud) {
-    if (hud.setMode) hud.setMode('SURVIVAL', 'HOLD THE LINE');
+    if (!versus && hud.setMode) hud.setMode('SURVIVAL', 'HOLD THE LINE');
     hud.setWave(1); hud.setScore(0, 0); hud.setHint('LAN · 同步中…');
   }
   if (input) input.lock();
@@ -4325,9 +4776,18 @@ function updateGame(dt) {
       hud.setHealth(G.hp, pipsFor(G.armor));
       if (G.hp > 40) audio.setLowHealth(false);
     }
+    if (G.versusMode) {
+      updateZone(dt);
+      if (net.role === 'host') {
+        updateVersusBots(dt);
+        updateVersusRespawns();
+      }
+    }
     if (net.role !== 'client') {
-      updateObjective(dt);
-      updateWaves(dt);
+      if (!G.versusMode) {
+        updateObjective(dt);
+        updateWaves(dt);
+      }
       updateTutorial(dt);
       updateMilestones(dt);
     }
@@ -4392,7 +4852,9 @@ function updateGame(dt) {
   if (net.role !== 'client') {
   if (perception) perception.update(dt);
   if (aiDirector && nav) aiDirector.tick(dt, enemies, controller.pos, G.diff);
-  if (equipment && !SHOT_MODE && !(net.role === 'host' && net.remote.size > 0)) {
+  // Versus: the grenade subsystem assumes one hostile faction and one player
+  // target; both assumptions break, so it stays a co-op-only feature.
+  if (equipment && !G.versusMode && !SHOT_MODE && !(net.role === 'host' && net.remote.size > 0)) {
     equipment.update(dt, {
       playerPos: controller.pos,
       playerSpeed: controller.state.speed,
@@ -4409,13 +4871,22 @@ function updateGame(dt) {
   for (const e of enemies) {
     if (!e.root.visible) continue;
     if (net.role === 'client' && e.netRemote) continue;
-    if (net.role === 'host' && net.remote.size) {
-      const tgt = nearestLanTarget(e.root.position);
+    if (net.role === 'host' && (net.remote.size || G.versusMode)) {
+      // Versus: a bot targets the nearest hostile ACTOR (humans + enemy-team
+      // bots). Co-op keeps the human-only selector; behaviour unchanged.
+      const tgt = G.versusMode
+        ? nearestHostileActor(e.root.position, e.team)
+        : nearestLanTarget(e.root.position);
       enemyCtx.targetId = tgt.id;
       enemyCtx.playerPos.set(tgt.x, tgt.y, tgt.z);
       enemyCtx.playerGroundY = tgt.y;
       enemyCtx.playerAlive = tgt.alive;
       enemyCtx.playerSpeed = tgt.speed;
+      // who is pulling the trigger this frame — takeDamage uses it to filter
+      // friendly fire between fill bots of the same team
+      enemyCtx.attackerTeam = e.team;
+    } else {
+      enemyCtx.attackerTeam = undefined;
     }
     if (G.freezeEnemies && SHOT_MODE) {
       // hold pose but keep sprite/lights alive
@@ -4563,7 +5034,7 @@ window.__game = {
   get ai() { return { perception, director: aiDirector, barks }; },
   get equipment() { return equipment; },
   get barks() { return barks; },
-  get net() { return net; },
+  get net() { return net; }, get zoneSys() { return zoneSys; }, get versusBots() { return versusBots; },
   get lan() { return lanSession; },
   get lanLobby() { return lanLobby; },
   startLanHostGame, startLanClientGame, leaveLanSession, applyLanFire,

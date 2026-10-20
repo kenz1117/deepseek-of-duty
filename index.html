@@ -414,24 +414,24 @@
           <span class="lm-cta">OPEN LOBBY <i>›</i></span>
         </button>
 
-        <button class="lan-mode-card is-locked" type="button" disabled aria-disabled="true">
-          <span class="lm-badge next">DESIGNED / NEXT</span>
+        <button id="lan-versus-open" class="lan-mode-card is-open" type="button">
+          <span class="lm-badge open">PLAYABLE / BETA</span>
           <span class="lm-code">02 / VERSUS</span>
-          <b>VERSUS 4v4</b>
-          <em>对抗模式</em>
-          <p>2–8 名玩家分为两阵营，AI 补足每队 4 人；此模式尚未接入。</p>
+          <b>VERSUS 4v4 + ZONE</b>
+          <em>对抗模式 · 毒圈</em>
+          <p>2–8 名玩家分为蓝/红两阵营，AI 补足每队 4 人；带阶段收缩毒圈。进房后勾选“对抗模式”再开房。</p>
           <dl class="lm-stats">
             <div><dt>PLAYERS</dt><dd>2–8</dd></div>
             <div><dt>TEAMS</dt><dd>2</dd></div>
             <div><dt>AI FILL</dt><dd>4 / TEAM</dd></div>
-            <div><dt>STATUS</dt><dd>DESIGNED</dd></div>
+            <div><dt>STATUS</dt><dd>BETA</dd></div>
           </dl>
-          <span class="lm-cta">NEXT UPDATE <i>—</i></span>
+          <span class="lm-cta">OPEN LOBBY <i>›</i></span>
         </button>
       </div>
 
       <footer class="lm-foot">
-        <span class="lm-foot-note">CO-OP 已可玩 · VERSUS 为设计稿，不可开始</span>
+        <span class="lm-foot-note">CO-OP 与 VERSUS 对抗均已可玩 · VERSUS 为实验特性，平衡未打磨</span>
         <button id="lan-modal-done" class="pl-done" type="button"><span>CLOSE</span><em>关闭</em></button>
       </footer>
     </div>
@@ -472,6 +472,10 @@
           <label class="ll-check" for="lan-p2p">
             <input id="lan-p2p" type="checkbox" checked />
             <span><b>直连模式 <em>P2P DIRECT</em></b><i>游戏数据点对点直传（WebRTC），绕开服务器中继，显著降低延迟；建连信令仍走中继，直连不通时自动回落中继模式</i></span>
+          </label>
+          <label class="ll-check" for="lan-versus">
+            <input id="lan-versus" type="checkbox" />
+            <span><b>对抗模式 <em>VERSUS</em></b><i>两阵营死斗（蓝军 vs 红军），人数不足每边由 AI 士兵补足，带阶段收缩毒圈；由房主勾选，开局后生效。实验特性：AI 不会互相配合，平衡数值未打磨</i></span>
           </label>
           <div class="ll-actions">
             <button id="lan-host" class="ll-btn" type="button"><span>HOST</span><em>创建房间</em></button>
