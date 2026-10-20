@@ -419,7 +419,10 @@ export function createLanLobby({ onHost, onJoin, onStart, onLeave } = {}) {
     setHost(true);
     setStatus('connecting', 'HOSTING · 正在创建房间…');
     try {
-      const result = typeof onHost === 'function' ? onHost(data) : null;
+      // intent travels with the join so the caller can explain "this room
+      // already had a host, you joined as a squad member" instead of
+      // silently demoting a HOST press into a JOIN.
+      const result = typeof onHost === 'function' ? onHost({ ...data, intent: 'host' }) : null;
       if (result && typeof result.catch === 'function') {
         result.catch((err) => setStatus('error', `ERROR · ${err && err.message ? err.message : '创建失败'}`));
       }

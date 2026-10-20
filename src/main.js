@@ -4524,6 +4524,15 @@ async function joinLan(data) {
   net.selfId = res.id;
   net.hostId = res.host;
   onLanLobby(lanSession.players);
+  // A HOST press that lands in a room that already has one is the classic
+  // "ghost session" trap (an old connection still holds the seat). Say so
+  // instead of silently demoting the press into a join.
+  if (data.intent === 'host' && net.hostId && net.hostId !== net.selfId) {
+    const holder = (lanSession.players || []).find((p) => p.host);
+    if (hud && hud.toast) {
+      hud.toast(`房间已有房主 ${holder ? holder.name : ''} · 你以队员身份加入（同呼号重连可拿回房主）`, 4200);
+    }
+  }
 }
 
 function onLanLobby(players) {
@@ -4589,6 +4598,14 @@ function onLanEvent(msg) {
   }
   // Versus: player-shot-player. Applies on EVERY peer's mirror for instant
   // feedback; the host's snapshot hp/alive values stay authoritative.
+  // Server closed this connection because a newer one took over the
+  // same-callsign seat (reconnect path). Explain and do not auto-reconnect:
+  // the close code is fatal, the newer session owns the seat now.
+  if (msg.kind === 'replaced') {
+    if (hud && hud.toast) hud.toast('此呼号已在别处重新连接 · 本会话已让位', 3200);
+    leaveLanLobby();
+    return;
+  }
   if (msg.kind === 'pdmg' && G.versusMode) {
     versusApplyPlayerDamage(msg.target, msg.amount || 0, msg.team, !!msg.headshot);
     return;

@@ -242,16 +242,39 @@ function handleJoin(ws, message) {
     return;
   }
 
+  // Same-callsign takeover: a fresh connection with the callsign of an
+  // existing seat replaces it. This is the reconnect path — a page refresh or
+  // a dropped link used to leave a ghost holding the host seat while the real
+  // player could only rejoin as a squad member. The new connection inherits
+  // the seat, including host. Sanitized names, LAN trust model.
+  const wantedName = sanitizeName(message.name);
+  const ghostIndex = room.players.findIndex((p) => p.name === wantedName);
+  let inheritedHost = false;
+  if (ghostIndex >= 0) {
+    const ghost = room.players[ghostIndex];
+    try {
+      ghost.ws.send(encodeMessage({ t: 'event', kind: 'replaced' }));
+    } catch { /* socket already gone */ }
+    try { ghost.ws.close(LAN_CLOSE_CODES.BAD_MESSAGE, 'replaced'); } catch { /* ignore */ }
+    inheritedHost = room.hostId === ghost.id;
+    // Detach the ghost first so its close handler cannot run handleLeave on
+    // the room state we are about to rewrite.
+    ghost.ws.player = null;
+    ghost.ws.room = null;
+    ghost.ws.joined = false;
+    room.players.splice(ghostIndex, 1);
+  }
+
   const player = {
     id: newPlayerId(room),
-    name: sanitizeName(message.name),
+    name: wantedName,
     ready: false,
     ws,
     joinedAt: Date.now(),
   };
 
   room.players.push(player);
-  if (!room.hostId) room.hostId = player.id;
+  if (!room.hostId || inheritedHost) room.hostId = player.id;
 
   ws.joined = true;
   ws.player = player;
