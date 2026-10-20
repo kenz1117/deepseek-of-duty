@@ -691,6 +691,9 @@ function selectManualTab(name) {
 function openManual() {
   if (!manualEl) { openPrestart(); return; }
   renderManualArchive();
+  // 同步 tab 高亮与页面显隐：story 按钮 hard-code 了 active，但内容区没有，
+  // 不调用的话首次打开是空白（点其他 tab 再切回来才出现）
+  selectManualTab('story');
   manualEl.classList.remove('hidden');
   manualEl.setAttribute('aria-hidden', 'false');
   G.state = 'menu';
