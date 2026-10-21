@@ -223,6 +223,9 @@ export function makeInput(input) {
 
 export function makeFire(fire) {
   const source = isPlainObject(fire) ? fire : {};
+  // dmg = the shooter's own damage-upgrade multiplier (LAN trust: upgrades
+  // are per-player, the host cannot see them). Clamped to sane bounds.
+  const dmg = toFiniteNumber(source.dmg, 1);
   return {
     t: 'fire',
     seq: toInteger(source.seq, 0),
@@ -233,6 +236,7 @@ export function makeFire(fire) {
     dy: toFiniteNumber(source.dy, 0),
     dz: toFiniteNumber(source.dz, 0),
     weapon: typeof source.weapon === 'string' ? source.weapon.slice(0, 32) : 'unknown',
+    dmg: Math.min(3, Math.max(0.5, dmg)),
   };
 }
 
