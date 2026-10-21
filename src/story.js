@@ -34,16 +34,29 @@ export const OPERATIONS = [
     name: '市场',
     en: 'THE MARKET',
     mode: 'defend',
-    waves: 2,
+    waves: 4,
     atmosphere: 'dusk',
     hold: 45,
     zone: { x: 20.8, z: -10.7, r: 3.6 },
     zoneLabel: '后院市场',
     threat: 'HIGH',
-    brief: '市场里有我们需要的补给。守住摊位区 45 秒。',
+    brief: '市场里有我们需要的补给。潜入、夺取、守住、带装备撤离。',
+    /* Phase 3 beat chain: ghost the market (garrison patrol — killing is
+       optional), seize the yard, hold it through a two-axis counterattack,
+       then run the interceptors gauntlet back to the apartment gate. */
+    beats: [
+      { type: 'infil', name: '潜入', text: '潜入市场 · 别惊动守军', ai: 'garrison', enemies: 3,
+        zone: { x: 20.8, z: -10.7, r: 4.2 }, hold: 2.5 },
+      { type: 'assault', name: '夺取', text: '清空摊位区守军 · 占住后院', ai: 'assault', enemies: 5 },
+      { type: 'defend', name: '驻守', text: '守住摊位区 45 秒 · 他们会从两个入口反扑', ai: 'assault', enemies: 6,
+        zone: { x: 20.8, z: -10.7, r: 3.6 }, hold: 45 },
+      { type: 'extract', name: '撤离', text: '带上补给 · 到公寓正门撤离', ai: 'interceptor', enemies: 4,
+        zone: { x: -19.2, z: 3.0, r: 3.5 }, hold: 3 },
+    ],
     radio: [
-      { at: 'start', speaker: 'VEGA', voice: 'op2_1', text: '市场里有我们需要的补给。守住摊位区 45 秒，别让他们靠近。' },
-      { at: 2, speaker: 'VEGA', voice: 'op2_2', text: '他们开始绕后了。盯住两个入口。' },
+      { at: 'start', speaker: 'VEGA', voice: 'op2_1', text: '市场里有我们需要的补给。守军还没进入警戒——能不开枪就别开枪。' },
+      { at: 3, speaker: 'VEGA', voice: 'op2_2', text: '他们开始反扑了。盯住两个入口。' },
+      { at: 4, speaker: 'VEGA', text: '补给到手就撤。他们会在巷子里设拦截线。', voice: 'op2_2' },
     ],
     debrief: '补给到手。下一站是后院货仓——他们在那藏了一台通讯车。',
   },
@@ -91,15 +104,31 @@ export const OPERATIONS = [
     mode: 'survival',
     waves: 4,
     atmosphere: 'dusk',
-    bossWave: 3,
     bossIntro: 'hassan_intro',
     bossName: '副官 · 哈桑',
     zoneLabel: '南院车场',
     threat: 'CRITICAL',
-    brief: '副官的指挥车停在南院。抓住他，问出指挥官的位置。',
+    brief: '副官的指挥车停在南院。搜车、顶住警卫、抓住哈桑。',
+    /* Phase 3: search the command car (interact) → the alarm trips and the
+       yard guards rush in → Hassan enters WITH a shield escort (he resists
+       half damage while the escort lives) and charges at half health → mop
+       up. spot:'site' resolves to the active rotation site's zone centre. */
+    beats: [
+      { type: 'interact', name: '搜索', text: '找到指挥车 · 搜出情报', label: '按住 E 搜查指挥车', spot: 'site' },
+      { type: 'assault', name: '暴露', text: '警报触发 · 清掉集结的卫队', ai: 'assault', enemies: 6 },
+      { type: 'boss', name: '哈桑', text: '哈桑带卫队进场 · 击杀副官', ai: 'assault', enemies: 0,
+        boss: { hp: 560, scale: 1.16, name: '副官 · 哈桑' } },
+      { type: 'survival', name: '收尾', text: '清掉车场残部', ai: 'hunter', enemies: 4 },
+    ],
+    bossPhases: [
+      { atHpFrac: 1, action: 'warden', escorts: 2, archetype: 'shield', resist: 0.5,
+        radioText: '卫队贴着他——先拆盾，不然他扛伤。' },
+      { atHpFrac: 0.5, action: 'charge', mult: 1.45,
+        radioText: '哈桑急了——他冲过来了！' },
+    ],
     radio: [
-      { at: 'start', speaker: 'VEGA', voice: 'op5_1', text: '车场里停着副官的指挥车。哈桑就在车上——别让他跑了。' },
-      { at: 2, speaker: 'VEGA', voice: 'op5_2', text: '他们把重装部队调过来了。找掩体，别硬顶。' },
+      { at: 'start', speaker: 'VEGA', voice: 'op5_1', text: '车场里停着副官的指挥车。搜他的车——别让他跑了。' },
+      { at: 2, speaker: 'VEGA', voice: 'op5_2', text: '警报响了。卫队全压上来了——找掩体，别硬顶。' },
       { at: 3, speaker: 'VEGA', voice: 'op5_3', text: '哈桑下车了——重甲，正面打不动。绕后，或者打头。' },
       { at: 4, speaker: 'VEGA', voice: 'op5_4', text: '副官死了。搜他的车——我要知道指挥官在哪。' },
     ],
@@ -171,23 +200,34 @@ export const OPERATIONS = [
     name: '北楼',
     en: 'NORTH HQ',
     mode: 'survival',
-    waves: 2,
+    waves: 3,
     atmosphere: 'bluehour',
     start: { x: 10.4, z: -77.4, yaw: Math.PI },
     spawnRect: { x0: 6.1, x1: 14.9, z0: -75, z1: -65 },
-    bossWave: 2,
     bossIntro: 'karim_intro',
-    bossSpawn: { x: 12.1, z: -68.6 },
     bossName: '指挥官 · 卡里姆',
-    bossHp: 760,
-    bossScale: 1.22,
     zoneLabel: '北楼',
     threat: 'CRITICAL',
-    brief: '卡里姆在北楼里。破门进去，结束这一切。',
+    brief: '卡里姆在北楼里。破门、逐房清理、在办公室结束这一切。',
+    /* Phase 3: breach & clear the ground floor room by room (garrison first,
+       then hunters), then the Karim standoff: he relocates twice through the
+       office floor (70% / 40% HP) and each move calls in reinforcements. */
+    beats: [
+      { type: 'assault', name: '破门', text: '破开大门 · 清一层守卫', ai: 'garrison', enemies: 4 },
+      { type: 'assault', name: '清房', text: '逐房清理 · 向办公室推进', ai: 'hunter', enemies: 4 },
+      { type: 'boss', name: '卡里姆', text: '办公室对峙 · 击杀卡里姆', ai: 'assault', enemies: 0,
+        boss: { hp: 760, scale: 1.22, name: '指挥官 · 卡里姆', spawn: { x: 12.1, z: -68.6 } } },
+    ],
+    bossPhases: [
+      { atHpFrac: 0.7, action: 'relocate', to: { x: 8.2, z: -69.0 }, reinforcements: 2,
+        radioText: '卡里姆退进夹层了——追！' },
+      { atHpFrac: 0.4, action: 'relocate', to: { x: 12.5, z: -72.5 }, reinforcements: 2,
+        radioText: '他在作战室——最后一口气。' },
+    ],
     radio: [
       { at: 'start', speaker: 'MOTH', voice: 'moth_1', text: '无人机在你头顶。北楼里有两个热源，一个在办公室。' },
       { at: 'start', speaker: 'VEGA', voice: 'op9_1', text: '他在北楼里，身边只剩卫队。结束这件事。' },
-      { at: 2, speaker: 'VEGA', voice: 'op9_2', text: '卡里姆出来了——这次是真的。' },
+      { at: 3, speaker: 'VEGA', voice: 'op9_2', text: '卡里姆出来了——这次是真的。' },
     ],
     debrief: '卡里姆倒在办公室里。北楼的电台还在响，但已经没人回答了。',
   },
@@ -286,16 +326,30 @@ export const OPERATIONS = [
     atmosphere: 'bluehour',
     start: { x: 80, z: -80, yaw: 3.6 },
     spawnRect: { x0: 48, x1: 122, z0: -98, z1: 34 },
-    bossWave: 3,
     bossIntro: 'finale2_intro',
-    bossSpawn: { x: 98, z: -44 },
     bossName: '指挥官 · 萨利姆',
-    bossHp: 900,
-    bossScale: 1.2,
     outro: 'ending2',
     zoneLabel: '东港 · 起重机',
     threat: 'CRITICAL',
-    brief: '萨利姆在吊臂下。结束这条线，我们才能离开这座城。',
+    brief: '港区推进、顶住水边侧袭、击杀萨利姆，在吊臂下登船。',
+    /* Phase 3: push the container axes → waterside flank must be held →
+       Salim: at 60% he walks artillery onto you from the crane (the player
+       killstreak system, fired by the enemy), at 30% his shield guard
+       commits → board the boat under the crane. */
+    beats: [
+      { type: 'survival', name: '推进', text: '沿集装箱阵推进 · 清出射界', ai: 'hunter', enemies: 6 },
+      { type: 'assault', name: '侧袭', text: '水边有侧袭 · 守住吊臂区', ai: 'assault', enemies: 5 },
+      { type: 'boss', name: '萨利姆', text: '击杀萨利姆 · 结束这条线', ai: 'assault', enemies: 0,
+        boss: { hp: 900, scale: 1.2, name: '指挥官 · 萨利姆', spawn: { x: 98, z: -44 } } },
+      { type: 'extract', name: '登船', text: '到吊臂下撤离点 · 登船', ai: 'interceptorPursuit', enemies: 4,
+        zone: { x: 98, z: -44, r: 6 }, hold: 3 },
+    ],
+    bossPhases: [
+      { atHpFrac: 0.6, action: 'artillery', shells: 4,
+        radioText: '吊臂在给他标射——离开弹着区！' },
+      { atHpFrac: 0.3, action: 'escort', archetype: 'shield', count: 2,
+        radioText: '亲卫队顶上来了！' },
+    ],
     radio: [
       { at: 'start', speaker: 'VEGA', text: '萨利姆就在吊臂下面。他把最后的货和人全压在这一场。', voice: 'op9_3' },
       { at: 2, speaker: 'MOTH', text: '港区外围有热源在集结。他们会从水边绕过来。', voice: 'op9_4' },
@@ -343,4 +397,35 @@ export function completeOperation(progress, id) {
   if (!progress.done.includes(id)) progress.done.push(id);
   saveCampaign(progress);
   return progress;
+}
+
+/* --------------------------------------------------------- beat checkpoints
+ * §4.4: a campaign op saves its progress PER BEAT, so dying at the boss does
+ * not replay the whole mission (14 ops × 10 min of full restarts is where
+ * single-player campaigns die). The checkpoint holds the beat you are ON —
+ * it is written when the beat starts and cleared when the op finishes. */
+const BEAT_KEY = 'dod.campaign.beat.v1';
+
+export function saveBeatCheckpoint(opId, beat) {
+  try {
+    localStorage.setItem(BEAT_KEY, JSON.stringify({ opId, beat }));
+  } catch (e) { /* private mode */ }
+}
+
+export function loadBeatCheckpoint() {
+  try {
+    const raw = localStorage.getItem(BEAT_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || !Number.isInteger(data.opId) || !Number.isInteger(data.beat)) return null;
+    return { opId: data.opId, beat: data.beat };
+  } catch (e) {
+    return null;
+  }
+}
+
+export function clearBeatCheckpoint() {
+  try {
+    localStorage.removeItem(BEAT_KEY);
+  } catch (e) { /* private mode */ }
 }
