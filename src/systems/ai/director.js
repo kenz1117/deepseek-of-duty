@@ -20,6 +20,7 @@
 
 import { behaviorFor } from './tuning.js';
 import { createCoverSystem } from './cover.js';
+import { pickFlankPoint, decideIntel, AI_PROFILES } from './profiles.js';
 
 const TICK = 0.3;
 
@@ -97,7 +98,7 @@ export class AIDirector {
         continue;
       }
       if (e.roleT > 0) e.roleT -= step;
-      else e.aiRole = null;
+      else { e.aiRole = null; e.flankPoint = null; e.flankDone = false; }
     }
 
     const n = ground.length;
@@ -160,6 +161,22 @@ export class AIDirector {
       e.aiRole = 'flank';
       e.aiSide = this.flankSide;
       e.roleT = 5 + Math.random() * 4;
+      // real flank (Phase 2): a side/rear waypoint computed from what THIS
+      // soldier knows (last seen point, a stimulus, or the neighbourhood
+      // anchor) and validated against nav. The enemy walks the route with
+      // A* instead of strafing sideways into the player's gun.
+      const threat = e.lastSeen
+        || (this.hooks.perception ? this.stimulusFor(e) : null)
+        || this.areaAnchor(playerPos);
+      const fp = pickFlankPoint({
+        from: e.root.position, threat, side: e.aiSide, rng: Math.random,
+      });
+      if (fp && this.nav && this.nav.isWalkableAt(fp.x, fp.z, 0)
+          && (!this.nav.findPath
+              || this.nav.findPath(e.root.position.x, e.root.position.z, 0, fp.x, fp.z, 0))) {
+        e.flankPoint = { x: fp.x, z: fp.z };
+        e.flankDone = false;
+      }
       counts.flank++;
       if (this.hooks.barks) this.hooks.barks.say('flank', e.root.position);
     }
@@ -179,44 +196,40 @@ export class AIDirector {
       if (!e.breachDoor || e.breachDoor.opened) { e.aiRole = null; e.breachDoor = null; }
     }
 
-    // Opening intel: a fresh soldier is not a statue. He gets a rough contact
-    // report immediately (a few metres of error) and starts working toward it,
-    // instead of standing in the spawn yard until he happens to see you.
+    // ---- contact reports (Phase 2: no free intel) --------------------------
+    // The old loops handed every soldier the player's live position with
+    // 3-10 m of error — once on spawn, then again every B.intel seconds.
+    // Holding an angle for more than a few seconds read as a wallhack.
+    // Now a soldier is only told what he could actually have perceived:
+    //   1. a concrete stimulus near him (shots, bullet impacts, a friend
+    //      dying) with a small reporting error — decideIntel() picks it up;
+    //   2. area profiles, on the normal intel clock, get which NEIGHBOURHOOD
+    //      the player is in (region centroid, 12-20 m of error), so waves
+    //      still converge on the fight without meter-precision tracking;
+    //   3. garrison/squad profiles get nothing — they hold their post /
+    //      patrol, or are driven by the versus faction brain.
     for (const e of ground) {
-      if (e.investigate || (e.awareness || 0) >= 0.2) continue;
-      const ang = Math.random() * Math.PI * 2;
-      const err = 3 + Math.random() * 7;
-      let x = playerPos.x + Math.cos(ang) * err;
-      let z = playerPos.z + Math.sin(ang) * err;
-      if (this.nav && !this.nav.isWalkableAt(x, z, 0)) {
-        const w = this.nav.closestWalkable(x, z);
-        if (w) { x = w.x; z = w.z; }
+      if (e.team != null) continue;                       // brain owns versus intel
+      if (e.canSee || (e.awareness || 0) >= 0.6) { e.intelT = 0; continue; }
+      if (e.investigate && e.investigateT < 6) continue;  // already on a fresh job
+      const prof = e.profile || AI_PROFILES.default;
+      const intelEvery = B.intel * (0.55 + Math.random() * 0.5);
+      const src = this.hooks.perception ? this.stimulusFor(e) : null;
+      const hint = decideIntel({
+        profile: prof, intelT: e.intelT || 0, intelEvery,
+        stimuli: src ? [src] : null, area: this.areaAnchor(playerPos), rng: Math.random,
+      });
+      if (hint.kind === 'stimulus' || hint.kind === 'area') {
+        e.investigate = { x: hint.x, z: hint.z };
+        e.investigateT = 0;
+        e.intelT = 0;
+        e.intelDue = intelEvery;
+        this.stats.intelHints++;
+      } else if (hint.kind === 'wait') {
+        e.intelT = (e.intelT || 0) + step;
+      } else {
+        e.intelT = 0;    // 'none': nothing to accrue towards
       }
-      e.investigate = { x, z };
-      e.investigateT = 0;
-    }
-
-    // Stale intel: a soldier that lost you gets an approximate position a few
-    // seconds later, not a live wallhack. This is what makes them search the
-    // area you were last seen in instead of standing still.
-    for (const e of ground) {
-      if (e.canSee || e.awareness > 0.6) { e.intelT = 0; continue; }
-      e.intelT = (e.intelT || 0) + step;
-      if (!e.intelDue) e.intelDue = B.intel * (0.55 + Math.random() * 0.5);
-      if (e.intelT < e.intelDue) continue;
-      e.intelT = 0;
-      e.intelDue = B.intel * (0.55 + Math.random() * 0.5);
-      const ang = Math.random() * Math.PI * 2;
-      const err = 3 + Math.random() * 7;
-      let x = playerPos.x + Math.cos(ang) * err;
-      let z = playerPos.z + Math.sin(ang) * err;
-      if (this.nav && !this.nav.isWalkableAt(x, z, 0)) {
-        const w = this.nav.closestWalkable(x, z);
-        if (w) { x = w.x; z = w.z; }
-      }
-      e.investigate = { x, z };
-      e.investigateT = 0;
-      this.stats.intelHints++;
     }
 
     this.updateBreach(step, ground, playerPos);
@@ -360,6 +373,49 @@ export class AIDirector {
         this.stats.breaches = (this.stats.breaches || 0) + 1;
       }
     }
+  }
+
+  /**
+   * Freshest thing this soldier could have perceived: a live noise inside
+   * its own radius, a bullet impact within 12 m, or a squad death within
+   * its broadcast radius. Positions only — never the player's live point.
+   */
+  stimulusFor(e) {
+    const P = this.hooks.perception;
+    if (!P) return null;
+    const p = e.root.position;
+    let best = null, bestLife = -1;
+    for (const n of P.noises) {
+      if (n.life <= 0) continue;
+      if (Math.hypot(n.x - p.x, n.z - p.z) > n.r) continue;
+      if (n.life > bestLife) { bestLife = n.life; best = n; }
+    }
+    if (!best) for (const imp of P.impacts) {
+      if (imp.life <= 0) continue;
+      if (Math.hypot(imp.x - p.x, imp.z - p.z) > 12) continue;
+      if (imp.life > bestLife) { bestLife = imp.life; best = imp; }
+    }
+    if (!best) for (const c of P.casualties) {
+      if (c.life <= 0) continue;
+      if (Math.hypot(c.x - p.x, c.z - p.z) > c.r) continue;
+      if (c.life > bestLife) { bestLife = c.life; best = c; }
+    }
+    return best ? { x: best.x, z: best.z } : null;
+  }
+
+  /**
+   * NEIGHBOURHOOD anchor for the player's position: the centroid of the
+   * named region he stands in (a 50-120 m cell), or the raw position for
+   * the street fallback (decideIntel then adds 12-20 m on top). This is the
+   * granularity a squad radio report would actually carry.
+   */
+  areaAnchor(playerPos) {
+    const regionAt = this.level && this.level.regionAt;
+    if (regionAt) {
+      const r = regionAt(playerPos.x, playerPos.z);
+      if (r && r.x0 !== undefined) return { x: (r.x0 + r.x1) / 2, z: (r.z0 + r.z1) / 2 };
+    }
+    return { x: playerPos.x, z: playerPos.z };
   }
 
   /** Claim a validated cover point for `e` (or return its current one). */

@@ -139,8 +139,17 @@ export class Perception {
     // ---------------- vision cone + range gate ----------------
     let inCone = false;
     if (ctx.playerAlive && dist < range) {
-      if (dist < 4.2 || e.awareness > 0.92 || e.isBoss) inCone = true;
-      else {
+      if (dist < 4.2 || e.awareness > 0.92 || e.isBoss) {
+        // close-quarters auto-detect — but a quiet player standing behind an
+        // unalerted soldier is not 360° vision: sneaking up for a melee
+        // takedown stays legal until the soldier is alerted or the player
+        // moves fast enough to be heard.
+        const yaw2 = e.root.rotation.y;
+        const fx2 = -Math.sin(yaw2), fz2 = -Math.cos(yaw2);
+        const cos2 = (dx * fx2 + dz * fz2) / (dist || 1);
+        const quietBehind = (ctx.playerSpeed || 0) < 2.2 && cos2 < -0.05 && e.awareness < 0.45;
+        inCone = !quietBehind;
+      } else {
         const yaw = e.root.rotation.y;
         const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
         const cos = (dx * fx + dz * fz) / (dist || 1);
