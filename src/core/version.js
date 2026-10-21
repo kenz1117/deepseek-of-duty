@@ -12,5 +12,7 @@
      0.1.0  10-18 17:03  dist-sprintB2.tar.gz backyard zone expansion
      0.2.0  10-18 18:03  dist-sprintC.tar.gz  SSAO/ragdoll/art pass
      0.3.0  10-19 22:55  sync site build      campaign + north checkpoint + voices
+     0.3.5  10-20        patch series         versus/spawn/LAN fixes
+     0.4.0  10-21        milestone            per-mode spawns + AI profiles + campaign beats + co-op medical
    ========================================================================= */
-export const GAME_VERSION = '0.3.5';
+export const GAME_VERSION = '0.4.0';
