@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { buildSoldier, applyPose, applyRagdoll } from './soldierParts.js';
 import { behaviorFor, reactionDelay } from '../systems/ai/tuning.js';
 import { separate, avoidBody, pullString, arrival } from '../systems/ai/steering.js';
+import { AI_PROFILES, pickPatrolPoint } from '../systems/ai/profiles.js';
 
 /* =========================================================================
    Enemy soldier — four archetypes on one rig:
@@ -284,6 +285,20 @@ export class Enemy {
     this.coverPeek = false;
     this.coverNoSightT = 0;
     this.flankT = 0;
+    // Phase 2 profile layer: policy (intel rules / patrol / zone anchor /
+    // stand-off modifier) set per spawn by main.js; behaviour reads it.
+    this.profile = AI_PROFILES.default;
+    this.flankPoint = null;      // real-flank waypoint (director-assigned)
+    this.flankDone = false;      // route finished — revert to normal flank play
+    this.patrolHome = null;      // garrison post centre (set on spawn)
+    this.patrolPoint = null;     // current beat leg
+    this.patrolT = 0;            // leg timer / dwell
+    this.patrolDir = null;       // last leg bearing (keeps turns one-way)
+    this.zoneAnchor = null;      // mission-area target for zoneAnchor profiles
+    // Phase 3 boss-phase hooks: fraction of incoming damage shrugged off
+    // (warden escorts alive) and a movement multiplier (charge mode)
+    this.damageResist = 0;
+    this.advanceSpeedMult = 1;
     // AI v2.x: morale / bullet-impact / panic state
     this.comradeLostT = 0;        // seconds since I saw a friend die nearby
     this.fireBearingX = 0;        // last-known rough firing direction (unit)
@@ -673,6 +688,8 @@ export class Enemy {
     this.warnT = 0;
     this.warnActive = false;
     this.resetAiState();
+    // garrison beat: patrol posts orbit the spawn point
+    this.patrolHome = { x, z };
     this.deathFall = 1;
     this.deathSide = 1;
     this.deathTwist = 0;
@@ -716,6 +733,12 @@ export class Enemy {
     this.coverPeek = false;
     this.coverNoSightT = 0;
     this.flankT = 0;
+    this.flankPoint = null;
+    this.flankDone = false;
+    this.patrolPoint = null;
+    this.patrolT = 0;
+    this.patrolDir = null;
+    this.zoneAnchor = null;
     this.coverPoint = null;
     this.coverTimer = 0;
   }
@@ -724,6 +747,10 @@ export class Enemy {
   /** returns true if this damage killed */
   takeDamage(amount, point, normal, part = 'torso', attackerTeam = undefined) {
     if (!this.alive) return false;
+    // boss-phase warden buff (Phase 3): fraction of incoming damage shrugged
+    // off while the escort lives — applied before any branch so friendly
+    // chip damage respects it too
+    if (this.damageResist > 0) amount *= 1 - Math.min(0.9, this.damageResist);
 
     // ---- friendly fire (versus mode only) ----
     // Enters only when BOTH ids exist and match; undefined attacker (player
@@ -1024,8 +1051,15 @@ export class Enemy {
       this.repositionT -= dt;
       if (this.repositionT <= 0) this.state = this.canSee ? 'engage' : 'advance';
     } else if (!aware) {
-      this.state = this.investigate && this.investigateT < 24 ? 'search' : 'idle';
-      if (this.state === 'search' && this.searchHold <= 0) this.searchHold = 4 + Math.random() * 3;
+      if (this.investigate && this.investigateT < 24) {
+        this.state = 'search';
+        if (this.searchHold <= 0) this.searchHold = 4 + Math.random() * 3;
+      } else if (this.profile && this.profile.patrol) {
+        // unalerted garrison: walk the beat instead of statue-ing on the spawn
+        this.state = 'patrol';
+      } else {
+        this.state = 'idle';
+      }
     } else if (role === 'breach' && this.breachDoor && !this.breachDoor.opened) {
       this.state = 'advance';
     } else if (role === 'breachSupport' && this.breachDoor && !this.breachDoor.opened) {
@@ -1042,12 +1076,56 @@ export class Enemy {
       this.state = 'advance';
     }
 
+    // real flank (Phase 2): while a flank waypoint is pending, stay on the
+    // route even through brief line-of-sight — that commitment is what makes
+    // a flank readable instead of a teleport-in. Bail out when the point is
+    // reached, the fight is at arm's length, or the soldier lost the job.
+    if (this.state !== 'cover' && this.aiRole === 'flank' && this.flankPoint && !this.flankDone) {
+      const fdx = this.flankPoint.x - p.x;
+      const fdz = this.flankPoint.z - p.z;
+      const fd = Math.hypot(fdx, fdz);
+      if (fd <= 2.6 || dist < 12) this.flankDone = true;
+      else this.state = 'advance';
+    }
+
     // ---- movement intent
     let moveX = 0, moveZ = 0, speedTarget = 0;
     let faceMove = false;
 
     if (this.state === 'idle') {
       speedTarget = 0;
+    } else if (this.state === 'patrol') {
+      // garrison beat: walk one leg at a time around the post, at a slow
+      // walk, checking the straight line first — patrol legs are short
+      // (≤13 m) so a blocked line just means "pick another leg", not A*.
+      this.patrolT -= dt;
+      const pp = this.patrolPoint;
+      const pd = pp ? Math.hypot(pp.x - p.x, pp.z - p.z) : Infinity;
+      if (!pp || pd < 1.1 || this.patrolT <= 0) {
+        const cfg = this.profile.patrol;
+        const next = pickPatrolPoint({
+          home: this.patrolHome || p, radius: cfg.radius, rng: this.rnd, prevDir: this.patrolDir,
+        });
+        const lineOk = !ctx.nav || !ctx.nav.lineWalkable
+          || ctx.nav.lineWalkable(p.x, p.z, next.x, next.z);
+        const cellOk = !ctx.nav || !ctx.nav.isWalkableAt || ctx.nav.isWalkableAt(next.x, next.z, this.baseY);
+        if (lineOk && cellOk) {
+          this.patrolPoint = { x: next.x, z: next.z };
+          this.patrolDir = next.dir;
+          this.patrolT = cfg.dwell[0] + this.rnd() * (cfg.dwell[1] - cfg.dwell[0]);
+        } else {
+          // blocked beat: stand fast briefly, then try a fresh leg
+          this.patrolPoint = null;
+          this.patrolT = 1.5 + this.rnd();
+        }
+      }
+      if (this.patrolPoint) {
+        const wx = this.patrolPoint.x - p.x, wz = this.patrolPoint.z - p.z;
+        const wd = Math.hypot(wx, wz) || 1;
+        moveX = wx / wd; moveZ = wz / wd;
+        speedTarget = 1.15;
+        faceMove = true;
+      }
     } else if (this.state === 'cover') {
       const cp = this.coverPoint;
       if (cp) {
@@ -1094,11 +1172,21 @@ export class Enemy {
         faceMove = true;
       } else speedTarget = 0;
     } else if (this.state === 'advance') {
-      // breachSupport: instead of running toward the door, the support
-      // soldier picks a position roughly 9 m off the door axis, on the
-      // side furthest from the player. From there they can fire on
-      // anyone peeking the door and not get flanked by the player.
-      if (role === 'breachSupport' && this.breachDoor && this.breachDoor.rect) {
+      // real flank: run the assigned side/rear waypoint. The navDrive pass
+      // below paths around walls toward it; the straight-line push here
+      // covers open ground. On arrival the normal flank strafe takes over.
+      if (this.aiRole === 'flank' && this.flankPoint && !this.flankDone) {
+        const fx2 = this.flankPoint.x - p.x;
+        const fz2 = this.flankPoint.z - p.z;
+        const fd2 = Math.hypot(fx2, fz2) || 1;
+        moveX = fx2 / fd2; moveZ = fz2 / fd2;
+        speedTarget = def.advanceSpeed * (this.advanceSpeedMult || 1) * (this.awareness > 0.7 ? 1 : 0.85);
+        faceMove = true;
+      } else if (role === 'breachSupport' && this.breachDoor && this.breachDoor.rect) {
+        // breachSupport: instead of running toward the door, the support
+        // soldier picks a position roughly 9 m off the door axis, on the
+        // side furthest from the player. From there they can fire on
+        // anyone peeking the door and not get flanked by the player.
         const dr = this.breachDoor.rect;
         const dx2 = (dr[0] + dr[1]) * 0.5 - p.x;
         const dz2 = (dr[2] + dr[3]) * 0.5 - p.z;
@@ -1123,16 +1211,24 @@ export class Enemy {
           faceMove = true;
         }
       } else {
-        const tgt = this.investigate || (this.lastSeen && this.lastSeenT < 6 ? this.lastSeen : null) || playerPos;
+        // zoneAnchor profiles (assault / interceptor) advance on the MISSION
+        // AREA when nothing fresher exists — the player is an obstacle on
+        // the way, not a homing beacon.
+        const tgt = this.investigate
+          || (this.lastSeen && this.lastSeenT < 6 ? this.lastSeen : null)
+          || (this.profile && this.profile.zoneAnchor && this.zoneAnchor)
+          || playerPos;
         const tx = tgt.x - p.x, tz = tgt.z - p.z;
         const td = Math.hypot(tx, tz) || 1;
-        const standoff = role === 'breach' ? 1.2
+        const so = this.profile ? (this.profile.standoffMod || 0) : 0;
+        const baseStandoff = role === 'breach' ? 1.2
           : role === 'suppress' ? 26 : role === 'hold' ? 20 : role === 'flank' ? 17 : 8;
+        const standoff = Math.max(4, baseStandoff + so);
         if (role === 'breach' && td <= 1.6) {
           speedTarget = 0;
         } else if (td > standoff) {
           moveX = tx / td; moveZ = tz / td;
-          speedTarget = def.advanceSpeed * (this.awareness > 0.7 ? 1 : 0.82);
+          speedTarget = def.advanceSpeed * (this.advanceSpeedMult || 1) * (this.awareness > 0.7 ? 1 : 0.82);
           faceMove = true;
         } else {
           moveX = sideX * this.strafeDir * 0.5;
@@ -1147,7 +1243,7 @@ export class Enemy {
         const circle = dist > 3.2 ? 0.3 : 1.0;
         moveX = dirX * push + sideX * this.strafeDir * circle;
         moveZ = dirZ * push + sideZ * this.strafeDir * circle;
-        speedTarget = dist > 3.2 ? def.engageSpeed : 3.0;
+        speedTarget = dist > 3.2 ? def.engageSpeed * (this.advanceSpeedMult || 1) : 3.0;
       } else if (role === 'breachSupport' && this.breachDoor && this.breachDoor.rect) {
         // breachSupport during engage: the soldier has arrived at the
         // 9 m support position and now has the player in sight. They
@@ -1210,7 +1306,7 @@ export class Enemy {
         moveZ = dirZ * radial + sideZ * this.aiSide * 0.95;
         speedTarget = 2.9;
       } else if (role === 'assault' || boss) {
-        const close = def.engageSpeed + (boss ? 0.4 : 0.9);
+        const close = (def.engageSpeed + (boss ? 0.4 : 0.9)) * (this.advanceSpeedMult || 1);
         if (dist > 9) {
           moveX = dirX + sideX * this.strafeDir * 0.3;
           moveZ = dirZ + sideZ * this.strafeDir * 0.3;
@@ -1234,6 +1330,27 @@ export class Enemy {
       }
     }
 
+    // suppression bites movement, not just aim (Phase 2): a pinned soldier
+    // slows down, edges off the incoming fire lane, and cover-capable
+    // archetypes ask for the nearest crate instead of walking into the
+    // stream. Rushers stay immune by design — closing distance IS their
+    // answer to being shot at.
+    if (this.state === 'advance' && this.suppression > 0.55 && !boss
+        && this.archetype !== 'rusher' && role !== 'breach') {
+      if (def.useCover && this.coverCd <= 0) this.wantCover = true;
+      if (speedTarget > 0) {
+        speedTarget *= 1 - 0.45 * Math.min(1, this.suppression);
+        const bx = this.fireBearingX || 0, bz = this.fireBearingZ || 0;
+        if (bx || bz) {
+          let px2 = -bz, pz2 = bx;                 // perpendicular of the lane
+          if (px2 * moveX + pz2 * moveZ < 0) { px2 = -px2; pz2 = -pz2; }
+          const nx2 = moveX + px2 * 0.7, nz2 = moveZ + pz2 * 0.7;
+          const nl = Math.hypot(nx2, nz2) || 1;
+          moveX = nx2 / nl; moveZ = nz2 / nl;
+        }
+      }
+    }
+
     // ---- ground pathfinding: steer around walls when the straight line is blocked
     if (ctx.nav && this.baseY <= 0.5 && !this.pinned
         && (this.state === 'advance' || this.state === 'search' || this.state === 'cover'
@@ -1245,10 +1362,15 @@ export class Enemy {
       const tgt = isBreachSupport
         ? { x: (this.breachDoor.rect[0] + this.breachDoor.rect[1]) * 0.5,
             z: (this.breachDoor.rect[2] + this.breachDoor.rect[3]) * 0.5 }
+        : (this.aiRole === 'flank' && this.flankPoint && !this.flankDone)
+        ? this.flankPoint
         : this.state === 'search' ? (this.lastSeen || this.investigate || playerPos)
         : this.state === 'cover' ? this.coverPoint
           : (this.investigate && this.investigateT < 24 ? this.investigate
-            : (this.lastSeen && this.lastSeenT < 6 ? this.lastSeen : playerPos));
+            : (this.lastSeen && this.lastSeenT < 6 ? this.lastSeen
+              : (this.profile && this.profile.zoneAnchor && this.zoneAnchor)
+                ? this.zoneAnchor
+                : playerPos));
       if (tgt) {
         const steer = this.followPath(ctx.nav, tgt, dt, 0);
         if (steer) {
@@ -1326,7 +1448,7 @@ export class Enemy {
 
     // ---- aim / look
     const lookErr = wrapPi(setYaw - this.root.rotation.y);
-    const headTarget = this.state === 'idle'
+    const headTarget = (this.state === 'idle' || this.state === 'patrol')
       ? Math.sin(this.animT * 0.9) * 0.45
       : clamp(lookErr * 0.8, -0.95, 0.95);
     this.headYawS += (headTarget - this.headYawS) * Math.min(1, dt * 5.5);
@@ -1375,9 +1497,13 @@ export class Enemy {
     if (this.acquireT < this.reactionDelay) return false;
     if (this.aimSettle < 0.25) return false;
     // inside cover only the peek phase may shoot; while still running to cover
-    // a soldier can snap off a shot on the move (with a movement penalty)
+    // a soldier can snap off a shot on the move (with a movement penalty).
+    // Same deal for a flanker running his route: he may return fire while
+    // advancing, or a visible flank would read as "he ignores me".
     if (this.state === 'cover' && !this.coverPeek && this.coverPhase !== 'move') return false;
-    if (this.state !== 'engage' && this.state !== 'cover') return false;
+    if (this.state !== 'engage' && this.state !== 'cover'
+        && !(this.state === 'advance' && this.aiRole === 'flank'
+             && this.flankPoint && !this.flankDone)) return false;
     if (dist > (this.def.fireRange || 48)) return false;
     return true;
   }
@@ -1421,6 +1547,12 @@ export class Enemy {
     this.fireTimer -= dt;
     if (!ctx.playerAlive || !this.fireReady(dist)) return;
     if (this.fireTimer <= 0) {
+      // rushers join the global open-fire budget — six shotguns starting a
+      // blast on the same frame was the biggest spike-damage source left
+      if (ctx.tryFire && !ctx.tryFire()) {
+        this.fireTimer = 0.25 + Math.random() * 0.2;
+        return;
+      }
       this.shoot(ctx, dist, playerPos);
       this.fireTimer = this.def.fireInterval * (0.8 + Math.random() * 0.5);
     }
@@ -1437,6 +1569,13 @@ export class Enemy {
       } else if (this.warnT <= 0) {
         this.warnT = 0;
         this.warnActive = false;
+        // snipers join the global open-fire budget too; under pressure the
+        // laser stays up a beat longer instead of a warned shot vanishing
+        if (ctx.tryFire && !ctx.tryFire()) {
+          this.warnT = 0.35;
+          this.warnActive = true;
+          return;
+        }
         this.shoot(ctx, dist, playerPos);
         this.fireTimer = this.def.cooldown * (0.85 + this.rnd() * 0.4);
         this.repositionT = this.def.relocTime;
@@ -1759,7 +1898,14 @@ export class Enemy {
     // and re-covered would otherwise keep hitting through the wall. A blocked
     // path forces the shot to miss and truncates the tracer at the wall.
     const path = this.pathBlocked(playerPos, dist);
-    const hit = !path.blocked && Math.random() < hitChance;
+    let hit = !path.blocked && Math.random() < hitChance;
+    // late-dodge fairness recheck (Phase 2): when the player broke line of
+    // sight within the last ~0.15 s (dived behind a crate mid-burst), a
+    // rolled hit gets one fresh geometric re-check. Keeps the dice feel,
+    // kills the classic "shot me through the corner I just rounded".
+    if (hit && (ctx.playerFastT || 0) > 0 && dist > 8) {
+      hit = this.canSeeTarget(playerPos, dist);
+    }
     const truncateTo = path.blocked ? path.tEnd : 1;
     const pOwn = this.root.position;
     const ax = pOwn.x, az = pOwn.z, ay = EYE_Y + pOwn.y;

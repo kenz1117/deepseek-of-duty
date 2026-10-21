@@ -15,6 +15,8 @@ import { createPickups } from './world/pickups.js';
 import { createStreaks } from './systems/streaks.js';
 import { createMilestones, stepLabel } from './systems/milestones.js';
 import { createZone } from './systems/zone.js';
+import { createSpawnDirector, zonesWithinRect } from './systems/spawn.js';
+import { profileFor } from './systems/ai/profiles.js';
 import { createTeamBrain } from './systems/ai/teamBrain.js';
 import { createInventory, ITEMS } from './systems/inventory.js';
 import { createArtillery } from './systems/artillery.js';
@@ -43,7 +45,15 @@ import { createResults, renderDailyList, renderMenuBoard } from './ui/results.js
 import {
   OPERATIONS, operationById, isUnlocked, loadCampaign, saveCampaign,
   completeOperation as markOperationDone,
+  saveBeatCheckpoint, loadBeatCheckpoint, clearBeatCheckpoint,
 } from './story.js';
+import {
+  beatForWave, beatMode, beatObjective, beatComplete, beatEnemyCount, operationWaves,
+  BEAT_OBJECTIVE_TYPES,
+} from './systems/beats.js';
+import {
+  createDownedRegistry, DOWN_BLEED_S, REVIVE_RANGE_M, REVIVE_HOLD_S, REVIVE_HP_FRAC, WIPE_RESPAWN_S,
+} from './systems/medical.js';
 
 /* =========================================================================
    DEEPSEEK OF DUTY — browser vertical slice.
@@ -152,16 +162,26 @@ const G = {
   tutorial: { active: false, step: 0, t: 0, stepT: 0, done: false, lastX: 0, lastZ: 0 },
   shotsFired: 0, regenRate: 26, atmosphere: 'dusk',
   mode: 'survival', objective: null, operation: null, boss: null,
+  /** beat boss entered the field (beat-driven ops); gates boss-beat completion */
+  bossBeatSpawned: false,
   // Versus master switch. false in co-op; when true, teams exist, friendly
   // fire is filtered, breach/equipment AI subsystems are disabled (their
   // single-target assumptions do not hold) and the safe zone runs. Turning it
   // off restores the PvE behaviour exactly.
   versusMode: false,
   versusGraceT: 0,
+  versusGraceNotified: false,
+  // Set by endVersusMatch: blocks scoring, respawns, AI fire and PvP damage
+  // once the match is decided. Cleared by resetGame()/restartVersus*.
+  versusOver: false,
   teamScores: [0, 0],
   ffaWinner: null, ffaResultShown: false,
   // Sprint D: run counters, streak rewards, UAV window, score multiplier
   stats: null, scoreMult: 1, uavUntil: 0, uavTick: 0,
+  // Phase 1 spawn: where the player last died (solo spawn picks far from it)
+  lastDeathPos: null,
+  // Phase 4a LAN co-op: seconds left on the local bleed-out clock ('downed')
+  downedT: 0,
 };
 
 let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap, interact, intelSys;
@@ -173,6 +193,14 @@ const net = {
   remote: new Map(), enemies: new Map(),
   inputT: 0, snapT: 0, tick: 0, seq: 0, started: false, respawnT: 0, lastError: null,
 };
+/** Downed/revive state (LAN co-op only): bleed-out clock for the local
+    player; the registry + per-ally revive prompts live on module scope. */
+let coopDowned = null;
+const coopReviveMarks = new Map();   // player id → interact record
+function ensureCoopDowned() {
+  if (!coopDowned) coopDowned = createDownedRegistry();
+  return coopDowned;
+}
 let netEnemySeq = 1;
 /** Client-side read-only mirror of the host's milestone chain. */
 let netMilestoneMirror = null;
@@ -180,6 +208,9 @@ let netMilestoneMirror = null;
 let zoneSys = null;
 let netZoneMirror = null;
 let perception = null, aiDirector = null, barks = null, equipment = null;
+/** Phase 1 spawn system: semantic zones + per-mode generators (systems/spawn.js). */
+let spawnDirector = null;
+const spawnWaveMemory = { recent: [] };
 let codex = { intel: [] };
 let mothAlly = null;
 let mothGltf = null, mothLoad = null;
@@ -431,11 +462,11 @@ function applyWeatherForAtmo(atmoKey, waveN) {
 /* Difficulty ladder. The archetype table stays the baseline; every tier is a
    multiplier on top so a wave can be tuned without forking enemy behaviour. */
 const DIFF_TIERS = [
-  { id: 'D1', label: 'TRAINING', wave: 1, accuracy: 0.62, damage: 0.55, firstShot: 1.9, burst: 0.65, maxFiring: 2 },
+  { id: 'D1', label: 'TRAINING', wave: 1, accuracy: 0.62, damage: 0.55, firstShot: 1.9, burst: 0.65, maxFiring: 1 },
   { id: 'D2', label: 'CONTACT', wave: 3, accuracy: 0.72, damage: 0.72, firstShot: 1.5, burst: 0.80, maxFiring: 2 },
   { id: 'D3', label: 'PRESSURE', wave: 5, accuracy: 0.82, damage: 0.82, firstShot: 1.3, burst: 0.90, maxFiring: 2 },
-  { id: 'D4', label: 'VETERAN', wave: 8, accuracy: 0.94, damage: 0.94, firstShot: 1.1, burst: 1.00, maxFiring: 2 },
-  { id: 'D5', label: 'ELITE', wave: 12, accuracy: 0.96, damage: 0.95, firstShot: 0.9, burst: 1.05, maxFiring: 2 },
+  { id: 'D4', label: 'VETERAN', wave: 8, accuracy: 0.94, damage: 0.94, firstShot: 1.1, burst: 1.00, maxFiring: 3 },
+  { id: 'D5', label: 'ELITE', wave: 12, accuracy: 0.96, damage: 0.95, firstShot: 0.9, burst: 1.05, maxFiring: 3 },
 ];
 
 function diffForWave(n) {
@@ -550,6 +581,10 @@ function openUpgradeChoice(force = false) {
   G.upgradeT = 0;
   hideObjectiveUI();
   G.upgradeCards = shuffle(UPGRADE_POOL.slice()).slice(0, 3).map((u, i) => ({ ...u, key: String(i + 1) }));
+  // LAN co-op: every player picks their own card from the same offer
+  if (lanSession && net.role === 'host' && !G.versusMode) {
+    lanSession.broadcastEvent('upoffer', { cards: G.upgradeCards.map((c) => c.id) });
+  }
   hud.showUpgrades(G.upgradeCards, handleUpgradePick);
   input.unlock();
 }
@@ -583,6 +618,11 @@ function pickUpgrade(index) {
   if (hud.hideUpgrades) hud.hideUpgrades();
   G.state = 'playing';
   if (audio && audio.ctx) audio.uiConfirm();
+  // LAN clients apply the card and get back in: the HOST advances the wave
+  if (net.role === 'client') {
+    if (!SHOT_MODE) input.lock();
+    return;
+  }
   startWave(G.wave + 1);
   if (!SHOT_MODE) input.lock();
 }
@@ -656,11 +696,14 @@ function briefFor(mode = G.settings.runMode) {
       desc: op.brief,
       threat: op.threat,
       ao: op.zoneLabel,
-      contact: `${op.waves} WAVES`,
+      contact: op.beats ? `${op.beats.length} BEATS` : `${op.waves} WAVES`,
       objectives: [
-        op.mode === 'survival' ? `清空 ${op.waves} 波敌人` : '完成区域目标',
+        op.beats
+          ? op.beats.map((b) => b.text || b.name).join(' → ')
+          : op.mode === 'survival' ? `清空 ${op.waves} 波敌人` : '完成区域目标',
         `区域：${op.zoneLabel}`,
-        op.bossWave ? '击杀敌方指挥官' : '活着完成任务',
+        op.beats ? (op.beats.some((b) => b.type === 'boss') ? '击杀敌方指挥官' : '完成全部节拍')
+          : op.bossWave ? '击杀敌方指挥官' : '活着完成任务',
       ],
       note: '',
     };
@@ -858,7 +901,14 @@ function finishTutorial() {
 
 function modeForWave(n) {
   const pref = G.settings && G.settings.runMode;
-  if (pref === 'campaign') return (G.operation && G.operation.mode) || 'survival';
+  if (pref === 'campaign') {
+    // beat-driven ops run one mode PER BEAT (infil/interact included);
+    // legacy ops keep their single fixed mode
+    const op = G.operation;
+    const beat = op && op.beats ? beatForWave(op.beats, n) : null;
+    if (beat) return beatMode(beat);
+    return (op && op.mode) || 'survival';
+  }
   if (!pref || pref === 'rotation') {
     // ROTATION: every 3rd wave is a defend, every 5th an extract, rest survival.
     if (n % 5 === 0) return 'extract';
@@ -1107,6 +1157,10 @@ function setupObjective(n) {
   const mode = modeForWave(n);
   G.mode = mode;
   G.objective = null;
+  // beat-driven ops: the beat declares the objective (or none)
+  const op = G.operation;
+  const beat = op && op.beats ? beatForWave(op.beats, n) : null;
+  if (beat) { setupBeatObjective(beat); return; }
   if (mode === 'survival') { hideObjectiveUI(); return; }
   const zone = (G.operation && G.operation.zone)
     ? { ...G.operation.zone }
@@ -1122,6 +1176,85 @@ function setupObjective(n) {
   };
   if (hud && hud.setMode) hud.setMode(mode.toUpperCase(), mode === 'defend' ? 'HOLD THE ZONE' : 'CLEAR THE AREA, THEN EXTRACT');
   showBeacon(zone, mode);
+}
+
+/* ---- campaign beats (Phase 3) ----------------------------------------------
+   One beat = one wave of the existing loop. systems/beats.js decides what a
+   beat IS; this block mounts it: the objective zone (or interact target),
+   the HUD copy, and the advance when the beat's goal is met. Objective-driven
+   beats (defend/extract/infil/interact) advance from onObjectiveDone; clear-
+   driven beats (survival/assault/boss) advance from updateWaves. ------------ */
+
+let beatInteract = null;      // mounted interact target of an `interact` beat
+
+/** A beat spot may be literal coords or 'site' = the active rotation site's
+    zone centre (ops without a fixed start play on the rotated district). */
+function resolveBeatSpot(spot) {
+  if (spot === 'site') {
+    const z = G.site ? G.site.zone : (objectiveZone('defend') || null);
+    return z ? { x: z.x, z: z.z, r: 2.8 } : null;
+  }
+  return spot && Number.isFinite(spot.x) ? { x: spot.x, z: spot.z, r: spot.r || 2.8 } : null;
+}
+
+function setupBeatObjective(beat) {
+  unmountBeatInteract();
+  const defn = beatObjective(beat);
+  const title = (beat.name || beat.type || 'WAVE').toUpperCase();
+  if (!defn) {
+    hideObjectiveUI();
+    if (hud && hud.setMode) hud.setMode(title, beat.text || '');
+    return;
+  }
+  const zone = defn.type === 'interact' ? resolveBeatSpot(defn.zone) : { ...defn.zone };
+  if (!zone) { hideObjectiveUI(); return; }
+  G.objective = {
+    type: defn.type,
+    zone,
+    need: defn.need,
+    hold: 0,
+    done: false,
+    // extract still has to clear the field first; everything else is live at once
+    ready: defn.type !== 'extract',
+    inside: false,
+  };
+  if (hud && hud.setMode) hud.setMode(title, beat.text || '');
+  showBeacon(zone, defn.type === 'extract' || defn.type === 'infil' ? 'extract' : 'defend');
+  if (defn.type === 'interact') mountBeatInteract(beat, zone);
+}
+
+function unmountBeatInteract() {
+  if (beatInteract && interact) {
+    try { interact.remove(beatInteract); } catch (e) { /* already gone */ }
+  }
+  beatInteract = null;
+}
+
+function mountBeatInteract(beat, spot) {
+  unmountBeatInteract();
+  if (!interact || !spot) return;
+  beatInteract = interact.add({
+    x: spot.x, z: spot.z, r: spot.r || 2.8,
+    label: beat.label || '按住 E 交互',
+    hold: 0.8,
+    onUse: () => {
+      const obj = G.objective;
+      if (!obj || obj.done || obj.type !== 'interact') return;
+      obj.hold = obj.need;
+      onObjectiveDone();
+    },
+  });
+}
+
+/** The beat's goal is met: finish the op on the last beat, otherwise run
+    the normal between-wave upgrade pick, whose confirm starts the next wave
+    (= next beat). */
+function advanceBeat() {
+  const op = G.operation;
+  if (!op || !op.beats || G.state !== 'playing') return;
+  unmountBeatInteract();
+  if (G.wave >= operationWaves(op)) { finishOperation(); return; }
+  openUpgradeChoice();
 }
 
 /* ---- milestone chain ------------------------------------------------------
@@ -1231,6 +1364,14 @@ function updateMilestones(dt) {
   let inside = false;
   if (step && (step.kind === 'reach' || step.kind === 'hold') && Number.isFinite(step.x)) {
     inside = Math.hypot(controller.pos.x - step.x, controller.pos.z - step.z) <= (step.r || 4);
+    // Co-op is a SQUAD objective: any alive teammate standing in the zone
+    // counts, not just the host (mirrored positions are host-authoritative).
+    if (!inside && net.role === 'host') {
+      for (const r of net.remote.values()) {
+        if (!r.alive) continue;
+        if (Math.hypot(r.x - step.x, r.z - step.z) <= (step.r || 4)) { inside = true; break; }
+      }
+    }
   }
   const before = milestones.state.index;
   milestones.update(dt, inside);
@@ -1338,7 +1479,7 @@ function startVersusBots(teams, lobbyPlayers) {
     for (let i = 0; i < fill; i += 1) {
       // slot index continues after the humans so the whole squad spreads out
       const sp = versusSpawnSlot(team, counts[team] + i, 2.5);
-      const e = spawnEnemy({ x: sp.x, z: sp.z, y: 0 }, { noRing: true, force: true });
+      const e = spawnEnemy({ x: sp.x, z: sp.z, y: 0, profile: 'squad' }, { noRing: true, force: true });
       if (!e) break;
       e.team = team;
       if (e.setDifficulty) e.setDifficulty(DIFF_TIERS[3]);
@@ -1506,22 +1647,171 @@ function botById(netId) {
   return null;
 }
 
-/** Team deathmatch win check: first faction to VERSUS_KILL_TARGET team kills.
-    v1 announces only — forcing G.state into the debrief flow here would skip
-    the normal run teardown (scoreboard/rematch need their own pass). */
+/** Team deathmatch win check: first faction to VERSUS_KILL_TARGET team kills
+    ends the match for everyone (host broadcasts `vend`). */
 function checkVersusWin() {
+  if (G.versusOver) return;
   const target = VERSUS_KILL_TARGET;
   if (G.teamScores[0] < target && G.teamScores[1] < target) return;
-  const win = G.teamScores[0] >= target ? '蓝军' : '红军';
-  if (hud) {
-    if (hud.toast) hud.toast(`${win} 达到 ${target} 杀 · 获胜`, 6000);
-    if (hud.setObjective) hud.setObjective(`${win} 获胜`);
+  endVersusMatch(G.teamScores[0] >= target ? 0 : 1);
+}
+
+/** Match end, both ends: freeze combat, unlock the cursor, show the result
+    overlay. The host additionally broadcasts `vend` so clients settle with
+    the authoritative score. */
+function endVersusMatch(winTeam) {
+  if (!G.versusMode || G.versusOver) return;
+  G.versusOver = true;
+  if (G.state === 'playing' || G.state === 'dead') G.state = 'versusEnd';
+  input.unlock();
+  if (voice) voice.stop();
+  const mine = net.team;
+  const outcome = winTeam == null ? 'draw' : (mine != null && winTeam === mine ? 'win' : 'lose');
+  if (hud && hud.toast) hud.toast(outcome === 'win' ? '胜利' : outcome === 'lose' ? '战败' : '平局', 4000);
+  if (hud && hud.setObjective) {
+    hud.setObjective(winTeam == null ? '平局' : `${winTeam === 0 ? '蓝军' : '红军'} 获胜`);
   }
+  showVersusEnd(winTeam);
+  if (net.role === 'host' && lanSession) {
+    lanSession.broadcastEvent('vend', { win: winTeam, scores: G.teamScores.slice() });
+  }
+}
+
+function showVersusEnd(winTeam) {
+  const overlay = document.getElementById('versus-end');
+  if (!overlay) return;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  const mine = net.team;
+  const outcome = winTeam == null ? 'draw' : (mine != null && winTeam === mine ? 'win' : 'lose');
+  set('versus-end-kicker', outcome === 'win' ? 'VICTORY · 任务完成' : outcome === 'lose' ? 'DEFEAT · 任务失败' : 'DRAW · 势均力敌');
+  set('versus-end-title', winTeam == null ? '平局' : (winTeam === 0 ? '蓝军获胜' : '红军获胜'));
+  set('versus-end-sub', `蓝 ${G.teamScores[0]} : ${G.teamScores[1]} 红 · 目标 ${VERSUS_KILL_TARGET} 杀`);
+  const statsEl = document.getElementById('versus-end-stats');
+  if (statsEl) {
+    const mins = Math.floor(G.time / 60);
+    const secs = String(Math.floor(G.time % 60)).padStart(2, '0');
+    statsEl.innerHTML = [
+      ['蓝军', G.teamScores[0]],
+      ['红军', G.teamScores[1]],
+      ['用时', `${mins}:${secs}`],
+    ].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
+  }
+  set('versus-end-debrief', outcome === 'win'
+    ? '干得好。区域已控制，小队正在巩固防线。'
+    : outcome === 'lose'
+      ? '防线被撕开。重整装备，下一局拿回来。'
+      : '双方谁都没能拿到决定性优势。');
+  const rematchBtn = document.getElementById('versus-rematch');
+  if (rematchBtn) {
+    const can = net.role === 'host';
+    rematchBtn.disabled = !can;
+    rematchBtn.style.opacity = can ? '1' : '.4';
+    rematchBtn.title = can ? '' : '仅房主可以再开一局';
+  }
+  overlay.classList.remove('hidden');
+  overlay.setAttribute('aria-hidden', 'false');
+}
+
+function hideVersusEnd() {
+  const overlay = document.getElementById('versus-end');
+  if (!overlay) return;
+  overlay.classList.add('hidden');
+  overlay.setAttribute('aria-hidden', 'true');
+}
+
+/** Host: reset the versus match in place (same lobby, same teams) and tell
+    everyone to do the same via a fresh `start` event. */
+function restartVersusMatch() {
+  if (net.role !== 'host' || !G.versusMode || !lanSession) return;
+  hideVersusEnd();
+  resetGame();
+  G.versusMode = true;
+  G.versusOver = false;
+  G.teamScores = [0, 0];
+  G.versusGraceT = VERSUS_GRACE_S;
+  G.versusGraceNotified = false;
+  G.state = 'playing';
+  const mySlot = net.spawnSlots && net.spawnSlots[String(net.selfId)];
+  const sp = versusSpawnSlot(mySlot ? mySlot.team : (net.team ?? 0), mySlot ? mySlot.index : 0, 3);
+  controller.revive(sp.x, sp.z);
+  controller.setLook((G.site && G.site.yaw) || -0.03, -0.015);
+  G.diff = DIFF_TIERS[3];
+  firingSlots.max = 4;
+  firingSlots.at.length = 0;
+  startZone();
+  startVersusBots(net.teamAssignments || {}, lanSession.players || []);
+  for (const r of net.remote.values()) {
+    r.hp = 100; r.alive = true; r.respawnAt = 0;
+    if (r.avatar) r.avatar.alive = true;
+  }
+  if (hud) {
+    hud.setMode('VERSUS', '蓝军 vs 红军');
+    hud.setHealth(G.hp, pipsFor(G.armor));
+  }
+  input.lock();
+  lanSession.broadcastEvent('start', {
+    wave: 1, site: G.site && G.site.id, versus: true,
+    teams: net.teamAssignments, grace: G.versusGraceT, rematch: true,
+  });
+}
+
+/** Client mirror of restartVersusMatch: rebuild local state from the same
+    lobby data (teams/slots were mirrored at the first start). */
+function restartVersusClient(startMsg) {
+  if (net.role !== 'client') return;
+  hideVersusEnd();
+  // mirrored enemies belong to the old match: dispose them before resetGame
+  // hides everything (they live in BOTH net.enemies and the enemies array)
+  for (const [id, e] of net.enemies) {
+    try { engine.scene.remove(e.root); if (e.dispose) e.dispose(); } catch (err) { /* ignore */ }
+  }
+  net.enemies.clear();
+  for (let i = enemies.length - 1; i >= 0; i -= 1) if (enemies[i].netRemote) enemies.splice(i, 1);
+  if (startMsg && startMsg.teams) {
+    net.teamAssignments = startMsg.teams;
+    net.team = startMsg.teams[String(net.selfId)] ?? net.team;
+    net.spawnSlots = {};
+    const seen = [0, 0];
+    Object.keys(startMsg.teams).forEach((pid) => {
+      const t = startMsg.teams[pid] ?? 0;
+      net.spawnSlots[String(pid)] = { team: t, index: seen[t]++ };
+    });
+  }
+  resetGame();
+  G.versusMode = true;
+  G.versusOver = false;
+  G.teamScores = [0, 0];
+  G.versusGraceT = (startMsg && Number(startMsg.grace)) || VERSUS_GRACE_S;
+  G.versusGraceNotified = false;
+  G.state = 'playing';
+  menuEl.classList.add('hidden');
+  hudEl.classList.remove('hidden');
+  viewmodel.root.visible = true;
+  netZoneMirror = createZone({
+    rect: (level && level.bounds) ? { ...level.bounds } : (G.site ? G.site.rect : undefined),
+    startDelay: 120, warnAt: 15,
+  });
+  G.zoneWarned = false;
+  ensureZoneVisual();
+  const mySlot = net.spawnSlots && net.spawnSlots[String(net.selfId)];
+  const sp = versusSpawnSlot(mySlot ? mySlot.team : (net.team ?? 0), mySlot ? mySlot.index : 0, 3);
+  controller.revive(sp.x, sp.z);
+  controller.setLook((G.site && G.site.yaw) || -0.03, -0.015);
+  for (const r of net.remote.values()) {
+    r.hp = 100; r.alive = true; r.respawnAt = 0;
+    if (r.avatar) r.avatar.alive = true;
+  }
+  if (hud) {
+    hud.setMode('VERSUS', '蓝军 vs 红军');
+    hud.setHealth(G.hp, pipsFor(G.armor));
+    if (hud.toast) hud.toast('再来一局 · 部署阶段', 2600);
+  }
+  input.lock();
 }
 
 /** Host-side versus kill bookkeeping: team score + respawn + kill feed. */
 function onVersusDeath(victimTeam, killerTeam, victimLabel) {
-  if (!G.versusMode) return;
+  if (!G.versusMode || G.versusOver) return;
   if (Number.isFinite(killerTeam) && killerTeam !== victimTeam) {
     G.teamScores[killerTeam] = (G.teamScores[killerTeam] || 0) + 1;
   }
@@ -1663,7 +1953,7 @@ function updateZonePlanes(dt) {
 
 /** Host-only: every few seconds, bomb one actor that is outside the ring. */
 function updateZoneBombing(dt, zs) {
-  if (!G.versusMode || net.role !== 'host' || !zs || !zs.started) return;
+  if (!G.versusMode || net.role !== 'host' || !zs || !zs.started || G.versusOver) return;
   zoneBombT -= dt;
   if (zoneBombT > 0) return;
   const out = [];
@@ -1755,7 +2045,7 @@ function updateZone(dt) {
 
 /** Host: respawn dead fill bots; gas also kills bots outside the ring. */
 function updateVersusBots(dt) {
-  if (!G.versusMode || net.role !== 'host') return;
+  if (!G.versusMode || net.role !== 'host' || G.versusOver) return;
   const zs = zoneSys ? zoneSys.state : null;
   const now = Date.now();
   for (const b of versusBots) {
@@ -1795,7 +2085,7 @@ function onVersusBotDown(bot, killerTeam) {
 /** Shooter side: the local player hit a remote avatar. Same team → warning
     only; hostile → broadcast pdmg and apply locally for instant feedback. */
 function versusPlayerHit(targetId, amount, headshot) {
-  if (!G.versusMode) return false;
+  if (!G.versusMode || G.versusOver || G.versusGraceT > 0) return false;
   const r = net.remote.get(String(targetId));
   if (!r || !r.alive) return false;
   if (net.team != null && r.team != null && r.team === net.team) {
@@ -1813,6 +2103,7 @@ function versusPlayerHit(targetId, amount, headshot) {
 
 /** Receiver side: apply one player-inflicted hit to the local mirror. */
 function versusApplyPlayerDamage(targetId, amount, killerTeam, headshot) {
+  if (G.versusOver) return;
   const r = net.remote.get(String(targetId));
   if (!r || !r.alive) return;
   r.hp = Math.max(0, r.hp - amount);
@@ -1835,7 +2126,7 @@ function versusApplyPlayerDamage(targetId, amount, killerTeam, headshot) {
 
 /** Host: respawn downed humans at their team spawn (snapshot carries it). */
 function updateVersusRespawns() {
-  if (!G.versusMode || net.role !== 'host') return;
+  if (!G.versusMode || net.role !== 'host' || G.versusOver) return;
   const now = Date.now();
   for (const r of net.remote.values()) {
     if (r.alive || !r.respawnAt || now < r.respawnAt) continue;
@@ -1960,15 +2251,54 @@ function pickZoneSpawn(pool, zone) {
 
 function spawnReinforcements(count) {
   if (!level || !level.spawnPoints || !level.spawnPoints.length) return;
+  // defend pressure keeps arriving along the attack axes, not from a flat pool
+  const picks = buildWaveSpawnPlan(G.wave, count);
   for (let i = 0; i < count; i++) {
-    const allowed = level.spawnPoints.filter(isSpawnAllowed);
-    const src = allowed.length ? allowed : level.spawnPoints;
-    const best = pickSpawnPoint(src, true);
+    let best = null;
+    if (picks.length) best = placePlanPick(picks[i % picks.length], false);
+    if (!best) {
+      const allowed = level.spawnPoints.filter(isSpawnAllowed);
+      const src = allowed.length ? allowed : level.spawnPoints;
+      best = pickSpawnPoint(src, true);
+    }
     if (!best) break;
-    G.spawnQueue.push({ x: best.x, z: best.z, y: best.y || 0, type: chooseArchetype(G.wave, i) });
+    G.spawnQueue.push({
+      x: best.x, z: best.z, y: best.y || 0, type: chooseArchetype(G.wave, i),
+      profile: waveProfileName(), anchor: missionAnchor(),
+    });
   }
   G.waveRemaining += count;
   G.waveTotal += count;
+}
+
+/** Extraction countdown started: spawn a pursuit element from the player's
+    blind rear (rusher-weighted) so holding the zone is a fight, not a wait. */
+function spawnPursuitWave(count) {
+  if (!spawnDirector || !spawnDirector.zones.length || !G.objective) return;
+  const zones = zonesWithinRect(spawnDirector.zones, G.playRect);
+  const picks = spawnDirector.pickExtract({
+    zones, extractZone: G.objective.zone, playerPos: controller.pos,
+    playerFacingDeg: controller.headingDeg, phase: 'pursuit', count,
+  });
+  let spawned = 0;
+  for (let i = 0; i < count; i++) {
+    let best = null;
+    if (picks.length) best = placePlanPick(picks[i % picks.length], false);
+    if (!best) best = pickSpawnPoint(level.spawnPoints, true);
+    if (!best) continue;
+    spawned++;
+    G.spawnQueue.push({
+      x: best.x, z: best.z, y: best.y || 0,
+      type: Math.random() < 0.6 ? 'rusher' : 'rifleman',
+      profile: 'interceptorPursuit', anchor: missionAnchor(),
+    });
+  }
+  if (spawned) {
+    G.waveRemaining += spawned;
+    G.waveTotal += spawned;
+    if (hud && hud.toast) hud.toast('撤离窗口开启 · 身后有追兵', 2400);
+    if (hud && hud.radio) hud.radio('VEGA', '他们嗅到撤退路线了。身后有追兵，边打边撤。', 3200, 'stage_clear');
+  }
 }
 
 function onObjectiveDone() {
@@ -1976,8 +2306,14 @@ function onObjectiveDone() {
   if (!obj || obj.done) return;
   obj.done = true;
   if (G.stats) G.stats.objectiveCleared = true;
-  if (hud && hud.setHint) hud.setHint(obj.type === 'defend' ? 'ZONE SECURED' : 'EXTRACTED');
+  if (hud && hud.setHint) hud.setHint(obj.type === 'defend' ? 'ZONE SECURED' : obj.type === 'infil' ? 'INFILTRATED' : 'EXTRACTED');
   if (audio && audio.ctx) audio.uiConfirm();
+  // beat-driven ops: this beat is done — advance to the next one (the op
+  // finishes via advanceBeat when the chain runs out)
+  if (G.operation && G.operation.beats) {
+    setTimeout(() => advanceBeat(), 1200);
+    return;
+  }
   if (G.operation && G.operation.mode !== 'survival') {
     // defend/extract operations end on the objective, not on the last corpse
     setTimeout(() => { if (G.state === 'playing' && G.operation) finishOperation(); }, 1400);
@@ -2010,18 +2346,31 @@ function updateObjective(dt) {
         obj.ready = true;
         if (hud && hud.setHint) hud.setHint('AREA CLEAR — EXTRACT');
         if (hud && hud.setMode) hud.setMode('EXTRACT', 'REACH THE ZONE');
+        // the window opening is the trigger: hunters spawn from the player's
+        // blind rear and chase along the extraction route
+        spawnPursuitWave(3);
       }
     } else if (!obj.done && obj.inside) {
+    obj.hold = Math.min(obj.need, obj.hold + dt);
+    if (obj.hold >= obj.need) onObjectiveDone();
+  }
+  } else if (obj.type === 'infil') {
+    // a reach goal with no drain and no clear requirement: kills are
+    // optional, ghosting past the garrison is legal
+    if (!obj.done && obj.inside) {
       obj.hold = Math.min(obj.need, obj.hold + dt);
       if (obj.hold >= obj.need) onObjectiveDone();
     }
   }
+  // 'interact' completes from the interact target's onUse — nothing per-frame
 
   if (hud && hud.setModeProgress) {
     const pct = obj.need ? obj.hold / obj.need : 0;
     let text;
-    if (obj.done) text = obj.type === 'defend' ? 'ZONE SECURED' : 'EXTRACTED';
+    if (obj.done) text = obj.type === 'defend' ? 'ZONE SECURED' : obj.type === 'infil' ? 'INFILTRATED' : 'EXTRACTED';
     else if (obj.type === 'defend') text = `${Math.ceil(obj.hold)} / ${obj.need}s · ${obj.inside ? 'HOLDING' : 'RETURN TO ZONE'}`;
+    else if (obj.type === 'infil') text = `${obj.hold.toFixed(1)} / ${obj.need}s · ${obj.inside ? 'INFILTRATING' : 'REACH THE ZONE'}`;
+    else if (obj.type === 'interact') text = 'SEARCH THE OBJECTIVE';
     else if (!obj.ready) text = 'CLEAR THE AREA';
     else text = `${obj.hold.toFixed(1)} / ${obj.need}s · ${obj.inside ? 'EXTRACTING' : 'REACH THE ZONE'}`;
     const active = obj.done || (obj.type === 'defend' ? obj.inside : (obj.ready && obj.inside));
@@ -2304,6 +2653,14 @@ async function boot() {
       returnToMenu();
       if (audio && audio.ctx) audio.ui();
     });
+    document.getElementById('versus-rematch')?.addEventListener('click', () => {
+      if (net.role === 'host') restartVersusMatch();
+      if (audio && audio.ctx) audio.uiConfirm();
+    });
+    document.getElementById('versus-menu')?.addEventListener('click', () => {
+      returnToMenu();
+      if (audio && audio.ctx) audio.ui();
+    });
     updateBriefing(G.settings.runMode);
     const menuVersionEl = document.getElementById('menu-version');
     if (menuVersionEl) menuVersionEl.textContent = 'V' + GAME_VERSION;
@@ -2582,6 +2939,17 @@ function startGame(lock = true, silent = false) {
   if (G.settings && G.settings.runMode !== 'campaign') campaignActive = false;
   G.operation = campaignActive ? activeOperation() : null;
   if (G.operation && G.operation.id === 10 && !mothAlly) spawnMoth();
+  // beat checkpoint (Phase 3): a beat-driven op resumes at the beat you
+  // died on; the checkpoint is cleared when the op finishes
+  let firstWave = 1;
+  if (G.operation && G.operation.beats && !net.role) {
+    const cp = loadBeatCheckpoint();
+    if (cp && cp.opId === G.operation.id && cp.beat > 1 && cp.beat <= operationWaves(G.operation)) {
+      firstWave = cp.beat;
+    }
+  }
+  const redeploySub = document.querySelector('#redeploy .rb-sub');
+  if (redeploySub) redeploySub.textContent = '重新部署';
   if (voice) voice.stop();
   if (G.settings && G.settings.primary === 'mk18') applyWeaponSwitch(1);
   menuEl.classList.add('hidden');
@@ -2593,18 +2961,32 @@ function startGame(lock = true, silent = false) {
     G.site = null;
     G.playRect = null;
   } else {
-    // free play / LAN uses the whole outer ring, not just the main street
+    // free play uses the whole outer ring, not just the main street
     G.site = nextPlaylistSite();
     G.playRect = G.site.rect;
     spawn = G.site;
+    // Solo free play: spawn inside the district at the point FARTHEST from
+    // the last death (in-district variety without a random 200 m walk).
+    // LAN squads skip this — everyone must land on the same rally point.
+    if (!net.role && spawnDirector && spawnDirector.zones.length) {
+      const pts = [];
+      for (const z of zonesWithinRect(spawnDirector.zones, G.site.rect)) pts.push(...z.points);
+      const ps = spawnDirector.pickPlayerSpawn({
+        zonePoints: pts, site: G.site, lastDeathPos: G.lastDeathPos,
+      });
+      const safe = resolveSpawn(ps.x, ps.z, ps.y || 0);
+      if (safe) spawn = { x: safe.x, z: safe.z, yaw: G.site.yaw };
+    }
   }
   controller.revive(spawn ? spawn.x : 1.2, spawn ? spawn.z : 33);
   controller.setLook(spawn ? (spawn.yaw || 0) : -0.03, -0.015);
   if (!silent) audio.uiConfirm();
-  startWave(1);
+  startWave(firstWave);
+  if (firstWave > 1 && hud && hud.toast) hud.toast(`从检查点继续 · 节拍 ${firstWave}`, 2600);
   if (!SHOT_MODE && !G.tutorial.done) beginTutorial();
   hudEl.classList.toggle('hidden', HIDE_HUD);
-  const wantCine = G.operation && G.operation.intro && cinema && (!SHOT_MODE || CINE_MODE);
+  // resuming a beat-driven op skips the opening cinematic — you have seen it
+  const wantCine = G.operation && G.operation.intro && firstWave === 1 && cinema && (!SHOT_MODE || CINE_MODE);
   if (wantCine) {
     G.state = 'cinema';
     hudEl.classList.add('hidden');
@@ -2627,6 +3009,25 @@ function startGame(lock = true, silent = false) {
 }
 
 function resetGame() {
+  // Versus state must not leak into the next run (a solo run after a versus
+  // match used to keep the gas mirror damaging the player). LAN versus entry
+  // points re-apply their flags AFTER startGame()/resetGame() for this reason.
+  G.versusMode = false;
+  G.versusOver = false;
+  G.versusGraceT = 0;
+  G.versusGraceNotified = false;
+  G.teamScores = [0, 0];
+  versusBots = [];
+  teamBrains = [null, null];
+  teamDirectors = [null, null];
+  zoneBombT = 6;
+  spawnWaveMemory.recent.length = 0;
+  G.lastDeathPos = null;
+  G.downedT = 0;
+  if (coopDowned) coopDowned.clearAll();
+  unmountAllReviveTargets();
+  stopZone();
+  hideVersusEnd();
   if (inventory) inventory.reset();
   speedBoostT = 0; G.speedBoost = 0;
   applyMoveSpeedMult();
@@ -2647,6 +3048,9 @@ function resetGame() {
   G.site = null;
   G.playRect = null;
   G.boss = null;
+  G.bossBeatSpawned = false;
+  resetBossPhases();
+  unmountBeatInteract();
   G.diff = DIFF_TIERS[0];
   firingSlots.max = G.diff.maxFiring;
   firingSlots.at.length = 0;
@@ -2723,6 +3127,90 @@ function coopAllyCount() {
   return 1;
 }
 
+/* ---- per-mode wave spawn plans (Phase 1) ---------------------------------
+   Each mode owns a generator (systems/spawn.js); the flat pool picker is
+   only the fallback when a generator cannot produce a sane plan. Zones are
+   clipped to the active district so a street fight never pulls from the
+   dock 400 m away. */
+function rememberSpawnZone(ids) {
+  for (const id of ids) {
+    spawnWaveMemory.recent.push(id);
+  }
+  while (spawnWaveMemory.recent.length > 6) spawnWaveMemory.recent.shift();
+}
+
+/** Which AI profile this wave's soldiers carry (Phase 2). Each mode gets its
+    own policy — survival hunts, defend waves advance on the zone, extract
+    enemies fortify then relent — versus bots are brain-driven. */
+function waveProfileName() {
+  if (G.versusMode) return 'squad';
+  // beat-driven ops: the beat names its own policy (infil → garrison etc.)
+  const op = G.operation;
+  const beat = op && op.beats ? beatForWave(op.beats, G.wave) : null;
+  if (beat && beat.ai) return beat.ai;
+  if (G.operation && G.wave === 1 && G.mode === 'survival') return 'garrison';
+  if (G.mode === 'defend') return 'assault';
+  if (G.mode === 'extract') return 'interceptor';
+  return 'hunter';
+}
+
+/** The mission area a zoneAnchor profile should advance on (defend/extract
+    objective); null when the current fight has no objective zone. */
+function missionAnchor() {
+  const z = G.objective && G.objective.zone;
+  return z && Number.isFinite(z.x) ? { x: z.x, z: z.z } : null;
+}
+
+function buildWaveSpawnPlan(n, total) {
+  if (!spawnDirector || !spawnDirector.zones.length) return [];
+  if (G.versusMode || net.role === 'client') return [];
+  const rect = (G.operation && G.operation.spawnRect) || G.playRect;
+  const zones = zonesWithinRect(spawnDirector.zones, rect);
+  if (!zones.length) return [];
+  const mode = G.mode;
+  const count = Math.min(4, total);
+  const playerPos = controller.pos;
+  const facing = controller.headingDeg;
+  let picks = [];
+  if (mode === 'defend' && G.objective) {
+    picks = spawnDirector.pickDefend({
+      zones, objective: G.objective.zone, coverPoints: level.coverPoints,
+      count: Math.min(3, total),
+    });
+  } else if (mode === 'infil' && G.objective) {
+    // infil: the garrison garrisons the objective — fortify-style spread
+    // AROUND the zone the player is sneaking toward, not on the player's axes
+    picks = spawnDirector.pickExtract({
+      zones, extractZone: G.objective.zone, playerPos, playerFacingDeg: facing,
+      phase: 'fortify', count: Math.min(3, total),
+    });
+  } else if (mode === 'extract' && G.objective) {
+    picks = spawnDirector.pickExtract({
+      zones, extractZone: G.objective.zone, playerPos, playerFacingDeg: facing,
+      phase: 'fortify', count: Math.min(3, total),
+    });
+  } else {
+    picks = spawnDirector.pickSurvival({
+      zones, playerPos, playerFacingDeg: facing, wave: n,
+      recentZones: spawnWaveMemory.recent, count,
+    });
+  }
+  if (picks.length) rememberSpawnZone([...new Set(picks.map((p) => p.zone.id))]);
+  return picks;
+}
+
+/** Validate one generator pick into a real spawn: jitter + nav resolve +
+    reachability (sealed campaign ops skip the reach check, as before). */
+function placePlanPick(pick, sealed) {
+  for (let t = 0; t < 5; t++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = t === 0 ? 0 : 0.9 + Math.random() * 1.3;
+    const cand = resolveSpawn(pick.point.x + Math.cos(a) * r, pick.point.z + Math.sin(a) * r, pick.point.y || 0);
+    if (cand && (sealed || spawnReachesPlayer(cand))) return cand;
+  }
+  return null;
+}
+
 function startWave(n) {
   const prevTier = G.diff;
   G.diff = diffForWave(n);
@@ -2732,6 +3220,9 @@ function startWave(n) {
   firingSlots.at.length = 0;
   G.wave = n;
   G.upgradeShown = false;
+  // the current wave's beat, resolved once for the whole function
+  const opB = G.operation && G.operation.beats ? beatForWave(G.operation.beats, n) : null;
+  unmountBeatInteract();
   if (G.stats) G.stats.damagedThisWave = false;
   applyAtmosphereForWave(n);
   const op = G.operation;
@@ -2751,20 +3242,24 @@ function startWave(n) {
     if (hud.radio && !(n === 1 && op.intro)) {
       for (const line of lines) hud.radio(line.speaker, line.text, 7200, line.voice);
     }
-    if (op.bossWave === n) {
+    if (op.bossWave === n || (opB && opB.type === 'boss')) {
+      G.bossBeatSpawned = false;
+      const beatBoss = opB && opB.boss ? opB : null;
       if (op.bossIntro && cinema && (!SHOT_MODE || CINE_MODE)) {
         G.state = 'cinema';
         hudEl.classList.add('hidden');
         viewmodel.root.visible = false;
         cinema.play(op.bossIntro, () => {
-          spawnBoss(op);
+          spawnBoss(op, beatBoss);
           G.state = 'playing';
           viewmodel.root.visible = true;
           hudEl.classList.toggle('hidden', HIDE_HUD);
         });
       } else {
-        spawnBoss(op);
+        spawnBoss(op, beatBoss);
       }
+    } else if (opB && opB.type !== 'boss') {
+      G.bossBeatSpawned = false;
     }
   }
   setupObjective(n);
@@ -2777,7 +3272,10 @@ function startWave(n) {
   }
   const allies = coopAllyCount();
   const coopBonus = allies > 1 ? 2 + 2 * (allies - 1) : 0;
-  const total = Math.min(14, 3 + n + coopBonus);   // + up to 2 roof snipers => <=16
+  // beat checkpoint (Phase 3): dying restarts this beat, not the whole op
+  if (opB && !net.role) saveBeatCheckpoint(G.operation.id, n);
+  const beatEnemies = beatEnemyCount(opB);
+  const total = beatEnemies != null ? beatEnemies : Math.min(14, 3 + n + coopBonus);   // + up to 2 roof snipers => <=16
   G.waveTotal = total;
   G.waveRemaining = total;
   G.spawnQueue = [];
@@ -2791,25 +3289,38 @@ function startWave(n) {
   const pool = (allowedSpawns.length ? allowedSpawns : level.spawnPoints).slice();
   const objZone = G.objective ? G.objective.zone : null;
   const sealed = !!(op && op.spawnRect);
+  const planPicks = buildWaveSpawnPlan(n, total);
   for (let i = 0; i < total; i++) {
-    let best = null;
-    if (objZone) best = pickZoneSpawn(pool, objZone);
-    else best = pickSpawnPoint(pool, n >= 2, !sealed);
-    if (!best) continue;
-    let sx = best.x, sz = best.z, sy = best.y || 0;
-    for (let t = 0; t < 5; t++) {
-      const a = Math.random() * Math.PI * 2, r = 0.9 + Math.random() * 1.3;
-      const cand = resolveSpawn(best.x + Math.cos(a) * r, best.z + Math.sin(a) * r, sy);
-      if (cand && (sealed || spawnReachesPlayer(cand))) { sx = cand.x; sz = cand.z; sy = cand.y || sy; break; }
+    let sx = null, sz = null, sy = 0;
+    // mode generator first: the wave arrives as a coordinated push along its
+    // own plan instead of one point at a time from the flat pool
+    if (planPicks.length) {
+      const cand = placePlanPick(planPicks[i % planPicks.length], sealed);
+      if (cand) { sx = cand.x; sz = cand.z; sy = cand.y || 0; }
     }
-    G.spawnQueue.push({ x: sx, z: sz, y: sy, type: chooseArchetype(n, i) });
+    if (sx === null) {
+      let best = null;
+      if (objZone) best = pickZoneSpawn(pool, objZone);
+      else best = pickSpawnPoint(pool, n >= 2, !sealed);
+      if (!best) continue;
+      sx = best.x; sz = best.z; sy = best.y || 0;
+      for (let t = 0; t < 5; t++) {
+        const a = Math.random() * Math.PI * 2, r = 0.9 + Math.random() * 1.3;
+        const cand = resolveSpawn(best.x + Math.cos(a) * r, best.z + Math.sin(a) * r, sy);
+        if (cand && (sealed || spawnReachesPlayer(cand))) { sx = cand.x; sz = cand.z; sy = cand.y || sy; break; }
+      }
+    }
+    G.spawnQueue.push({
+      x: sx, z: sz, y: sy, type: chooseArchetype(n, i),
+      profile: waveProfileName(), anchor: missionAnchor(),
+    });
   }
   const roofSpawns = level.roofSpawns || [];
   if (roofSpawns.length && n >= 6) {
     const count = Math.min(2, 1 + Math.floor((n - 6) / 3));
     for (let i = 0; i < count; i++) {
       const sp = roofSpawns[(n + i) % roofSpawns.length];
-      G.spawnQueue.unshift({ x: sp.x, z: sp.z, y: sp.y, type: 'sniper', roof: true });
+      G.spawnQueue.unshift({ x: sp.x, z: sp.z, y: sp.y, type: 'sniper', roof: true, profile: waveProfileName() });
     }
     G.waveRemaining += count;
     G.waveTotal += count;
@@ -2818,7 +3329,7 @@ function startWave(n) {
   G.waveClearTimer = 0;
   hud.setWave(n);
   hud.setWaveProgress(0);
-  hud.setObjective(`清剿残敌 · 剩余 ${total}`);
+  hud.setObjective(opB ? (opB.text || `节拍 ${n}`) : `清剿残敌 · 剩余 ${total}`);
   hud.setHint('WAVE ' + n + (G.mode === 'defend' ? ' · DEFEND' : G.mode === 'extract' ? ' · EXTRACT' : ''));
   setTimeout(() => hud.setHint(''), 1400);
   if (n >= 3 && n % 3 === 0) spawnHotDrop(n);
@@ -2981,11 +3492,15 @@ function relocateEnemy(e) {
       return true;
     }
   }
-  // second choice: re-insert at a reachable ring around the player
-  const sp = ringSpawn(12, 26);
+  // second choice: re-insert on a far ring (26-40 m). Dropping a stuck
+  // soldier 12 m from the player read as a spawn-teleport gank; the far
+  // ring keeps him in the fight without the pop-in, and the flank bark is
+  // the audible "he came around the side" cue the old teleport never gave.
+  const sp = ringSpawn(26, 40) || ringSpawn(12, 26);
   if (sp) {
     p.set(sp.x, sp.y || 0, sp.z);
     e.path = null; e.pathI = 0; e.pathTimer = 0; e.navTarget.x = NaN;
+    if (barks && barks.say) barks.say('flank', p);
     return true;
   }
   return false;
@@ -3028,6 +3543,10 @@ function spawnEnemy(pos, opts = {}) {
     if (zone) e.setBounds(zone);
   }
   e._netId = netEnemySeq++;
+  // Phase 2 profile: policy rides on the spawn request, never on the
+  // recycled instance (spawn() resets AI state but keeps the policy object).
+  if (pos.profile) e.profile = profileFor(pos.profile);
+  e.zoneAnchor = pos.anchor ? { x: pos.anchor.x, z: pos.anchor.z } : null;
   e.root.visible = true;
   if (SHOT_MODE) e.state = 'engage';
   return e;
@@ -3046,7 +3565,11 @@ function updateWaves(dt) {
     }
   }
   const alive = enemies.filter((e) => e.alive).length;
-  if (G.waveRemaining <= 0 && G.spawnQueue.length === 0 && alive === 0) {
+  // boss beats complete on the boss going down — escorts must not gate it
+  const opB = G.operation && G.operation.beats ? beatForWave(G.operation.beats, G.wave) : null;
+  const beatBossDone = !!opB && opB.type === 'boss' && G.bossBeatSpawned
+    && (!G.boss || !G.boss.alive);
+  if ((G.waveRemaining <= 0 && G.spawnQueue.length === 0 && alive === 0) || beatBossDone) {
     const obj = G.objective;
     if (obj && !obj.done) {
       if (obj.type === 'defend') {
@@ -3061,7 +3584,12 @@ function updateWaves(dt) {
         }
         return;
       }
+      // infil / interact complete from the objective, never from a clear
+      if (obj.type === 'infil' || obj.type === 'interact') return;
     }
+    // objective-driven beats advance ONLY through onObjectiveDone → advanceBeat;
+    // running the clear path too would open the upgrade pick twice
+    if (opB && BEAT_OBJECTIVE_TYPES.includes(opB.type)) return;
     if (G.waveClearTimer === 0) {
       G.waveClearTimer = 0.001;
       hud.setHint('WAVE CLEARED');
@@ -3083,7 +3611,7 @@ function updateWaves(dt) {
     G.waveClearTimer += dt;
     if (!G.upgradeShown && G.waveClearTimer > 1.0) {
       G.upgradeShown = true;
-      if (G.operation && G.wave >= G.operation.waves) { finishOperation(); return; }
+      if (G.operation && G.wave >= operationWaves(G.operation)) { finishOperation(); return; }
       openUpgradeChoice();
     }
   }
@@ -3218,6 +3746,7 @@ function fireShot() {
         ox: +o.x.toFixed(2), oy: +o.y.toFixed(2), oz: +o.z.toFixed(2),
         dx: +_dir.x.toFixed(4), dy: +_dir.y.toFixed(4), dz: +_dir.z.toFixed(4),
         weapon: w.id,
+        dmg: G.upgrades.damage,
       });
     }
     _end.copy(o).addScaledVector(_dir, 120);
@@ -3366,26 +3895,121 @@ function tryFire(dt) {
   fireShot();
 }
 
-function spawnBoss(op) {
+function spawnBoss(op, beatBoss = null) {
   if (!level || !controller) return;
   const p = controller.pos;
-  const bs = op.bossSpawn;
+  // beat.boss (Phase 3) overrides the op-level boss fields
+  const src = beatBoss ? beatBoss.boss : op;
+  const bs = (src && src.spawn) || op.bossSpawn;
   const zx = bs ? bs.x : p.x + (Math.random() < 0.5 ? -6 : 6);
   const zz = bs ? bs.z : p.z - 16;
-  spawnEnemy({ x: zx, z: zz, type: 'shield' });
-  const e = enemies[enemies.length - 1];
+  // spawnEnemy recycles dead instances, so trust its return value rather
+  // than the array tail
+  const e = spawnEnemy({ x: zx, z: zz, type: 'shield' });
   if (!e || !e.alive) return;
   e.isBoss = true;
-  e.maxHp = op.bossHp || 560;
+  e.maxHp = (src && src.hp) || op.bossHp || 560;
   e.hp = e.maxHp;
-  e.root.scale.setScalar(op.bossScale || 1.16);
+  e.root.scale.setScalar((src && src.scale) || op.bossScale || 1.16);
   G.boss = e;
+  G.bossBeatSpawned = true;
+  resetBossPhases();
   if (hud) {
-    hud.toast(`${op.bossName || '指挥官'} · 重甲`, 2600);
-    hud.setObjective(`击杀 ${op.bossName || '敌方指挥官'}`);
+    hud.toast(`${(src && src.name) || op.bossName || '指挥官'} · 重甲`, 2600);
+    hud.setObjective(`击杀 ${(src && src.name) || op.bossName || '敌方指挥官'}`);
   }
-  const bossLine = op.radio.find((r) => r.at === op.bossWave);
+  const bossLine = op.radio.find((r) => r.at === (beatBoss ? G.wave : op.bossWave));
     if (hud && hud.radio) hud.radio('VEGA', bossLine?.text || '指挥官下车了。', 5600, bossLine?.voice || 'cmd_disembark');
+}
+
+/* ---- boss phases (Phase 3, plan §4.5) --------------------------------------
+   A boss is no longer "a thick soldier": op.bossPhases is a list of threshold
+   actions keyed on his HP fraction. Evaluated every frame while he lives;
+   each entry fires once.
+     warden    — escorts spawn in and he resists `resist` damage while ANY
+                 escort lives (kill the guard first)
+     escort    — guards without the damage buff
+     charge    — he rusherizes: movement multiplier + accuracy bump
+     relocate  — teleport to a fallback position, optionally calling
+                 reinforcements (Karim's office dance)
+     artillery — the crane walks fire onto the player (Salim, OP14: the
+                 player killstreak system fired by the enemy) --------------- */
+
+let bossPhaseFired = null;
+let bossEscorts = [];
+let bossWardenResist = 0;
+
+function resetBossPhases() {
+  bossPhaseFired = new Set();
+  bossEscorts = [];
+  bossWardenResist = 0;
+  if (G.boss) G.boss.damageResist = 0;
+}
+
+function spawnBossEscort(boss, archetype) {
+  const ang = Math.random() * Math.PI * 2;
+  const e = spawnEnemy({
+    x: boss.root.position.x + Math.cos(ang) * 4.5,
+    z: boss.root.position.z + Math.sin(ang) * 4.5,
+    y: 0, type: archetype || 'shield', profile: 'assault',
+  });
+  if (e) bossEscorts.push(e);
+  return e;
+}
+
+function runBossPhase(ph) {
+  const boss = G.boss;
+  if (!boss) return;
+  switch (ph.action) {
+    case 'warden':
+      for (let i = 0; i < (ph.escorts || 2); i++) spawnBossEscort(boss, ph.archetype);
+      bossWardenResist = ph.resist != null ? ph.resist : 0.5;
+      break;
+    case 'escort':
+      for (let i = 0; i < (ph.count || 2); i++) spawnBossEscort(boss, ph.archetype);
+      break;
+    case 'charge':
+      boss.advanceSpeedMult = ph.mult || 1.4;
+      boss.accuracyMult = Math.min(1.2, boss.accuracyMult + 0.08);
+      break;
+    case 'relocate': {
+      if (ph.to) {
+        const sp = resolveSpawn(ph.to.x, ph.to.z, 0);
+        if (sp) {
+          boss.root.position.set(sp.x, sp.y || 0, sp.z);
+          boss.path = null; boss.pathI = 0; boss.pathTimer = 0;
+          boss.navTarget.x = NaN;
+        }
+      }
+      if (ph.reinforcements) spawnReinforcements(ph.reinforcements);
+      break;
+    }
+    case 'artillery':
+      if (artillery) {
+        artillery.strike({ x: controller.pos.x, z: controller.pos.z }, { shells: ph.shells || 3 });
+      }
+      break;
+    default: break;
+  }
+  if (ph.radioText && hud && hud.radio) hud.radio('VEGA', ph.radioText, 4200);
+  else if (hud && hud.toast) hud.toast('指挥官阶段变化', 2200);
+}
+
+function updateBossPhases() {
+  const op = G.operation;
+  if (!op || !op.bossPhases || !G.boss || !G.boss.alive) return;
+  if (!bossPhaseFired) bossPhaseFired = new Set();
+  // the warden buff lives while ANY escort draws breath
+  const escortAlive = bossEscorts.some((e) => e.alive);
+  G.boss.damageResist = bossWardenResist > 0 && escortAlive ? bossWardenResist : 0;
+  const frac = G.boss.hp / Math.max(1, G.boss.maxHp);
+  for (const ph of op.bossPhases) {
+    if (bossPhaseFired.has(ph)) continue;
+    const at = ph.atHpFrac != null ? ph.atHpFrac : 0;
+    if (frac > at) continue;
+    bossPhaseFired.add(ph);
+    runBossPhase(ph);
+  }
 }
 
 function showMissionOverlay(op) {
@@ -3425,6 +4049,9 @@ function finishOperation() {
   if (voice) voice.stop();
   if (hud && hud.clearRadio) hud.clearRadio();
   markOperationDone(campaign, op.id);
+  // the op is over: the next start of ANY op begins at beat 1
+  clearBeatCheckpoint();
+  unmountBeatInteract();
   renderOps();
   if (op.outro && cinema && (!SHOT_MODE || CINE_MODE)) {
     G.state = 'cinema';
@@ -3487,13 +4114,17 @@ function returnToMenu() {
   rollDeployFlavor();
 }
 
-function onEnemyKilled(enemy, headshot, cause = 'bullet') {
+function onEnemyKilled(enemy, headshot, cause = 'bullet', killerTeam) {
+  // killerTeam resolution: callers pass the SHOOTER's faction (a remote
+  // client's, a grenade thrower's); `null` means teamless (zone/artillery);
+  // undefined falls back to the local player's team.
+  const kt = killerTeam === null ? undefined : (killerTeam !== undefined ? killerTeam : net.team);
   // Versus: a downed fill bot is a team point and a respawn timer, not PvE
   // score — the wave/upgrade economy does not run in versus at all.
   if (G.versusMode && enemy && enemy.team != null) {
     const bot = versusBots.find((b) => b.e === enemy);
-    if (bot) onVersusBotDown(bot, net.team);
-    else onVersusDeath(enemy.team, net.team, enemy.team === 0 ? '蓝军' : '红军');
+    if (bot) onVersusBotDown(bot, kt);
+    else onVersusDeath(enemy.team, kt, enemy.team === 0 ? '蓝军' : '红军');
     hud.addKillFeed(headshot ? '爆头击杀' : '击杀', headshot, currentWeapon().name);
     if (perception && enemy.root) perception.casualty(enemy.root.position.x, enemy.root.position.z, 22);
     return;
@@ -3617,6 +4248,7 @@ function updateReload(dt) {
 /* ------------------------------------------------------------------ grenade */
 function throwGrenade() {
   if (G.grenades <= 0) return;
+  if (G.state !== 'playing') return;
   G.grenades--;
   G.tut.grenades++;
   hud.setGrenades(G.grenades);
@@ -3628,8 +4260,49 @@ function throwGrenade() {
   mesh.position.copy(engine.camera.position).addScaledVector(_dir, 0.5);
   const vel = _dir.clone().multiplyScalar(15).add(new THREE.Vector3(0, 3.4, 0));
   engine.scene.add(mesh);
-  grenades.push({ mesh, vel, fuse: 2.4, t: 0 });
+  // LAN client: the host simulates the authoritative grenade (damage, noise).
+  // Ours is a visual copy of the arc so the throw feels right; the host's
+  // 'boom' event supplies the explosion.
+  const visual = net.role === 'client';
+  grenades.push({ mesh, vel, fuse: 2.4, t: 0, visual });
+  if (visual && lanSession) {
+    lanSession.sendEvent('grenade', {
+      ox: +mesh.position.x.toFixed(2), oy: +mesh.position.y.toFixed(2), oz: +mesh.position.z.toFixed(2),
+      vx: +vel.x.toFixed(2), vy: +vel.y.toFixed(2), vz: +vel.z.toFixed(2),
+    });
+  }
   audio.reload('bolt');
+}
+
+/** A remote player's grenade. The host simulates it for real (damage, AI
+    noise, versus player hits); other clients render the same arc as a
+    visual-only copy. The throw is sanity-checked against the sender's last
+    known position (LAN trust, but no cross-map grenades). */
+function spawnNetGrenade(msg) {
+  if (!engine) return;
+  const ox = Number(msg.ox), oy = Number(msg.oy), oz = Number(msg.oz);
+  if (![ox, oy, oz].every(Number.isFinite)) return;
+  const fromId = String(msg.from || msg.id || '');
+  const sender = fromId ? net.remote.get(fromId) : null;
+  if (net.role === 'host') {
+    if (!sender) return;
+    if (Math.hypot(ox - sender.x, oz - sender.z) > 8) return;
+  }
+  const geo = new THREE.SphereGeometry(0.062, 10, 8);
+  const mat = new THREE.MeshStandardMaterial({ color: 0x3b4232, roughness: 0.7, metalness: 0.35 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.set(ox, oy, oz);
+  engine.scene.add(mesh);
+  const visual = net.role === 'client';
+  grenades.push({
+    mesh,
+    vel: new THREE.Vector3(Number(msg.vx) || 0, Number(msg.vy) || 0, Number(msg.vz) || 0),
+    fuse: 2.4, t: 0,
+    visual,
+    fromId: visual ? null : fromId,
+    attackerTeam: !visual && sender ? sender.team : undefined,
+  });
+  if (audio) audio.reload('bolt');
 }
 
 function updateGrenades(dt) {
@@ -3649,21 +4322,49 @@ function updateGrenades(dt) {
       g.vel.z *= 0.7;
     }
     if (g.fuse <= 0) {
+      if (g.visual || net.role === 'client') {
+        // visual copy: the host's 'boom' event owns the explosion — just retire
+        engine.scene.remove(g.mesh);
+        geoDispose(g.mesh);
+        grenades.splice(i, 1);
+        continue;
+      }
       fx.explosion(g.mesh.position.clone(), 1.0);
       audio.explosion(0, g.mesh.position.distanceTo(engine.camera.position));
       if (perception) perception.noise(g.mesh.position.x, g.mesh.position.z, 45, 1.0);
       controller.addShake(0.85);
+      // Who threw it: a remote player's grenade keeps THEIR team (friendly
+      // fire + scoring both key off the thrower, never off the sim owner).
+      const throwerTeam = g.attackerTeam !== undefined ? g.attackerTeam : (net.role ? net.team : undefined);
       const dist = g.mesh.position.distanceTo(engine.camera.position);
-      if (dist < 7) applyPlayerDamage(Math.max(10, 85 * (1 - dist / 7)), g.mesh.position);
+      // own grenade always hurts; in versus an ENEMY grenade hurts too
+      // (friendly fire stays off, matching the pdmg policy)
+      if (dist < 7 && (g.fromId == null || (G.versusMode && throwerTeam !== net.team))) {
+        applyPlayerDamage(Math.max(10, 85 * (1 - dist / 7)), g.mesh.position);
+      }
       for (const e of enemies) {
         if (!e.alive) continue;
         const d = e.root.position.distanceTo(g.mesh.position);
         if (d < 7.5) {
           // attackerTeam = thrower's team; friendly bots take reduced damage
           // and no AI panic. Artillery stays teamless (environmental).
-          const died = e.takeDamage(180 * (1 - d / 7.5), g.mesh.position, new THREE.Vector3(0, 1, 0), 'torso', net.team);
-          if (died) onEnemyKilled(e, false, 'grenade');
+          const died = e.takeDamage(180 * (1 - d / 7.5), g.mesh.position, new THREE.Vector3(0, 1, 0), 'torso', throwerTeam);
+          if (died) onEnemyKilled(e, false, 'grenade', throwerTeam);
         }
+      }
+      // Versus: a grenade hurts enemy-team PLAYERS as well as bots.
+      if (G.versusMode && net.role === 'host') {
+        for (const r of net.remote.values()) {
+          if (!r.alive) continue;
+          if (throwerTeam != null && r.team != null && r.team === throwerTeam) continue;
+          const d = Math.hypot(r.x - g.mesh.position.x, r.z - g.mesh.position.z);
+          if (d < 7.5) applyLanRemoteDamage(r.id, Math.max(10, 85 * (1 - d / 7.5)), g.mesh.position, throwerTeam);
+        }
+      }
+      if (net.role === 'host' && lanSession && net.started) {
+        lanSession.broadcastEvent('boom', {
+          x: +g.mesh.position.x.toFixed(2), y: +g.mesh.position.y.toFixed(2), z: +g.mesh.position.z.toFixed(2),
+        });
       }
       engine.scene.remove(g.mesh);
       geoDispose(g.mesh);
@@ -3890,7 +4591,9 @@ function artilleryDamageAt(point, radius, dmg) {
     const d = e.root.position.distanceTo(point);
     if (d < radius) {
       const died = e.takeDamage(dmg * (1 - (d / radius) * 0.35), point, _up, 'torso');
-      if (died) onEnemyKilled(e, false, 'artillery');
+      // artillery/zone shells are environmental: null killerTeam keeps the
+      // versus scoreboard from crediting a faction for a gas kill
+      if (died) onEnemyKilled(e, false, 'artillery', null);
     }
   }
   const pd = point.distanceTo(engine.camera.position);
@@ -4184,17 +4887,40 @@ function redeploy() {
 
 function playerDie() {
   if (G.state === 'dead') return;
+  // remembered so the next solo spawn lands far from this spot
+  G.lastDeathPos = { x: controller.pos.x, z: controller.pos.z };
   if (net.role) {
     G.hp = 0;
-    G.state = 'dead';
+    // Versus keeps the arcade instant respawn; LAN CO-OP goes down instead —
+    // teammates can pick you up (Phase 4a), bleeding out is the real death.
+    if (G.versusMode) {
+      G.state = 'dead';
+      controller.die();
+      viewmodel.state.dead = true;
+      audio.death();
+      audio.setLowHealth(false);
+      input.unlock();
+      net.respawnT = 5.0;
+      if (hud && hud.setHint) hud.setHint('阵亡 · ' + Math.round(net.respawnT) + ' 秒后重新部署');
+      if (net.role === 'client' && lanSession) lanSession.sendEvent('down');
+      return;
+    }
+    G.state = 'downed';
+    G.downedT = DOWN_BLEED_S;
     controller.die();
     viewmodel.state.dead = true;
     audio.death();
     audio.setLowHealth(false);
     input.unlock();
-    net.respawnT = G.versusMode ? 5.0 : 4.0;
-    if (hud && hud.setHint) hud.setHint('阵亡 · ' + Math.round(net.respawnT) + ' 秒后重新部署');
-    if (net.role === 'client' && lanSession) lanSession.sendEvent('down');
+    const dp = { x: +controller.pos.x.toFixed(1), z: +controller.pos.z.toFixed(1) };
+    if (net.role === 'host') {
+      ensureCoopDowned().down(String(net.selfId), dp.x, dp.z, Date.now());
+      if (lanSession) lanSession.broadcastEvent('downed', { from: String(net.selfId), ...dp });
+      checkCoopWipe();
+    } else if (lanSession) {
+      lanSession.sendEvent('downed', dp);
+    }
+    if (hud && hud.setHint) hud.setHint(`倒地 · 等待救援 · ${Math.ceil(G.downedT)} 秒后流血`);
     return;
   }
   G.hp = 0;
@@ -4210,7 +4936,14 @@ function playerDie() {
   if (fk) fk.textContent = G.kills;
   if (fw) fw.textContent = G.wave;
   if (fs) fs.textContent = G.score;
-  finishRun();
+  // beat-driven campaign: death is a checkpoint retry, not the end of a run —
+  // the board submission waits for the op to actually finish
+  if (G.operation && G.operation.beats) {
+    const sub = document.querySelector('#redeploy .rb-sub');
+    if (sub) sub.textContent = `从节拍 ${G.wave} 重试`;
+  } else {
+    finishRun();
+  }
   setTimeout(() => deathEl.classList.remove('hidden'), 900);
 }
 
@@ -4219,9 +4952,44 @@ const enemyCtx = {
   playerPos: new THREE.Vector3(),
   playerAlive: true,
   playerSpeed: 0,
+  /** >0 while the local target moved fast in the last fraction of a second;
+      arms the late-dodge fairness recheck in Enemy.shoot. */
+  playerFastT: 0,
   fx: null, audio: null, camera: null,
   coverPoints: [],
-  damagePlayer: (amount, from) => applyPlayerDamage(amount, from),
+  // Who this enemy is shooting at THIS frame (host re-aims every enemy in the
+  // update loop): net.selfId/'local' = the local player, a peer id = remote
+  // player, 'bot:<n>' = a versus fill bot. Damage must follow the target or
+  // every bullet lands on the host no matter who was aimed at.
+  targetId: undefined,
+  attackerTeam: undefined,
+  damagePlayer: (amount, from) => {
+    const tid = enemyCtx.targetId;
+    if (tid != null && String(tid).startsWith('bot:')) {
+      const bot = botById(String(tid).slice(4));
+      if (bot && bot.e && bot.e.alive) {
+        const killed = bot.e.takeDamage(amount, from, null, 'torso', enemyCtx.attackerTeam);
+        if (killed) onVersusBotDown(bot, enemyCtx.attackerTeam);
+      }
+      return;
+    }
+    if (net.role === 'host' && tid != null
+        && String(tid) !== String(net.selfId) && String(tid) !== 'local') {
+      applyLanRemoteDamage(String(tid), amount, from, enemyCtx.attackerTeam);
+      return;
+    }
+    // Versus: an AI that kills the HOST player scores for its own faction —
+    // the kill was aimed (targetId = self), so the shooter's team applies.
+    // wasAlive gates out the rest of the killing burst (state is 'dead' by
+    // then, but hp stays 0 and would re-score every pellet).
+    const wasAlive = G.state === 'playing' && G.hp > 0;
+    applyPlayerDamage(amount, from);
+    if (wasAlive && G.versusMode && G.hp <= 0 && net.role) {
+      onVersusDeath(net.team,
+        Number.isFinite(enemyCtx.attackerTeam) ? enemyCtx.attackerTeam : undefined,
+        net.name || 'HOST');
+    }
+  },
   panFor: null,
   onEnemyFire: null,
 };
@@ -4235,11 +5003,14 @@ function setupEnemyCtx() {
   enemyCtx.nav = nav;
   enemyCtx.groundAt = (x, z, y) => level.groundHeight(x, z, y);
   enemyCtx.playerGroundY = 0;
+  // Phase 1: semantic spawn zones over the level's named regions
+  if (level) spawnDirector = createSpawnDirector({ level });
   // AI v2: shared perception + squad director (needs the nav grid + colliders)
   if (nav && level) {
     perception = new Perception();
     aiDirector = new AIDirector(nav, level, {
       barks,
+      perception,
       onBreach: (door) => onEnemyBreach(door),
     });
     enemyCtx.ai = {
@@ -4500,6 +5271,7 @@ function lanName() {
 }
 
 function lanDisposeActors() {
+  unmountNetMilestoneTarget();
   for (const r of net.remote.values()) { try { r.avatar.dispose(); } catch (e) { } }
   net.remote.clear();
   for (const e of net.enemies.values()) {
@@ -4532,21 +5304,42 @@ async function joinLan(data) {
   leaveLanSession();
   net.name = data.name || lanName();
   if (lanLobby) lanLobby.setStatus('connecting', 'CONNECTING · 正在连接 LAN 服务器…');
-  lanSession = createLanClient({
-    url: data.server || data.url,
-    room: data.room || 'ALPHA',
-    name: net.name,
-    p2p: data.p2p === true,
-    onLobby: onLanLobby,
-    onSnapshot: onLanSnapshot,
-    onEvent: onLanEvent,
-    onStatus: onLanStatus,
-  });
-  const res = await lanSession.connect();
+  // The room mode (coop/br) fixes the capacity on the server. A joiner whose
+  // local versus checkbox disagrees with the room gets MODE_MISMATCH — retry
+  // once with the room's mode instead of dumping the player at an error.
+  let wantMode = data.versus ? 'br' : 'coop';
+  let res = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    leaveLanSession();
+    lanSession = createLanClient({
+      url: data.server || data.url,
+      room: data.room || 'ALPHA',
+      name: net.name,
+      mode: wantMode,
+      p2p: data.p2p === true,
+      onLobby: onLanLobby,
+      onSnapshot: onLanSnapshot,
+      onEvent: onLanEvent,
+      onStatus: onLanStatus,
+    });
+    res = await lanSession.connect();
+    if (res && res.ok) break;
+    if (!res || res.error !== 'mode_mismatch') break;
+    wantMode = wantMode === 'br' ? 'coop' : 'br';
+  }
   if (!res || !res.ok) {
     if (lanLobby) lanLobby.setStatus('error', `ERROR · ${(res && res.error) || '连接失败'}`);
     lanSession = null;
     return;
+  }
+  // The room's mode is authoritative: sync the lobby checkbox so the slot
+  // count the UI shows (4 vs 8) matches the server's capacity.
+  const roomVersus = lanSession.mode === 'br';
+  const versusEl = document.getElementById('lan-versus');
+  if (versusEl && versusEl.checked !== roomVersus) {
+    versusEl.checked = roomVersus;
+    try { localStorage.setItem('dod.lan.versus.v1', roomVersus ? '1' : '0'); } catch (e) { /* ignore */ }
+    versusEl.dispatchEvent(new Event('change'));
   }
   net.selfId = res.id;
   net.hostId = res.host;
@@ -4607,8 +5400,9 @@ function onLanEvent(msg) {
     return;
   }
   if (msg.t !== 'event') return;
-  if (msg.kind === 'start' && net.role === 'client' && !net.started) {
-    startLanClientGame(msg.site, msg);
+  if (msg.kind === 'start' && net.role === 'client') {
+    if (!net.started) startLanClientGame(msg.site, msg);
+    else if (G.versusMode && msg.versus) restartVersusClient(msg);
     return;
   }
   if (msg.kind === 'host_change') {
@@ -4623,18 +5417,113 @@ function onLanEvent(msg) {
     spawnBombingRun(Number(msg.x) || 0, Number(msg.z) || 0, false);
     return;
   }
-  // Versus: player-shot-player. Applies on EVERY peer's mirror for instant
-  // feedback; the host's snapshot hp/alive values stay authoritative.
   // Server closed this connection because a newer one took over the
   // same-callsign seat (reconnect path). Explain and do not auto-reconnect:
-  // the close code is fatal, the newer session owns the seat now.
   if (msg.kind === 'replaced') {
     if (hud && hud.toast) hud.toast('此呼号已在别处重新连接 · 本会话已让位', 3200);
     leaveLanLobby();
     return;
   }
+  // A client's grenade: the host simulates it authoritatively and fans the
+  // throw out so every other peer renders the same arc (visual copy).
+  if (msg.kind === 'grenade') {
+    if (net.role === 'host') {
+      spawnNetGrenade(msg);
+      if (lanSession) lanSession.broadcastEvent('grenade', { ...msg, from: msg.id });
+    } else if (String(msg.from || '') !== String(net.selfId)) {
+      spawnNetGrenade(msg);
+    }
+    return;
+  }
+  if (msg.kind === 'boom' && net.role === 'client') {
+    const bp = new THREE.Vector3(Number(msg.x) || 0, Number(msg.y) || 0, Number(msg.z) || 0);
+    if (fx) fx.explosion(bp, 1.0);
+    if (audio) audio.explosion(0, bp.distanceTo(engine.camera.position));
+    return;
+  }
+  // A client used a collect marker: the host advances the shared chain if
+  // that player's mirrored position is actually at the step (LAN trust, but
+  // no cross-map collections).
+  if (msg.kind === 'mcollect' && net.role === 'host') {
+    const step = milestones && !milestones.isDone ? milestones.current : null;
+    const r = net.remote.get(String(msg.id));
+    if (step && step.kind === 'collect' && r && r.alive
+        && Math.hypot(r.x - step.x, r.z - step.z) <= (step.r || 2.5) + 2.0) {
+      milestones.notifyCollect();
+    }
+    return;
+  }
+  // Host declared the versus match over: adopt the authoritative score + end.
+  if (msg.kind === 'vend' && net.role === 'client' && G.versusMode) {
+    if (Array.isArray(msg.scores) && msg.scores.length === 2) {
+      G.teamScores[0] = Number(msg.scores[0]) || 0;
+      G.teamScores[1] = Number(msg.scores[1]) || 0;
+    }
+    endVersusMatch(msg.win === 0 || msg.win === 1 ? msg.win : null);
+    return;
+  }
+  if (msg.kind === 'vrematch' && net.role === 'client' && G.versusMode) {
+    restartVersusClient(msg);
+    return;
+  }
+  // Versus: player-shot-player. The VICTIM applies the hit to their own real
+  // HP (LAN trust: your HP is yours); every other peer applies it to the
+  // mirror for instant feedback. The host's snapshot stays authoritative.
   if (msg.kind === 'pdmg' && G.versusMode) {
+    if (String(msg.target) === String(net.selfId)) {
+      if (G.state === 'playing' && !(G.versusGraceT > 0) && !G.versusOver) {
+        applyPlayerDamage(Number(msg.amount) || 0, null);
+      }
+      return;
+    }
     versusApplyPlayerDamage(msg.target, msg.amount || 0, msg.team, !!msg.headshot);
+    return;
+  }
+  // ---- LAN co-op downed / revive (Phase 4a) — co-op only, versus excluded ----
+  if (!G.versusMode && net.started) {
+    if (msg.kind === 'downed') {
+      const from = String(msg.from || msg.id || '');
+      if (from && from !== String(net.selfId)) {
+        onPeerDowned(from, Number(msg.x) || 0, Number(msg.z) || 0);
+        if (net.role === 'host') {
+          // fan out so every OTHER client can offer the revive
+          if (lanSession) lanSession.broadcastEvent('downed', { from, x: msg.x, z: msg.z });
+        }
+      }
+      return;
+    }
+    if (msg.kind === 'revive' && net.role === 'host') {
+      hostRevive(String(msg.id), String(msg.target || ''));
+      return;
+    }
+    if (msg.kind === 'revived') {
+      handleRevived(String(msg.target || ''), String(msg.by || ''));
+      return;
+    }
+    if (msg.kind === 'bledout') {
+      const from = String(msg.from || msg.id || '');
+      if (from && from !== String(net.selfId)) onPeerBledOut(from);
+      return;
+    }
+    if (msg.kind === 'wipe' && net.role === 'client') {
+      coopWipeLocal();
+      return;
+    }
+    if (msg.kind === 'upoffer' && net.role === 'client') {
+      clientUpgradeOffer(msg.cards);
+      return;
+    }
+  }
+  // A client's own death report carries no target: mark THAT client's mirror
+  // on the host. (The old fallthrough applied it to the host — every client
+  // death used to kill the host too.)
+  if (msg.kind === 'down' && net.role === 'host' && msg.id && String(msg.id) !== String(net.selfId)) {
+    const r = net.remote.get(String(msg.id));
+    if (r) {
+      r.hp = 0;
+      r.alive = false;
+      if (r.avatar) r.avatar.alive = false;
+    }
     return;
   }
   if (msg.target && String(msg.target) !== String(net.selfId)) return;
@@ -4766,10 +5655,24 @@ function getOrCreateNetEnemy(data) {
 
 /** Clients do not simulate the chain — they mirror the host's view of it.
     This keeps a single source of truth for progress while still showing every
-    player what the squad is working on. */
+    player what the squad is working on. A `collect` step is also USABLE here:
+    the marker mounts locally and the use is reported to the host, which
+    validates the distance before advancing the shared chain. */
+let netMilestoneTarget = null;
+let netMilestoneKey = null;
+
+function unmountNetMilestoneTarget() {
+  if (netMilestoneTarget && interact) {
+    try { interact.remove(netMilestoneTarget); } catch (e) { /* already gone */ }
+  }
+  netMilestoneTarget = null;
+  netMilestoneKey = null;
+}
+
 function applyLanMilestones(data) {
   if (!hud) return;
   if (!data) {
+    unmountNetMilestoneTarget();
     if (hud.hideMilestones) hud.hideMilestones();
     return;
   }
@@ -4785,6 +5688,23 @@ function applyLanMilestones(data) {
       ? Math.hypot(controller.pos.x - st.x, controller.pos.z - st.z)
       : null;
     hud.setZoneDistance((st.kind === 'reach' || st.kind === 'hold') && d != null && d > 1 ? d : null);
+  }
+  if (interact && net.role === 'client') {
+    const key = (st.kind === 'collect' && !st.done && Number.isFinite(st.x))
+      ? `${st.index}:${st.kind}:${st.x}:${st.z}`
+      : null;
+    if (key !== netMilestoneKey) {
+      unmountNetMilestoneTarget();
+      netMilestoneKey = key;
+      if (key) {
+        netMilestoneTarget = interact.add({
+          x: st.x, z: st.z, r: st.r || 2.5,
+          label: '按住 E 搜集物资',
+          hold: 0.8,
+          onUse: () => { if (lanSession) lanSession.sendEvent('mcollect', { step: st.index }); },
+        });
+      }
+    }
   }
 }
 
@@ -4864,9 +5784,11 @@ function nearestLanTarget(pos, selfTeam = undefined) {
   return best;
 }
 
-function applyLanRemoteDamage(id, amount, from) {
+function applyLanRemoteDamage(id, amount, from, attackerTeam) {
   const r = net.remote.get(String(id));
   if (!r || !r.alive) return;
+  // Versus deployment grace: nothing may damage humans while teams spread out.
+  if (G.versusMode && G.versusGraceT > 0) return;
   r.hp = Math.max(0, r.hp - amount);
   if (lanSession) {
     lanSession.broadcastEvent('damage', {
@@ -4878,7 +5800,27 @@ function applyLanRemoteDamage(id, amount, from) {
     r.alive = false;
     r.avatar.alive = false;
     if (lanSession) lanSession.broadcastEvent('down', { target: id });
+    if (G.versusMode) {
+      // Host is the authority on versus deaths: schedule the respawn and score
+      // the kill for the ATTACKER's faction (bots pass their own team).
+      r.respawnAt = Date.now() + VERSUS_RESPAWN_MS;
+      onVersusDeath(r.team, Number.isFinite(attackerTeam) ? attackerTeam : undefined,
+        String(r.name || '玩家'));
+    }
   }
+}
+
+/** Distance along a normalized ray to a sphere, or null. The host player owns
+    no avatar mesh for clients to hit, so a client's shot at the host is tested
+    analytically against two body spheres. */
+function raySphereT(o, d, cx, cy, cz, r) {
+  const ox = o.x - cx, oy = o.y - cy, oz = o.z - cz;
+  const b = ox * d.x + oy * d.y + oz * d.z;
+  const c = ox * ox + oy * oy + oz * oz - r * r;
+  const disc = b * b - c;
+  if (disc < 0) return null;
+  const t = -b - Math.sqrt(disc);
+  return t >= 0 ? t : null;
 }
 
 function applyLanFire(msg) {
@@ -4889,11 +5831,37 @@ function applyLanFire(msg) {
   const dir = new THREE.Vector3(Number(msg.dx), Number(msg.dy), Number(msg.dz));
   if (dir.lengthSq() < 1e-6) return;
   dir.normalize();
+  // Per-shooter damage upgrades (Phase 4a): the host cannot see a client's
+  // card picks, so the client sends its multiplier (makeFire clamps 0.5-3).
+  // Applies to ENEMY damage only — PvP stays base-weapon fair.
+  const shooterDmg = Math.min(3, Math.max(0.5, Number(msg.dmg) || 1));
+  // The shooter is the remote client this fire event came from, not the local
+  // player — friendly-fire and kill credit must use THEIR team.
+  const shooter = net.remote.get(String(msg.id));
+  const shooterTeam = (net.teamAssignments && net.teamAssignments[String(msg.id)] !== undefined)
+    ? net.teamAssignments[String(msg.id)]
+    : (shooter ? shooter.team : undefined);
   const targets = level.bulletTargets.slice();
   for (const e of enemies) if (e.alive) targets.push(...e.hitboxes);
+  // Versus: a client's crosshair can be on a PLAYER. Remote avatars (minus the
+  // shooter and their teammates) join the target set; the host's own body is
+  // tested analytically per pellet below.
+  const versusFire = G.versusMode && !(G.versusGraceT > 0) && !G.versusOver;
+  if (versusFire) {
+    for (const r of net.remote.values()) {
+      if (String(r.id) === String(msg.id) || !r.alive || !r.avatar || !r.avatar.group) continue;
+      if (shooterTeam != null && r.team != null && r.team === shooterTeam) continue;
+      r.avatar.group.traverse((o) => {
+        if (o.isMesh && o.visible) {
+          o.userData.pdTarget = r.id;
+          targets.push(o);
+        }
+      });
+    }
+  }
   const pellets = w.pellets || 1;
   let end = null;
-  let hitEnemy = null, headshot = false, killed = false;
+  let hitSomething = false, headshot = false, killed = false;
   const origin = new THREE.Vector3(ox, oy, oz);
   for (let p = 0; p < pellets; p++) {
     const d = dir.clone();
@@ -4909,20 +5877,55 @@ function applyLanFire(msg) {
     const hit = hits.find((h) => h.object.visible || h.object.userData.enemy || h.object.userData.rayOnly);
     net.lastFire = hit ? { d: +hit.distance.toFixed(2), enemy: !!hit.object.userData.enemy, part: hit.object.userData.part, name: hit.object.name, visible: hit.object.visible, total: hits.length } : { miss: true, total: hits.length };
     if (!end) end = hit ? hit.point.clone() : origin.clone().addScaledVector(d, 120);
+
+    // the host's own body: two analytic spheres, nearest surface wins over
+    // any mesh hit further down the ray
+    if (versusFire && G.hp > 0 && G.state === 'playing'
+        && (shooterTeam == null || net.team == null || shooterTeam !== net.team)) {
+      const tHead = raySphereT(origin, d, controller.pos.x, controller.pos.y + 1.58, controller.pos.z, 0.32);
+      const tBody = raySphereT(origin, d, controller.pos.x, controller.pos.y + 1.05, controller.pos.z, 0.55);
+      const t = (tHead != null && (tBody == null || tHead <= tBody)) ? tHead : tBody;
+      if (t != null && t <= 160 && (!hit || t < hit.distance)) {
+        if (!end) end = origin.clone().addScaledVector(d, t);
+        const falloff = w.falloff ? w.falloff(t) : 1;
+        const wasAlive = G.hp > 0;
+        applyPlayerDamage(w.dmg * falloff * (tHead != null && t === tHead ? 1.5 : 1), origin);
+        hitSomething = true;
+        headshot = headshot || (tHead != null && t === tHead);
+        if (wasAlive && G.hp <= 0) {
+          killed = true;
+          onVersusDeath(net.team, Number.isFinite(shooterTeam) ? shooterTeam : undefined, net.name || 'HOST');
+        }
+        continue;
+      }
+    }
     if (!hit) continue;
     if (p === 0) end = hit.point.clone();
+    const pdId = hit.object.userData.pdTarget;
+    if (pdId != null && versusFire) {
+      // player hit: damage the host's mirror (respawn + team score), then
+      // broadcast so the victim applies it to their real HP
+      const falloff = w.falloff ? w.falloff(hit.distance) : 1;
+      const head2 = hit.object.userData.part === 'head';
+      const dmg = w.dmg * falloff * (hit.object.userData.dmg || 1);
+      versusApplyPlayerDamage(String(pdId), dmg, shooterTeam, head2);
+      lanSession.broadcastEvent('pdmg', { target: String(pdId), amount: dmg, headshot: head2, team: shooterTeam });
+      hitSomething = true;
+      headshot = headshot || head2;
+      const rr = net.remote.get(String(pdId));
+      if (rr && !rr.alive) killed = true;
+      if (fx) fx.blood(hit.point, hit.face ? hit.face.normal : d.clone().negate(), d);
+      continue;
+    }
     const enemy = hit.object.userData.enemy;
     if (enemy && enemy.alive) {
       const part = hit.object.userData.part;
       const mult = hit.object.userData.dmg || 1;
       const norm = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld).negate() : d.clone().negate();
       const falloff = w.falloff ? w.falloff(hit.distance) : 1;
-      // The shooter is the remote client this fire event came from, not the
-      // local player — friendly-fire must use THEIR team.
-      const shooter = net.remote.get(String(msg.id));
-      const didKill = enemy.takeDamage(w.dmg * falloff * mult, hit.point, norm, part, shooter ? shooter.team : undefined);
-      hitEnemy = enemy; headshot = part === 'head'; killed = killed || didKill;
-      if (didKill) onEnemyKilled(enemy, headshot, 'bullet');
+      const didKill = enemy.takeDamage(w.dmg * falloff * mult * shooterDmg, hit.point, norm, part, shooterTeam);
+      hitSomething = true; headshot = part === 'head'; killed = killed || didKill;
+      if (didKill) onEnemyKilled(enemy, headshot, 'bullet', shooterTeam);
     } else {
       const mat = hit.object.userData.srcMat || hit.object.material;
       let kind = 'concrete';
@@ -4932,7 +5935,7 @@ function applyLanFire(msg) {
     }
   }
   if (end && fx) fx.tracer(origin, end);
-  if (hitEnemy && lanSession) {
+  if (hitSomething && lanSession) {
     lanSession.broadcastEvent('hit', { target: msg.id, headshot, killed });
   }
   if (end && lanSession) {
@@ -5038,11 +6041,9 @@ function startLanHostGame(opts = {}) {
   G.tutorial.active = false;
 
   // ---- versus setup: teams alternate by lobby join order; host is team 0 ----
+  // G.* versus flags go on AFTER startGame(): resetGame() clears them so a
+  // previous versus match can never leak into a fresh run.
   const versus = opts.versus === true;
-  G.versusMode = versus;
-  G.versusGraceT = versus ? VERSUS_GRACE_S : 0;
-  G.versusGraceNotified = false;
-  G.teamScores = [0, 0];
   net.team = undefined;
   const lobbyPlayers = (opts.players && opts.players.length)
     ? opts.players
@@ -5071,6 +6072,11 @@ function startLanHostGame(opts = {}) {
   }
 
   startGame(false, true);
+  G.versusMode = versus;
+  G.versusOver = false;
+  G.versusGraceT = versus ? VERSUS_GRACE_S : 0;
+  G.versusGraceNotified = false;
+  G.teamScores = [0, 0];
   G.state = 'playing';
   if (versus) {
     // spread the host player too — the site centre is a co-op convention
@@ -5127,12 +6133,9 @@ function startLanClientGame(siteId = 'street', startMsg = null) {
   G.tutorial.done = true;
   G.tutorial.active = false;
 
-  // versus flag + team assignment arrive with the host's start event
+  // versus flag + team assignment arrive with the host's start event.
+  // G.* flags are applied AFTER resetGame(), which clears leftover versus state.
   const versus = startMsg && startMsg.versus === true;
-  G.versusMode = versus;
-  G.versusGraceT = versus ? (Number(startMsg && startMsg.grace) || VERSUS_GRACE_S) : 0;
-  G.versusGraceNotified = false;
-  G.teamScores = [0, 0];
   net.team = undefined;
   if (versus) {
     const teams = (startMsg && startMsg.teams) || {};
@@ -5141,6 +6144,11 @@ function startLanClientGame(siteId = 'street', startMsg = null) {
   }
 
   resetGame();
+  G.versusMode = versus;
+  G.versusOver = false;
+  G.versusGraceT = versus ? (Number(startMsg && startMsg.grace) || VERSUS_GRACE_S) : 0;
+  G.versusGraceNotified = false;
+  G.teamScores = [0, 0];
   G.state = 'playing';
   menuEl.classList.add('hidden');
   hudEl.classList.remove('hidden');
@@ -5189,10 +6197,216 @@ function respawnLanLocal() {
   G.armor = G.maxArmor;
   G.reserve = Math.max(G.reserve, 240);
   G.state = 'playing';
-  controller.revive((G.site ? G.site.x : 1.2) + 2.2, (G.site ? G.site.z : 33) + 1.0);
+  // Versus: respawn on YOUR faction slot, same as the host's registry says —
+  // the site centre is a co-op convention and double-writing the two spawns
+  // snapped the camera across the map on the next input packet.
+  let sp = null;
+  if (G.versusMode && net.spawnSlots) {
+    const mySlot = net.spawnSlots[String(net.selfId)];
+    sp = versusSpawnSlot(mySlot ? mySlot.team : (net.team ?? 0), mySlot ? mySlot.index : 0, 3);
+  }
+  controller.revive(
+    sp ? sp.x : (G.site ? G.site.x : 1.2) + 2.2,
+    sp ? sp.z : (G.site ? G.site.z : 33) + 1.0);
   controller.setLook((G.site && G.site.yaw) || -0.03, -0.015);
   viewmodel.state.dead = false;
   if (hud) { hud.setHealth(G.hp, pipsFor(G.armor)); hud.setHint(''); }
+}
+
+/* ---- LAN co-op downed / revive (Phase 4a) -------------------------------------
+   Authority: the host's registry (systems/medical.js). Every peer mirrors it
+   from events so it can mount a "hold E to revive" prompt on the downed ally.
+     downed  {from,x,z}   a player went down (client → host → everyone)
+     revive  {target}     a reviver finished the channel (client → host)
+     revived {target,by}  host confirmed the pick-up (host → everyone)
+     bledout {from}       the clock ran out (→ regular dead + respawn)
+     wipe    {}           nobody standing: everyone redeploys together
+   Not carried through host migration: a new host rebuilds from the snapshot,
+   downed players simply read as dead there and bleed out locally. ---------- */
+
+function reviveLabelFor(id) {
+  if (String(id) === String(net.selfId)) return '按住 E 救援';
+  const r = net.remote.get(String(id));
+  return `按住 E 救援 ${(r && r.name) || '队友'}`;
+}
+
+function mountReviveTarget(id) {
+  const key = String(id);
+  if (key === String(net.selfId)) return;             // you cannot revive yourself
+  if (coopReviveMarks.has(key) || !interact) return;
+  const p = ensureCoopDowned().posOf(key);
+  if (!p) return;
+  const rec = interact.add({
+    x: p.x, z: p.z, r: 2.6,
+    label: reviveLabelFor(key),
+    hold: REVIVE_HOLD_S,
+    onUse: () => requestRevive(key),
+  });
+  coopReviveMarks.set(key, rec);
+}
+
+function unmountReviveTarget(id) {
+  const rec = coopReviveMarks.get(String(id));
+  if (rec && interact) { try { interact.remove(rec); } catch (e) { /* already gone */ } }
+  coopReviveMarks.delete(String(id));
+}
+
+function unmountAllReviveTargets() {
+  for (const id of Array.from(coopReviveMarks.keys())) unmountReviveTarget(id);
+}
+
+/** A peer reported going down: register, drop the mirror into its corpse
+    pose, and offer the revive prompt. */
+function onPeerDowned(id, x, z) {
+  const key = String(id);
+  ensureCoopDowned().down(key, x, z, Date.now());
+  const r = net.remote.get(key);
+  if (r) {
+    r.hp = 0;
+    r.alive = false;
+    r.downed = true;
+    if (r.avatar) r.avatar.alive = false;
+  }
+  mountReviveTarget(key);
+  if (hud && hud.addKillFeed) hud.addKillFeed(`${(r && r.name) || '队友'} 倒地 · 需要救援`);
+}
+
+function requestRevive(targetId) {
+  if (G.state !== 'playing') return;
+  if (net.role === 'host') hostRevive(String(net.selfId), String(targetId));
+  else if (lanSession) lanSession.sendEvent('revive', { target: String(targetId) });
+}
+
+/** Host: validate a revive request against the registry (still down, in range). */
+function hostRevive(byId, targetId) {
+  if (net.role !== 'host' || G.versusMode) return;
+  const reg = ensureCoopDowned();
+  let rp = null;
+  if (byId === String(net.selfId)) {
+    if (G.state === 'playing') rp = { x: controller.pos.x, z: controller.pos.z };
+  } else {
+    const rr = net.remote.get(byId);
+    if (rr && rr.alive) rp = { x: rr.x, z: rr.z };
+  }
+  if (!rp || !reg.canRevive(targetId, rp, Date.now())) return;
+  reg.clear(targetId);
+  if (lanSession) lanSession.broadcastEvent('revived', { target: targetId, by: byId });
+  handleRevived(targetId, byId);
+}
+
+/** Everyone (host included — its own broadcast does not loop back). */
+function handleRevived(targetId, byId) {
+  const key = String(targetId);
+  ensureCoopDowned().clear(key);
+  unmountReviveTarget(key);
+  const byName = String(byId) === String(net.selfId) ? '你'
+    : ((net.remote.get(String(byId)) || {}).name || '队友');
+  if (key === String(net.selfId)) {
+    standUpFromDown();
+    if (hud && hud.addKillFeed) hud.addKillFeed(`${byName} 救起了你`);
+    return;
+  }
+  const r = net.remote.get(key);
+  if (r) {
+    r.downed = false;
+    r.alive = true;
+    r.hp = Math.max(r.hp, Math.round(100 * REVIVE_HP_FRAC));
+    if (r.avatar) r.avatar.alive = true;
+  }
+  if (hud && hud.addKillFeed) hud.addKillFeed(`${byName} 救起了 ${(r && r.name) || '队友'}`);
+}
+
+function standUpFromDown() {
+  if (G.state !== 'downed') return;
+  G.state = 'playing';
+  G.downedT = 0;
+  G.hp = Math.max(1, Math.round(G.maxHp * REVIVE_HP_FRAC));
+  controller.revive(controller.pos.x, controller.pos.z);
+  viewmodel.state.dead = false;
+  if (hud) { hud.setHealth(G.hp, pipsFor(G.armor)); hud.setHint('已被救起 · 半血'); }
+  if (audio && audio.uiConfirm) audio.uiConfirm();
+  if (!SHOT_MODE && input && input.lock) input.lock();
+}
+
+/** The local bleed-out clock ran out: become properly dead and redeploy. */
+function bleedOutLocal() {
+  if (G.state !== 'downed') return;
+  G.state = 'dead';
+  net.respawnT = WIPE_RESPAWN_S;
+  const me = String(net.selfId);
+  ensureCoopDowned().clear(me);
+  if (net.role === 'host') {
+    if (lanSession) lanSession.broadcastEvent('bledout', { from: me });
+    checkCoopWipe();
+  } else if (lanSession) {
+    lanSession.sendEvent('bledout', {});
+  }
+  if (hud && hud.setHint) hud.setHint(`流血过多 · ${WIPE_RESPAWN_S} 秒后重新部署`);
+}
+
+function onPeerBledOut(id) {
+  const key = String(id);
+  ensureCoopDowned().clear(key);
+  unmountReviveTarget(key);
+  const r = net.remote.get(key);
+  if (r) r.downed = false;      // stays dead until their respawn input arrives
+}
+
+/** Host: nobody left standing → squad wipe, everyone redeploys together. */
+function checkCoopWipe() {
+  if (net.role !== 'host' || G.versusMode || !lanSession) return;
+  const reg = ensureCoopDowned();
+  const humans = [{ id: String(net.selfId), alive: G.state === 'playing' || G.state === 'downed' }];
+  for (const [id, r] of net.remote) humans.push({ id: String(id), alive: !!r.alive || reg.isDown(id) });
+  if (!reg.isWipe(humans)) return;
+  lanSession.broadcastEvent('wipe', {});
+  coopWipeLocal();
+}
+
+function coopWipeLocal() {
+  ensureCoopDowned().clearAll();
+  unmountAllReviveTargets();
+  for (const r of net.remote.values()) r.downed = false;
+  if (G.state === 'downed') {
+    G.state = 'dead';
+    net.respawnT = WIPE_RESPAWN_S;
+  }
+  if (hud) {
+    if (hud.toast) hud.toast('小队全灭 · 重新部署', 3000);
+    if (hud.setHint && G.state === 'dead') hud.setHint(`小队全灭 · ${WIPE_RESPAWN_S} 秒后重新部署`);
+    if (hud.radio) hud.radio('VEGA', '全队倒了……重新集结，再来一次。', 3600, 'stage_clear');
+  }
+}
+
+/** Host: sweep bleed-out clocks for peers whose own clock may have drifted. */
+function sweepCoopDowned() {
+  if (net.role !== 'host' || G.versusMode || !coopDowned) return;
+  for (const id of coopDowned.expired(Date.now())) {
+    if (id === String(net.selfId)) { if (G.state === 'downed') bleedOutLocal(); continue; }
+    onPeerBledOut(id);
+    if (lanSession) lanSession.broadcastEvent('bledout', { from: id });
+  }
+}
+
+/* ---- LAN co-op per-player upgrades (Phase 4a) ---------------------------------
+   The host used to be the only one picking cards. Now it broadcasts the offer
+   and every client picks locally; damage picks travel back inside the fire
+   packet (makeFire.dmg), everything else is already client-side. ------------ */
+function clientUpgradeOffer(cardIds) {
+  if (net.role !== 'client' || G.versusMode) return;
+  if (G.state !== 'playing' || !hud || !hud.showUpgrades) return;   // downed/dead: you miss this one
+  const picked = [];
+  for (const id of Array.isArray(cardIds) ? cardIds : []) {
+    const u = UPGRADE_POOL.find((c) => c.id === id);
+    if (u) picked.push(u);
+  }
+  const cards = (picked.length ? picked : shuffle(UPGRADE_POOL.slice()).slice(0, 3))
+    .map((u, i) => ({ ...u, key: String(i + 1) }));
+  G.state = 'upgrade';
+  G.upgradeT = 0;
+  G.upgradeCards = cards;
+  hud.showUpgrades(G.upgradeCards, handleUpgradePick);
+  input.unlock();
 }
 
 function netTick(dt) {
@@ -5244,6 +6458,12 @@ function netTick(dt) {
       }
     }
   }
+  if (G.state === 'downed' && net.role) {
+    G.downedT -= dt;
+    if (hud && hud.setHint) hud.setHint(`倒地 · 等待救援 · ${Math.max(0, Math.ceil(G.downedT))} 秒后流血`);
+    if (G.downedT <= 0) bleedOutLocal();
+  }
+  if (net.role === 'host') sweepCoopDowned();
   if (G.state === 'dead' && net.role) {
     net.respawnT -= dt;
     if (net.respawnT <= 0) respawnLanLocal();
@@ -5302,7 +6522,9 @@ function updateGame(dt) {
     updateWeaponSwap(dt);
     tryFire(dt);
     updateReload(dt);
-    if (net.role !== 'client') updateGrenades(dt);
+    // Grenades run on every peer now: clients simulate the visual arc of
+    // their own throws while the host simulates the authoritative one.
+    updateGrenades(dt);
 
     // health regen
     G.sinceDamage += dt;
@@ -5314,7 +6536,7 @@ function updateGame(dt) {
     if (G.versusMode) {
       updateZone(dt);
       if (net.role === 'host') {
-        if (!(G.versusGraceT > 0)) updateTeamBrains(dt);
+        if (!(G.versusGraceT > 0) && !G.versusOver) updateTeamBrains(dt);
         updateVersusBots(dt);
         updateVersusRespawns();
       }
@@ -5324,6 +6546,8 @@ function updateGame(dt) {
       if (!G.versusMode) {
         updateObjective(dt);
         updateWaves(dt);
+        // boss HP-threshold script actions (campaign only; needs G.boss)
+        updateBossPhases();
       }
       updateTutorial(dt);
       updateMilestones(dt);
@@ -5366,6 +6590,10 @@ function updateGame(dt) {
   enemyCtx.playerGroundY = controller.pos.y;
   enemyCtx.playerAlive = alive && !(G.versusMode && G.versusGraceT > 0);
   enemyCtx.playerSpeed = controller.state.speed;
+  // late-dodge window for the AI hit fairness recheck (enemy.shoot): fresh
+  // while the player is moving fast enough that a hit behind cover is suspect
+  enemyCtx.playerFastT = Math.max(0, (enemyCtx.playerFastT || 0) - dt);
+  if (controller.state.speed > 3.3) enemyCtx.playerFastT = 0.15;
   // lateral movement direction (X / Z) feeds AI aim lead: a soldier aiming
   // at a sprinting player puts the muzzle where the target is going, not
   // where it is. We estimate the direction from the player-position delta
@@ -5423,13 +6651,26 @@ function updateGame(dt) {
       enemyCtx.targetId = tgt.id;
       enemyCtx.playerPos.set(tgt.x, tgt.y, tgt.z);
       enemyCtx.playerGroundY = tgt.y;
-      enemyCtx.playerAlive = tgt.alive;
+      // versusOver: nobody is a legal target once the match is decided
+      enemyCtx.playerAlive = tgt.alive && !G.versusOver;
       enemyCtx.playerSpeed = tgt.speed;
       // who is pulling the trigger this frame — takeDamage uses it to filter
       // friendly fire between fill bots of the same team
       enemyCtx.attackerTeam = e.team;
     } else {
+      // Solo / client: no per-frame retargeting. targetId MUST be cleared or
+      // a stale peer id from an earlier LAN session would route damage away
+      // from the local player.
+      enemyCtx.targetId = undefined;
       enemyCtx.attackerTeam = undefined;
+    }
+    // Versus cover/intel: a bot must book cover with ITS faction's director —
+    // the shared PvE director never ticks in versus, so reservations made
+    // there leak forever and every cover point ends up ghost-owned.
+    if (enemyCtx.ai) {
+      enemyCtx.ai.director = (G.versusMode && e.team != null && teamDirectors[e.team])
+        ? teamDirectors[e.team]
+        : aiDirector;
     }
     if (G.freezeEnemies && SHOT_MODE) {
       // hold pose but keep sprite/lights alive
@@ -5476,6 +6717,8 @@ function updateGame(dt) {
     enemyCtx.playerGroundY = controller.pos.y;
     enemyCtx.playerAlive = G.hp > 0;
     enemyCtx.playerSpeed = controller.state.speed;
+    enemyCtx.playerFastT = Math.max(0, (enemyCtx.playerFastT || 0) - dt);
+    if (controller.state.speed > 3.3) enemyCtx.playerFastT = 0.15;
   }
 
   netTick(dt);
@@ -5586,6 +6829,7 @@ window.__game = {
   get equipment() { return equipment; },
   get barks() { return barks; },
   get net() { return net; }, get zoneSys() { return zoneSys; }, get zonePlanes() { return zonePlanes; }, get versusBots() { return versusBots; },
+  get spawnDirector() { return spawnDirector; },
   get lan() { return lanSession; },
   get lanLobby() { return lanLobby; },
   startLanHostGame, startLanClientGame, leaveLanSession, applyLanFire,
