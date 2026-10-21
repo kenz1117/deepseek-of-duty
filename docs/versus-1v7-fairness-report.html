@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>1v7 围攻问题：根因与修复 · DEEPSEEK OF DUTY</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f7f5f0; --card:#fff; --line:#e9e3d6; --line-soft:#f0ebe0;
+    --ink:#14171e; --ink2:#3a4256; --muted:#7c7a72;
+    --accent:#c97b3f; --accent-soft:rgba(201,123,63,.10);
+    --blue:#4a6fa5; --red:#b06367; --green:#2f6f5e;
+    --radius:16px; --shadow:0 2px 8px rgba(0,0,0,.04);
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:'Outfit','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
+    font-size:14.5px;line-height:1.6;-webkit-font-smoothing:antialiased;
+  }
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+    background:radial-gradient(520px 320px at 8% -6%,rgba(201,123,63,.055),transparent 62%),
+               radial-gradient(560px 340px at 96% 4%,rgba(47,111,94,.05),transparent 64%);
+  }
+  .wrap{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:52px 22px 72px}
+  @media(min-width:768px){.wrap{padding:64px 34px 88px}}
+  h1{font-family:'DM Serif Display','Songti SC',serif;font-weight:400;font-size:30px;line-height:1.28;letter-spacing:-.005em;margin:0 0 10px}
+  @media(min-width:768px){h1{font-size:36px}}
+  h2{font-family:'DM Serif Display','Songti SC',serif;font-weight:400;font-size:23px;line-height:1.3;margin:0 0 6px;letter-spacing:-.004em}
+  @media(min-width:768px){h2{font-size:25px}}
+  h3{font-size:15.5px;font-weight:600;margin:0 0 6px}
+  p{margin:0 0 10px;color:var(--ink2)}
+  .lede{font-size:15.5px;max-width:74ch}
+  .mono{font-family:'JetBrains Mono',ui-monospace,monospace}
+  .eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;color:var(--accent);margin:0 0 12px}
+  .muted{color:var(--muted)} .small{font-size:13px}
+  section{margin-top:50px}
+  @media(min-width:768px){section{margin-top:58px}}
+  .sec-head{display:flex;align-items:flex-start;gap:11px;margin-bottom:20px}
+  .sec-head svg{flex:0 0 auto;width:19px;height:19px;margin-top:3px;color:var(--accent)}
+  .sec-head p{margin:3px 0 0;font-size:13.5px;color:var(--muted)}
+  .hero{border-bottom:1px solid var(--line);padding-bottom:30px}
+  .hero .kicker{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;letter-spacing:.06em;color:var(--accent);background:var(--accent-soft);border-radius:999px;padding:5px 12px;margin-bottom:16px}
+  .hero-meta{display:flex;flex-wrap:wrap;gap:8px 20px;margin-top:18px;font-size:12.5px;color:var(--muted)}
+  .hero-meta b{color:var(--ink2);font-weight:600}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--shadow)}
+  .grid2{display:grid;gap:14px}
+  @media(min-width:768px){.grid2{grid-template-columns:1fr 1fr}}
+  .grid3{display:grid;gap:14px}
+  @media(min-width:768px){.grid3{grid-template-columns:repeat(3,1fr)}}
+  .verdict{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px;box-shadow:var(--shadow);margin-top:22px}
+  .verdict-top{display:flex;gap:12px;align-items:flex-start}
+  .verdict-top svg{width:19px;height:19px;flex:0 0 auto;margin-top:3px;color:var(--accent)}
+  .verdict h3{font-size:16px;margin-bottom:8px}
+  .verdict p{margin-bottom:9px} .verdict p:last-child{margin-bottom:0}
+  .verdict em{font-style:normal;font-weight:600;color:var(--ink);background:rgba(201,123,63,.13);padding:0 4px;border-radius:3px}
+  .kv{display:grid;grid-template-columns:112px 1fr;column-gap:16px;margin:0}
+  .kv dt{color:var(--muted);border-bottom:1px dashed var(--line);padding:7px 0;font-size:13px}
+  .kv dd{margin:0;border-bottom:1px dashed var(--line);padding:7px 0;font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--ink)}
+  .kv dt:last-of-type,.kv dd:last-of-type{border-bottom:0}
+  /* diff table */
+  .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--card);box-shadow:var(--shadow)}
+  table{border-collapse:collapse;width:100%;min-width:680px;font-size:13.5px}
+  thead th{text-align:left;font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding:12px 14px;border-bottom:1px solid var(--line);background:#fbf9f5;white-space:nowrap}
+  tbody td{padding:11px 14px;border-bottom:1px solid var(--line-soft);vertical-align:top;color:var(--ink2)}
+  tbody tr:last-child td{border-bottom:0}
+  tbody td.k{color:var(--ink);font-weight:500}
+  td.old{color:var(--muted)}
+  td.new{font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--green);font-weight:500}
+  td.was{font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--muted);text-decoration:line-through;text-decoration-color:rgba(176,99,103,.6)}
+  .chip{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px}
+  .chip.fixed{background:rgba(47,111,94,.13);color:var(--green)}
+  .chip.open{background:rgba(201,123,63,.14);color:#a05f27}
+  .chip.note{background:rgba(124,122,114,.13);color:var(--muted)}
+  /* git card */
+  .gitcard{background:#1e212b;border-radius:13px;padding:16px 18px;color:#e6e3db;font-family:'JetBrains Mono',monospace;font-size:12.5px;line-height:1.8;overflow-x:auto}
+  .gitcard .h{color:#8fb4d9} .gitcard .m{color:#c9a06a} .gitcard .s{color:#9a9a92}
+  .flow{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
+  .chain{display:flex;align-items:stretch;gap:0;min-width:620px;overflow-x:auto}
+  .node{flex:1 1 0;background:var(--bg);border:1px solid var(--line);border-radius:11px;padding:11px 12px;display:flex;flex-direction:column;justify-content:center;gap:3px}
+  .node .nt{font-size:12.5px;font-weight:600;line-height:1.4}
+  .node .nd{font-size:11.5px;color:var(--muted);line-height:1.45}
+  .node.bad{border-color:rgba(176,99,103,.4);background:rgba(176,99,103,.06)} .node.bad .nt{color:var(--red)}
+  .node.good{border-color:rgba(47,111,94,.35);background:rgba(47,111,94,.06)} .node.good .nt{color:var(--green)}
+  .node.mid{border-color:rgba(201,123,63,.4);background:rgba(201,123,63,.07)} .node.mid .nt{color:var(--accent)}
+  .arrow{flex:0 0 26px;display:flex;align-items:center;justify-content:center;color:#cfc7b6}
+  .arrow svg{width:15px;height:15px}
+  .note{margin-top:12px;font-size:12.5px;color:var(--muted);border-left:2px solid var(--line);padding-left:12px}
+  pre{background:#fbf9f5;border:1px solid var(--line);border-radius:11px;padding:13px 15px;overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.75;color:var(--ink2);margin:0 0 12px}
+  code{font-family:'JetBrains Mono',monospace;font-size:12.5px}
+  p code,li code,td code{background:var(--line-soft);padding:1px 5px;border-radius:4px;color:var(--ink)}
+  .prio{list-style:none;padding:0;margin:0;position:relative}
+  .prio::before{content:"";position:absolute;left:9px;top:8px;bottom:10px;width:2px;background:var(--accent);opacity:.32}
+  .prio li{position:relative;padding:0 0 20px 30px} .prio li:last-child{padding-bottom:0}
+  .prio li::before{content:"";position:absolute;left:3px;top:5px;width:14px;height:14px;border-radius:50%;background:#fff;border:2px solid var(--accent)}
+  .prio h3{margin-bottom:4px;font-size:14.5px} .prio p{margin-bottom:4px;font-size:13.5px}
+  .prio .tag{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:11px;background:var(--line-soft);border-radius:5px;padding:1px 6px;color:var(--ink2)}
+  .files{display:grid;gap:8px;margin:14px 0 0}
+  .files div{display:flex;gap:10px;align-items:baseline}
+  .files b{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--ink2);font-weight:500;flex:0 0 auto}
+  footer{margin-top:58px;padding-top:22px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+  .bar{height:8px;border-radius:4px;background:var(--line-soft);overflow:hidden;margin-top:5px}
+  .bar i{display:block;height:100%;background:var(--accent);border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="kicker">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      根因定位 · 已修复并实测
+    </div>
+    <h1>1v7 围攻问题：根因与修复</h1>
+    <p class="lede">结论先行：<b>不是 AI 变聪明了，而是模式本身被一个特例改成了 1v7</b>。项目设计的对抗模式是 <b>4v4，AI 补位到每队 4 人</b>；但今天的一个提交把「单人开局」单独拎出来，硬编码成「0 个友军 + 7 个敌人」。你看到的围攻，是这个特例的直接结果——顺带还暴露了三个此前被 1v7 掩盖的底层缺陷。</p>
+    <div class="hero-meta">
+      <span>模式 <b>VERSUS 4v4（AI 补位）</b></span>
+      <span>证据 <b>git 历史 + 真实浏览器活体探针</b></span>
+      <span>改动 <b>src/main.js · src/entities/enemy.js</b></span>
+    </div>
+  </header>
+
+  <!-- ============ 一 ============ -->
+  <section id="spec">
+    <div class="sec-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+      <div>
+        <h2>一、这个模式本来应该是什么样</h2>
+        <p>设计文档里写得很明确，大厅文案也是这么写的——只有代码走偏了。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <p style="margin-bottom:10px;font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--muted)">docs/MULTIPLAYER-DESIGN.md § VERSUS 4v4 — designed, locked</p>
+      <dl class="kv">
+        <dt>Players</dt><dd>2–8 human (up to 4 per team)</dd>
+        <dt>AI fills</dt><dd>Each team is padded to 4 combatants with AI bots; e.g. 2 humans + 2 bots per side</dd>
+        <dt>AI soldiers</dt><dd>Up to 8 bots total (4 per team), fewer when more humans join</dd>
+        <dt>Objective</dt><dd>Team deathmatch, 50 kills or 6 minutes; friendly fire off</dd>
+      </dl>
+      <p class="small" style="margin:12px 0 0;color:var(--muted)">大厅文案（index.html:436）也一直是这个口径：「2–8 名玩家分为蓝红两阵营（每队至多 4 人），<b>不足由 AI 士兵补足</b>」。</p>
+    </div>
+
+    <div class="verdict">
+      <div class="verdict-top">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+        <div>
+          <h3>所以你一个人进房，正确结果应该是：<em>你 + 3 个友军 AI，对 4 个敌方 AI</em></h3>
+          <p>这才是「按正常模式配机器人」的结果。7 个 AI 全是敌人，那是另一个模式，不是这个模式。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 二 ============ -->
+  <section id="root">
+    <div class="sec-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+      <div>
+        <h2>二、根因：一个 4 行的特例</h2>
+        <p>git 历史能精确指出是哪次改动引入的，以及它的原话。</p>
+      </div>
+    </div>
+
+    <div class="gitcard">
+      <div><span class="h">commit</span> <span class="m">6fb9d01</span> &nbsp;<span class="s">2026-10-21</span></div>
+      <div><span class="h">feat(versus):</span> solo 1v7, full-map spawns, 20s no-fire deployment</div>
+      <div><span class="s">- solo host fills seven hostile bots instead of</span> <span class="m">3 allies + 4 enemies</span></div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>被它改掉的那几行（src/main.js · startVersusBots）</h3>
+      <pre style="margin-top:10px">  const solo = Object.keys(teams || {}).length === 1;      ← 特例开关
+  for (let team = 0; team &lt; 2; team += 1) {
+    // Solo VERSUS: one human vs seven hostile bots, not 3 allies + 4 enemies.
+    const fill = solo
+      ? (team === 0 ? 0 : 7)                                ← 0 友军 / 7 敌
+      : Math.max(0, VERSUS_TEAM_SIZE - counts[team]);        ← 正常补位逻辑（被绕过）
+  }</pre>
+      <p class="small" style="margin-bottom:0;color:var(--muted)">非 solo 分支的 <span class="mono">Math.max(0, VERSUS_TEAM_SIZE - counts[team])</span> 本来就是正确的 4v4 补位——它只是被上面的特例抢先短路了。</p>
+    </div>
+
+    <div class="flow" style="margin-top:14px">
+      <div class="chain">
+        <div class="node bad"><div class="nt">1 人进房</div><div class="nd">solo = true</div></div>
+        <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+        <div class="node bad"><div class="nt">team 0 补 0 个</div><div class="nd">玩家独占蓝队</div></div>
+        <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+        <div class="node bad"><div class="nt">team 1 补 7 个</div><div class="nd">7 个 bot 全是敌人</div></div>
+        <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+        <div class="node mid"><div class="nt">于是「被围攻」</div><div class="nd">不是 AI 变聪明</div></div>
+      </div>
+      <div class="note">而且这个特例还顺带掩盖了三个底层缺陷——因为在 1v7 里「同队 bot」根本不存在，友军误伤、复活无敌、bot 复活点聚簇都没机会暴露。改成 4v4 补位后，它们立刻全部现行（见第四节）。</div>
+    </div>
+  </section>
+
+  <!-- ============ 三 ============ -->
+  <section id="fix">
+    <div class="sec-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+      <div>
+        <h2>三、修复清单</h2>
+        <p>全部改完并用真实浏览器活体验证。</p>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th style="width:20%">问题</th><th style="width:22%">位置</th><th style="width:38%">改法</th><th style="width:12%">状态</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k">单人开局被改成 1v7</td>
+            <td class="loc mono">main.js<br>startVersusBots</td>
+            <td>删掉 <code>solo</code> 分支，统一走 <code>Math.max(0, VERSUS_TEAM_SIZE - counts[team])</code>。单人进房 = 你 + 3 友军 AI vs 4 敌 AI。</td>
+            <td><span class="chip fixed">已修复</span></td>
+          </tr>
+          <tr>
+            <td class="k">同队 bot 会瞄准自家玩家</td>
+            <td class="loc mono">main.js<br>nearestLanTarget</td>
+            <td>本地玩家和远端玩家一样做阵营过滤（双空检查）；并把 <code>applyPlayerDamage</code> 补上「友伤减半」——大厅承诺过的规则此前对玩家完全没生效。</td>
+            <td><span class="chip fixed">已修复</span></td>
+          </tr>
+          <tr>
+            <td class="k">复活保护从未生效</td>
+            <td class="loc mono">main.js<br>enemy.js</td>
+            <td><code>SPAWN_GRACE_S</code> 之前只赋值不读取。补上递减与判定：<code>applyPlayerDamage</code> / <code>enemy.takeDamage</code> / <code>applyLanRemoteDamage</code> 三条路径都会跳过伤害。</td>
+            <td><span class="chip fixed">已修复</span></td>
+          </tr>
+          <tr>
+            <td class="k">bot 复活点聚簇</td>
+            <td class="loc mono">main.js<br>updateVersusBots</td>
+            <td>复活改用 bot 自己的 <code>slot</code>（与初始出生一致），不再用 <code>rand*4</code> 随机撞点。</td>
+            <td><span class="chip fixed">已修复</span></td>
+          </tr>
+          <tr>
+            <td class="k">AI 从不去占控制点</td>
+            <td class="loc mono">main.js<br>enemy.js</td>
+            <td>新增「占点兵」：每阵营指定一名士兵带着控制点路点过去并站住，寻路（A*）也以该点为目标。详见第五节。</td>
+            <td><span class="chip open">进行中</span></td>
+          </tr>
+          <tr>
+            <td class="k">大厅 / 结算文案过期</td>
+            <td class="loc mono">index.html<br>README.md</td>
+            <td>「40 杀获胜」「AI 不会互相配合」与实际规则不符；补位规则也写错。结算页改显示回合胜场 + 击杀。</td>
+            <td><span class="chip fixed">已修复</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ 四 ============ -->
+  <section id="verify">
+    <div class="sec-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+      <div>
+        <h2>四、活体验证：修复前后对照</h2>
+        <p>真实 headless Chrome + 真实 LAN relay + 真实大厅开局，单人加入，逐帧记录每个 bot 的当前目标。</p>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th style="width:32%">指标</th><th style="width:24%">修复前（1v7）</th><th style="width:24%">修复后（4v4 补位）</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="k">bot 阵营分布</td>
+            <td class="was">[1,1,1,1,1,1,1]</td>
+            <td class="new">[0,0,0,1,1,1,1]</td>
+            <td>3 友军 + 4 敌，符合设计文档</td>
+          </tr>
+          <tr>
+            <td class="k">同队 bot 瞄准玩家</td>
+            <td class="old">（不存在同队 bot）</td>
+            <td class="new">0</td>
+            <td>修复前在 4v4 下实测为 0.13，现归零</td>
+          </tr>
+          <tr>
+            <td class="k">敌方 bot 瞄准玩家</td>
+            <td class="was">6.8 / 7（均值）</td>
+            <td class="new">0.25 ~ 0.46（峰值 4）</td>
+            <td>敌方只有 4 人，且目标分散到你的 3 个友军身上</td>
+          </tr>
+          <tr>
+            <td class="k">敌方大脑情报率</td>
+            <td class="was">0%</td>
+            <td class="new">63% ~ 93%</td>
+            <td>能看到你的友军了，开始真正的班组协同</td>
+          </tr>
+          <tr>
+            <td class="k">玩家承伤</td>
+            <td class="was">13.2 / 40s</td>
+            <td class="new">0 ~ 22.8</td>
+            <td>波动大是因为战斗位置随机，友军会挡在前面</td>
+          </tr>
+          <tr>
+            <td class="k">阵营击杀比分</td>
+            <td class="was">2 : 0</td>
+            <td class="new">4 : 2（蓝方领先）</td>
+            <td>有友军协同后不再是单方面被压制</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid2" style="margin-top:14px">
+      <div class="card">
+        <h3>4v4 友军误伤交叉验证</h3>
+        <p class="small" style="margin-bottom:8px">浏览器 host + 协议级假客户端组 4v4，实测<b>同队 bot 瞄准自家 host</b>：</p>
+        <dl class="kv">
+          <dt>修复前</dt><dd>0.13（均值）</dd>
+          <dt>修复后</dt><dd>0</dd>
+          <dt>敌方 bot 瞄准 host</dt><dd>0</dd>
+        </dl>
+      </div>
+      <div class="card">
+        <h3>测试状态</h3>
+        <dl class="kv">
+          <dt>enemy-los / zone</dt><dd>all checks passed</dd>
+          <dt>spawn / milestones</dt><dd>all checks passed</dd>
+          <dt>teambrain / versus-guard</dt><dd>all checks passed</dd>
+          <dt>inventory</dt><dd>all checks passed</dd>
+          <dt>minimap-zone-render</dt><dd>5 项失败（改动前既存）</dd>
+        </dl>
+        <p class="small" style="margin:9px 0 0;color:var(--muted)">既有失败已用 <span class="mono">git stash</span> 验证，与本次改动无关。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 五 ============ -->
+  <section id="objective">
+    <div class="sec-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+      <div>
+        <h2>五、征服制回合制：整个循环从未运行过</h2>
+        <p>这是 1v7 改回 4v4 之后才浮出水面的问题——它不属于 1v7，而是回合制本身。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>问题一：回合循环是个死函数</h3>
+      <p class="small" style="margin-bottom:8px">25 分制的得分<b>只</b>来自控制点占领收入（每点每 2 秒 +1 分），击杀虽然也计 1 分，但单独凑不满 25 分。而驱动这一切的 <span class="mono">updateConquest(dt)</span> ——占领进度、占领收入、回合时钟、橡皮筋——<b>被定义了，却从来没有被调用过</b>。</p>
+      <p class="small" style="margin-bottom:8px">后果：时钟不走 → 点永远不翻 → 得分恒为 0 → 回合永远不会结束。实测 50 秒整局控制点归属始终是 <span class="mono">---</span>，得分始终 <span class="mono">[0,0]</span>。</p>
+      <p class="small" style="margin-bottom:0">（1v7 时红队 bot 会自然聚在场地中心，<b>顺带</b>白占了 3 个点——之前那份报告里「点数经济失衡」的结论，其实也是这个 bug 的副作用，不是设计。）</p>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>问题二：AI 里根本没有「去占点」这种行为</h3>
+      <p class="small" style="margin-bottom:0">检索 <span class="mono">src/systems/ai/</span> 与 <span class="mono">src/entities/enemy.js</span> 找不到任何 controlpoint / capturepoint / conquest 逻辑。就算接上时钟，也没人会去站点。</p>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>修法</h3>
+      <p class="small" style="margin-bottom:10px"><b>① 接上 <span class="mono">updateConquest(dt)</span></b>（host 专属）。</p>
+      <p class="small" style="margin-bottom:10px"><b>② 新增「占点兵」</b>：每阵营一名士兵带着控制点路点过去驻守；A* 寻路目标链也改为优先走这个点；抵达后原地站住（占领需要 6 秒无人争夺的持续在场）。</p>
+      <p class="small" style="margin-bottom:10px"><b>③ 派工规则：两阵营各取一端，永不抢同一个点</b>。被双方同时占据的点会被冻结（谁都不计分），两边都去抢同一个点会让回合卡死在 0:0。中间的点留作最后手段，也是留给人类去争的中立奖品。</p>
+      <p class="small" style="margin-bottom:0"><b>④ 点位放在两队出生点之间</b>（你选的方向）：每队 4 个锚点其实散布全图，真正的「中间」不是一条线，而是两队锚点几乎相邻的<b>三处收窄区</b>——正是两队真正会遭遇的地方。选点后<b>两边走到任一点的距离完全相等</b>（20.2 / 38.9 / 20.1 米），所以换边之后依然公平。</p>
+    </div>
+
+    <div class="table-wrap" style="margin-top:14px">
+      <table>
+        <thead><tr><th style="width:30%">点位</th><th style="width:20%">坐标</th><th style="width:25%">蓝队(侧0)路程</th><th style="width:25%">红队(侧1)路程</th></tr></thead>
+        <tbody>
+          <tr><td class="k">west（双方各取一端）</td><td class="mono">(-85, 29)</td><td class="new">20.2 m</td><td class="new">20.2 m</td></tr>
+          <tr><td class="k">mid（中立奖品，留给人类）</td><td class="mono">(-36, 23)</td><td class="new">38.9 m</td><td class="new">38.9 m</td></tr>
+          <tr><td class="k">east（双方各取一端）</td><td class="mono">(89, -62)</td><td class="new">20.1 m</td><td class="new">20.1 m</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <h3>调试中修掉的四个「到不了点」的原因</h3>
+      <p class="small" style="margin-bottom:8px"><b>① 派工每 0.3 秒重选 runner</b> → 占领计时不断被重置 → 改成粘性分配（runner 一直守着同一个点）。</p>
+      <p class="small" style="margin-bottom:8px"><b>② 各角色的交战距离</b>（flank 17m / hold 20m / suppress 26m）把 runner 挡在圈外 → 占点兵豁免。</p>
+      <p class="small" style="margin-bottom:8px"><b>③ A* 寻路段覆盖移动方向</b>，把 bot 导向战斗目标而不是控制点 → 寻路目标链加入占点路点。</p>
+      <p class="small" style="margin-bottom:0"><b>④ 软锁守卫把驻守的 runner 传送走</b>：bot 站在点上一动不动超过 7 秒就被判定「卡住」并强制挪位，占领计时因此永远完不成 → 占点兵豁免这条守卫。</p>
+    </div>
+
+    <div class="verdict">
+      <div class="verdict-top">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+        <div>
+          <h3>现在的实测：完整的一回合</h3>
+          <p><span class="mono">t=9.8</span> 红方占下 east 点 → <span class="mono">t=10.1</span> 蓝方占下 west 点 → 双方各每 2 秒 +1 分，比分交替上升 → <span class="mono">t=48</span> <b>25 : 22，蓝方拿下回合</b> → <span class="mono">t=54</span> 换边重开，点位与得分重置，新回合重新抢占。</p>
+          <p>中间那个中立点双方都不主动去抢——<b>它是留给你的</b>。站上去占住它，你那队就能从 1 分/2 秒变成 2 分/2 秒，这也是这个模式里人类真正能翻盘的地方。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 六 ============ -->
+  <section id="repro">
+    <div class="sec-head">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+      <div>
+        <h2>六、复现方式</h2>
+        <p>无账号、无外部依赖。</p>
+      </div>
+    </div>
+    <pre>npm run dev &amp;                 # vite :5173
+LAN_PORT=8790 npm run lan &amp;     # LAN relay :8790
+
+node tools/versus-solo-fill-probe.mjs 50         # 单人补位 + 友军误伤 + 控制点
+node tools/versus-4v4-friendlyfire-probe.mjs 18   # 4v4 友军误伤交叉验证
+node tools/versus-1v7-probe.mjs 40               # 旧 1v7 行为的对照组
+npm test</pre>
+
+    <div class="files" style="margin-top:14px">
+      <div><b>tools/versus-solo-fill-probe.mjs</b><span>单人补位 / 友伤 / 控制点 全量探针</span></div>
+      <div><b>tools/versus-4v4-friendlyfire-probe.mjs</b><span>4v4 友军误伤探针</span></div>
+      <div><b>tools/versus-1v7-probe.mjs</b><span>旧版 1v7 探针（留作对照；补位修复后它同样测到 4v4）</span></div>
+      <div><b>shots/versus-solo-fill-probe.json</b><span>逐帧采样结果</span></div>
+      <div><b>shots/versus-4v4-friendlyfire-probe.json</b><span>逐帧采样结果</span></div>
+    </div>
+  </section>
+
+  <footer>
+    DEEPSEEK OF DUTY · versus 模式 · 根因定位与修复 · 结论均由 git 历史与真实浏览器活体探针支撑
+  </footer>
+</div>
+</body>
+</html>

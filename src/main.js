@@ -54,6 +54,9 @@ import {
 import {
   createDownedRegistry, DOWN_BLEED_S, REVIVE_RANGE_M, REVIVE_HOLD_S, REVIVE_HP_FRAC, WIPE_RESPAWN_S,
 } from './systems/medical.js';
+import {
+  createConquest, botRubberBand, pickRespawnPoint, CONQUEST,
+} from './systems/conquest.js';
 
 /* =========================================================================
    DEEPSEEK OF DUTY — browser vertical slice.
@@ -1423,6 +1426,11 @@ let speedBoostT = 0;
 /** One director per faction in versus — the PvE single instance scores one
     playerPos, which cannot serve two teams with different objectives. */
 let teamDirectors = [null, null];
+/** Round-based conquest (Phase 4b): host authority + client HUD mirror. */
+let conquest = null;
+let conquestMirror = null;
+let conquestSyncT = 0;
+let conquestBandT = 0;
 
 /** Spawn point per team inside the site rect: team 0 at the site's objective
     zone, team 1 at the opposite end of the rect. */
@@ -1447,7 +1455,9 @@ const VERSUS_MAP_SPAWNS = [
 function versusSpawnSlot(team, index = 0, jitter = 2) {
   // Team 0 owns the first four map anchors; team 1 owns the other four and
   // never wraps onto the street anchor (solo 1v7 needs seven distinct points).
-  const order = team === 0 ? [0, 1, 2, 3] : [4, 5, 6, 7, 1, 2, 3];
+  // Conquest rounds swap the two halves every round (Phase 4b).
+  const side = versusSideFor(team);
+  const order = side === 0 ? [0, 1, 2, 3] : [4, 5, 6, 7, 1, 2, 3];
   const base = VERSUS_MAP_SPAWNS[order[index % order.length]];
   return {
     x: base.x + (Math.random() - 0.5) * jitter * 2,
@@ -1456,10 +1466,252 @@ function versusSpawnSlot(team, index = 0, jitter = 2) {
   };
 }
 
-/** Legacy single-point spawn kept for the win-check callers; the map spread
-    now comes from versusSpawnSlot. */
-function versusTeamSpawn(team) {
-  return versusSpawnSlot(team, Math.floor(Math.random() * VERSUS_TEAM_SIZE), 5);
+/** Which map half `team` deploys on this round (conquest side swap). */
+function versusSideFor(team) {
+  const cs = conquestState();
+  if (cs && cs.swap && (team === 0 || team === 1)) return 1 - team;
+  return team === 1 ? 1 : 0;
+}
+
+/* ---- conquest rounds (Phase 4b, plan §5.2) ------------------------------------
+   Round-based versus: 90 s or first to 25 points per round, best of 3 (max 5),
+   sides swap each round, three control points pay hold income and act as
+   forward respawns, a tied round goes to gas-forced sudden death. The host
+   owns `conquest` as the authority; clients hold `conquestMirror` for the HUD
+   and the spawn rule, synced by the `cquest` event every 2 s. ------------------ */
+
+/** Three control points placed BETWEEN the two teams' spawn bands.
+
+    Each faction deploys its four soldiers on anchors spread across the whole
+    map, so "the middle" is not a line but a set of pinch regions where the
+    two bands' anchors nearly touch. Those are the places the two sides can
+    actually meet — and the only places a runner can reach inside one 90 s
+    round (the old layout put points up to 78 m from a spawn, which no runner
+    could cover before the clock ran out).
+
+    Selection: the cheapest "between" candidate (a point equidistant from a
+    blue-band and a red-band anchor), then the cheapest one at the opposite
+    end of the map, then the cheapest one clear of both. On this map that
+    yields two objectives costing BOTH bands exactly the same walk (~20 m)
+    plus one neutral prize in between (~39 m) — the round stays a genuine
+    contest whichever side a faction is on, and stays fair after the
+    side swap. */
+function conquestPointsBetweenSpawns() {
+  const bandA = VERSUS_MAP_SPAWNS.slice(0, 4);   // side 0 anchors
+  const bandB = VERSUS_MAP_SPAWNS.slice(4, 8);   // side 1 anchors
+  const d = (p, q) => Math.hypot(p.x - q.x, p.z - q.z);
+  const cands = [];
+  for (const a of bandA) {
+    for (const b of bandB) {
+      const p = { x: (a.x + b.x) / 2, z: (a.z + b.z) / 2 };
+      const dA = Math.min(...bandA.map((q) => d(p, q)));
+      const dB = Math.min(...bandB.map((q) => d(p, q)));
+      cands.push({ x: p.x, z: p.z, dA, dB, cost: Math.max(dA, dB) });
+    }
+  }
+  cands.sort((p, q) => p.cost - q.cost);
+  const p0 = cands[0];
+  const opposite = cands.find((c) => d(c, p0) >= 60) || cands[cands.length - 1];
+  const middle = cands.find((c) => c !== p0 && c !== opposite
+    && d(c, p0) >= 20 && d(c, opposite) >= 20) || cands[2];
+  const chosen = [p0, opposite, middle].sort((a, b) => a.x - b.x);   // west → mid → east
+  const names = ['west', 'mid', 'east'];
+  const out = [];
+  for (let i = 0; i < chosen.length; i += 1) {
+    const c = chosen[i];
+    // snap onto walkable ground — a point inside a wall can never be held
+    const sp = nav ? resolveSpawn(c.x, c.z, 0) : null;
+    let x = sp ? sp.x : c.x;
+    let z = sp ? sp.z : c.z;
+    // a snapped point must not land on top of another one
+    if (out.some((p) => Math.hypot(p.x - x, p.z - z) < 14)) { x = c.x; z = c.z; }
+    out.push({ id: names[i], x, z, r: CONQUEST.CAP_RADIUS });
+  }
+  return out;
+}
+
+function conquestState() {
+  if (conquest) return conquest.state;
+  if (conquestMirror) return conquestMirror.state;
+  return null;
+}
+
+function conquestHudLine(cs) {
+  const mm = Math.floor(Math.max(0, cs.t) / 60);
+  const ss = String(Math.floor(Math.max(0, cs.t) % 60)).padStart(2, '0');
+  const own = cs.points.reduce((acc, p) => { if (p.owner === 0 || p.owner === 1) acc[p.owner] += 1; return acc; }, [0, 0]);
+  const phase = cs.phase === 'over' ? '加时 · 先得分者胜' : cs.phase === 'inter' ? '回合结束' : `${mm}:${ss}`;
+  return `R${cs.round} 蓝 ${cs.pts[0]} : ${cs.pts[1]} 红 · ${phase} · 点位 ${own[0]}-${own[1]} · 胜局 ${cs.wins[0]}-${cs.wins[1]}`;
+}
+
+function conquestHostInit() {
+  conquest = createConquest({ points: conquestPointsBetweenSpawns() });
+  conquestMirror = null;
+  conquest.startRound();
+}
+
+function conquestClientInit(siteId) {
+  conquestMirror = createConquest({ points: conquestPointsBetweenSpawns() });
+  conquest = null;
+}
+
+/** Live hostiles of the OTHER faction from `team`'s point of view (humans on
+    the host's mirrors + fill bots) — respawn siting wants them all. */
+function conquestHostiles(team) {
+  const out = [];
+  for (const [id, r] of net.remote) {
+    if (r.alive && r.team != null && r.team !== team) out.push({ x: r.x, z: r.z });
+    if (r.alive && r.team == null && String(id) !== String(net.selfId) && net.team !== team) out.push({ x: r.x, z: r.z });
+  }
+  for (const b of versusBots) {
+    if (b.e && b.e.alive && b.team !== team) out.push({ x: b.e.root.position.x, z: b.e.root.position.z });
+  }
+  return out;
+}
+
+/** Forward respawn: owned control points first, the default slot as fallback,
+    scored away from live hostiles (nobody materialises inside a view cone). */
+function pickVersusRespawn(team, fallbackSlot) {
+  const cs = conquestState();
+  const owned = cs ? (conquest || conquestMirror).ownedPoints(team) : [];
+  return pickRespawnPoint({
+    team, fallback: fallbackSlot, owned, hostiles: conquestHostiles(team),
+    clearM: CONQUEST.ENEMY_SPAWN_CLEAR_M, rng: Math.random,
+  }) || fallbackSlot;
+}
+
+function conquestSyncBroadcast() {
+  if (!conquest || !lanSession) return;
+  lanSession.broadcastEvent('cquest', { s: conquest.snapshot() });
+}
+
+function conquestPresence() {
+  const cs = conquest.state;
+  const n = cs.points.length;
+  const rows = [];
+  for (let i = 0; i < n; i++) rows.push([0, 0]);
+  const count = (x, z, team) => {
+    for (let i = 0; i < n; i++) {
+      const cp = cs.points[i];
+      if (Math.hypot(x - cp.x, z - cp.z) <= cp.r) rows[i][team] += 1;
+    }
+  };
+  if (G.hp > 0 && G.state !== 'dead') count(controller.pos.x, controller.pos.z, net.team === 1 ? 1 : 0);
+  for (const r of net.remote.values()) {
+    if (!r.alive) continue;
+    count(r.x, r.z, r.team === 1 ? 1 : 0);
+  }
+  for (const b of versusBots) {
+    if (b.e && b.e.alive) count(b.e.root.position.x, b.e.root.position.z, b.team === 1 ? 1 : 0);
+  }
+  return rows;
+}
+
+function handleConquestEvents(events) {
+  if (!events || !events.length) return;
+  for (const ev of events) {
+    if (ev.type === 'capture') {
+      const who = ev.team === 0 ? '蓝军' : '红军';
+      if (hud && hud.addKillFeed) hud.addKillFeed(`${who} 占领控制点 ${ev.point}`);
+      if (hud && hud.toast) hud.toast(`${who} 占领控制点${ev.from === 0 || ev.from === 1 ? '（易手）' : ''}`, 2200);
+    } else if (ev.type === 'overtime') {
+      if (hud && hud.toast) hud.toast('加时 · 毒圈启动 · 先得分者胜', 3200);
+      // the gas IS the overtime mechanic: fast ring, host resumes ticking
+      startZone(CONQUEST.OVERTIME_GAS_DELAY_S);
+    } else if (ev.type === 'roundEnd') {
+      const w = ev.winner === 0 ? '蓝军' : ev.winner === 1 ? '红军' : null;
+      if (hud && hud.toast) hud.toast(w ? `回合 ${ev.round} 结束 · ${w}拿下 · ${ev.pts[0]}:${ev.pts[1]}` : `回合 ${ev.round} 平局 · ${ev.pts[0]}:${ev.pts[1]}`, 3400);
+      // freeze combat for the intermission with the existing grace machinery
+      G.versusGraceT = Math.max(G.versusGraceT, CONQUEST.INTERMISSION_S);
+      if (ev.done) {
+        conquestSyncBroadcast();
+        checkVersusWin();
+        return;
+      }
+    } else if (ev.type === 'intermissionOver') {
+      startNextRound();
+    }
+  }
+  conquestSyncBroadcast();
+}
+
+function startNextRound() {
+  if (!conquest) return;
+  const r = conquest.startRound();
+  // the gas of the previous round (if overtime ran) does not carry over
+  startZone();
+  // redeploy EVERYONE on the swapped sides with a short no-fire window
+  G.versusGraceT = CONQUEST.DEPLOY_S;
+  G.versusGraceNotified = false;
+  if (net.role === 'host') redeployVersusLocal();
+  if (lanSession) lanSession.broadcastEvent('cround', { round: r.round, swap: r.swap, grace: CONQUEST.DEPLOY_S });
+  const bots = versusBots.slice();
+  for (const b of bots) {
+    if (!b.e) continue;
+    const slot = versusSpawnSlot(b.team, b.slot ?? 0, 3);
+    b.e.spawn(slot.x, slot.z, Math.atan2(-(controller.pos.x - slot.x), -(controller.pos.z - slot.z)), 0);
+    b.e.maxHp = 80; b.e.hp = 80;
+    b.e.spawnGraceT = CONQUEST.SPAWN_GRACE_S;
+    b.respawnAt = 0;
+    // the sides swapped — the old objective belongs to the other end of the
+    // point line now, so the assignment is redone from scratch
+    b.e.objectiveId = null;
+    b.e.objectivePoint = null;
+  }
+  if (hud && hud.toast) hud.toast(`回合 ${r.round} · 部署阶段`, 2600);
+  conquestSyncBroadcast();
+}
+
+/** Host tick: capture presence, round clock, events, rubber band, bot grace. */
+function updateConquest(dt) {
+  if (!conquest || G.versusOver) return;
+  handleConquestEvents(conquest.tick(dt, conquestPresence(), G.versusGraceT > 0));
+  // bot spawn-protection + accuracy rubber band decay
+  for (const b of versusBots) {
+    if (b.e && (b.e.spawnGraceT || 0) > 0) b.e.spawnGraceT = Math.max(0, b.e.spawnGraceT - dt);
+  }
+  conquestBandT += dt;
+  if (conquestBandT >= 5) {
+    conquestBandT = 0;
+    const cs = conquest.state;
+    const band = botRubberBand(cs.pts);
+    for (const b of versusBots) {
+      if (!b.e) continue;
+      const base = DIFF_TIERS[2].accuracy;    // bots sit on the D3 baseline
+      b.e.accuracyMult = base * band[b.team === 1 ? 1 : 0];
+    }
+  }
+  conquestSyncT += dt;
+  if (conquestSyncT >= 2) { conquestSyncT = 0; conquestSyncBroadcast(); }
+}
+
+/** Client: adopt a conquest snapshot. */
+function conquestClientApply(s) {
+  if (conquestMirror && s) conquestMirror.applySnapshot(s);
+}
+
+/** Client: a new round started — redeploy on the swapped side. */
+function conquestRoundClient(msg) {
+  if (net.role !== 'client' || !conquestMirror) return;
+  redeployVersusLocal();
+  G.versusGraceT = Number(msg.grace) || CONQUEST.DEPLOY_S;
+  G.versusGraceNotified = false;
+  if (hud && hud.toast) hud.toast(`回合 ${Number(msg.round) || '?'} · 部署阶段`, 2600);
+}
+
+/** Stand back up at your faction's slot, full health (round start / wipe). */
+function redeployVersusLocal() {
+  const mySlot = net.spawnSlots && net.spawnSlots[String(net.selfId)];
+  const fallback = versusSpawnSlot(mySlot ? mySlot.team : (net.team ?? 0), mySlot ? mySlot.index : 0, 3);
+  const sp = pickVersusRespawn(mySlot ? mySlot.team : (net.team ?? 0), fallback);
+  G.hp = G.maxHp;
+  G.armor = G.maxArmor;
+  net.spawnGraceT = CONQUEST.SPAWN_GRACE_S;
+  G.state = 'playing';
+  controller.revive(sp.x, sp.z);
+  controller.setLook((G.site && G.site.yaw) || -0.03, -0.015);
+  viewmodel.state.dead = false;
+  if (hud) { hud.setHealth(G.hp, pipsFor(G.armor)); hud.setHint(''); }
 }
 
 /** Team fill: pad each faction up to VERSUS_TEAM_SIZE with AI soldiers.
@@ -1470,23 +1722,26 @@ function startVersusBots(teams, lobbyPlayers) {
   versusBots = [];
   const counts = [0, 0];
   for (const id of Object.keys(teams || {})) counts[teams[id]] += 1;
-  const solo = Object.keys(teams || {}).length === 1;
   for (let team = 0; team < 2; team += 1) {
-    // Solo VERSUS: one human vs seven hostile bots, not 3 allies + 4 enemies.
-    const fill = solo
-      ? (team === 0 ? 0 : 7)
-      : Math.max(0, VERSUS_TEAM_SIZE - counts[team]);
+    // VERSUS 4v4: every faction is padded to VERSUS_TEAM_SIZE combatants with
+    // AI (docs/MULTIPLAYER-DESIGN.md — "each team is padded to 4 combatants").
+    // A solo host therefore gets 3 allies + 4 enemies, never a 1v7 deathmatch.
+    const fill = Math.max(0, VERSUS_TEAM_SIZE - counts[team]);
     for (let i = 0; i < fill; i += 1) {
       // slot index continues after the humans so the whole squad spreads out
       const sp = versusSpawnSlot(team, counts[team] + i, 2.5);
       const e = spawnEnemy({ x: sp.x, z: sp.z, y: 0, profile: 'squad' }, { noRing: true, force: true });
       if (!e) break;
       e.team = team;
-      if (e.setDifficulty) e.setDifficulty(DIFF_TIERS[3]);
+      // De-cheesed (Phase 4b): D3 baseline instead of D4 + x1.8 — fill bots
+      // used to out-aim humans. The trailing faction's bots get a rubber-band
+      // accuracy boost from updateConquest instead.
+      if (e.setDifficulty) e.setDifficulty(DIFF_TIERS[2]);
       if (e.setArchetype && i % 3 === 1) e.setArchetype('rusher');
-      e.maxHp = 80; e.hp = 80; e.damageMult = 1.8;
+      e.maxHp = 80; e.hp = 80; e.damageMult = 1.15;
+      e.spawnGraceT = CONQUEST.SPAWN_GRACE_S;
       if (e._netId == null) e._netId = netEnemySeq++;
-      versusBots.push({ e, team, respawnAt: 0 });
+      versusBots.push({ e, team, slot: counts[team] + i, respawnAt: 0 });
     }
   }
   teamBrains = [createTeamBrain({ team: 0 }), createTeamBrain({ team: 1 })];
@@ -1505,6 +1760,91 @@ function startVersusBots(teams, lobbyPlayers) {
  *   - then run one director instance per faction around that faction's
  *     tactical focus, so flank/intel/cover all orbit the shared plan.
  */
+/** Conquest objective: soldiers per faction work the control points.
+    Nothing in the AI ever walked to a point, so the 25-point round could
+    only be scored by a human who happened to stand on one — in practice
+    nobody did, no point was ever owned, and every round ran out the clock
+    as a 0:0 draw.
+
+    Two rules keep the round alive:
+      - the two factions take OPPOSITE ends of the point line. A contested
+        point is frozen (neither side scores), so both factions chasing the
+        same one would stall the round on 0:0.
+      - a second soldier is sent whenever the enemy starts capturing a point
+        the faction owns, otherwise a held point could be flipped for free. */
+function assignConquestObjective(team) {
+  const cs = conquest ? conquest.state : null;
+  const squad = versusBots.filter((b) => b.team === team && b.e && b.e.alive);
+
+  // 1. drop assignments whose point is gone or whose runner died
+  for (const b of versusBots) {
+    if (b.team !== team || !b.e) continue;
+    const id = b.e.objectiveId;
+    if (id == null) { b.e.objectivePoint = null; continue; }
+    const p = cs ? cs.points.find((q) => String(q.id) === String(id)) : null;
+    if (!p || !b.e.alive) { b.e.objectiveId = null; b.e.objectivePoint = null; }
+  }
+
+  if (!cs || cs.phase !== 'live' || !cs.points || !cs.points.length) return;
+  if (!squad.length) return;
+
+  // 2. keep the standing runner. A point takes CAP_TIME_S (6 s) of
+  //    uncontested presence to flip and then pays income only while someone
+  //    stands on it — re-picking the runner every tick rotated the job and
+  //    the capture never finished.
+  const runner = squad.find((b) => b.e.objectiveId != null);
+  if (runner) {
+    const p = cs.points.find((q) => String(q.id) === String(runner.e.objectiveId));
+    if (p && p.owner !== (1 - team)) {
+      runner.e.objectivePoint = { x: p.x, z: p.z };
+      runner.e.objectiveR = p.r || 6;
+      // a point of ours is being taken right now: send a second soldier
+      const threatened = cs.points.find((q) => q.owner === team
+        && q.progTeam === (1 - team) && q.prog > 0);
+      if (threatened) {
+        const helper = squad.find((b) => b !== runner && b.e.objectiveId == null);
+        if (helper) {
+          helper.e.objectiveId = String(threatened.id);
+          helper.e.objectivePoint = { x: threatened.x, z: threatened.z };
+          helper.e.objectiveR = threatened.r || 6;
+        }
+      }
+      return;
+    }
+    runner.e.objectiveId = null;
+  }
+
+  // 3. pick a point. The line of points runs west → east across the map;
+  //    each faction takes the end of the line that faces its own side, so
+  //    the two runners never contest the same point. Following the CURRENT
+  //    side (not the team index) keeps the split correct after the round's
+  //    side swap. The middle point is the last resort for both — it is the
+  //    neutral prize, and both sides only fall back to it when both ends
+  //    are taken.
+  const side = versusSideFor(team);
+  const ordered = cs.points.slice().sort((a, b) => a.x - b.x);
+  const west = ordered[0];
+  const east = ordered[ordered.length - 1];
+  const middle = ordered.find((p) => p !== west && p !== east) || east;
+  const preference = side === 0 ? [west, east, middle] : [east, west, middle];
+  let chosen = null;
+  for (const p of preference) {
+    if (p.owner !== (1 - team)) { chosen = p; break; }
+  }
+  if (!chosen) chosen = preference[0];
+  // the soldier with the shortest walk to it takes the job
+  let pick = null, bestD = Infinity;
+  for (const b of squad) {
+    const d = Math.hypot(b.e.root.position.x - chosen.x, b.e.root.position.z - chosen.z);
+    if (d < bestD) { bestD = d; pick = b; }
+  }
+  if (pick) {
+    pick.e.objectiveId = String(chosen.id);
+    pick.e.objectivePoint = { x: chosen.x, z: chosen.z };
+    pick.e.objectiveR = chosen.r || 6;
+  }
+}
+
 function updateTeamBrains(dt) {
   if (!G.versusMode || net.role !== 'host') return;
   teamBrainAcc += dt;
@@ -1593,6 +1933,8 @@ function updateTeamBrains(dt) {
     if (teamDirectors[t] && squad.length) {
       teamDirectors[t].tick(step, squad, focus, G.diff);
     }
+    // one soldier per faction works the control points
+    assignConquestObjective(t);
   }
 }
 
@@ -1621,8 +1963,10 @@ function nearestHostileActor(pos, selfTeam, preferredId = null) {
     }
   }
   const human = nearestLanTarget(pos, selfTeam);
+  // human is null when every human in reach is a teammate — the squad must
+  // then hunt the enemy-team bots instead of firing on its own humans.
   let best = human;
-  let bestD = Math.hypot(pos.x - best.x, pos.z - best.z);
+  let bestD = human ? Math.hypot(pos.x - best.x, pos.z - best.z) : Infinity;
   for (const b of versusBots) {
     const e = b.e;
     if (!e || !e.alive) continue;
@@ -1647,13 +1991,12 @@ function botById(netId) {
   return null;
 }
 
-/** Team deathmatch win check: first faction to VERSUS_KILL_TARGET team kills
-    ends the match for everyone (host broadcasts `vend`). */
+/** Series win check. Conquest owns match end now (round wins, Phase 4b);
+    this is the single place a finished series turns into the end screen. */
 function checkVersusWin() {
-  if (G.versusOver) return;
-  const target = VERSUS_KILL_TARGET;
-  if (G.teamScores[0] < target && G.teamScores[1] < target) return;
-  endVersusMatch(G.teamScores[0] >= target ? 0 : 1);
+  if (!G.versusMode || G.versusOver) return;
+  const cs = conquestState();
+  if (cs && cs.phase === 'done') endVersusMatch(cs.matchWinner);
 }
 
 /** Match end, both ends: freeze combat, unlock the cursor, show the result
@@ -1685,14 +2028,21 @@ function showVersusEnd(winTeam) {
   const outcome = winTeam == null ? 'draw' : (mine != null && winTeam === mine ? 'win' : 'lose');
   set('versus-end-kicker', outcome === 'win' ? 'VICTORY · 任务完成' : outcome === 'lose' ? 'DEFEAT · 任务失败' : 'DRAW · 势均力敌');
   set('versus-end-title', winTeam == null ? '平局' : (winTeam === 0 ? '蓝军获胜' : '红军获胜'));
-  set('versus-end-sub', `蓝 ${G.teamScores[0]} : ${G.teamScores[1]} 红 · 目标 ${VERSUS_KILL_TARGET} 杀`);
+  // Conquest matches are decided by ROUND wins, not by the old 40-kill
+  // target — showing "目标 40 杀" here described a rule that no longer runs.
+  const cs = conquestState();
+  const wins = cs && cs.wins ? cs.wins : null;
+  set('versus-end-sub', wins
+    ? `回合 ${wins[0]} : ${wins[1]} · 击杀 ${G.teamScores[0]} : ${G.teamScores[1]}`
+    : `蓝 ${G.teamScores[0]} : ${G.teamScores[1]} 红 · 目标 ${VERSUS_KILL_TARGET} 杀`);
   const statsEl = document.getElementById('versus-end-stats');
   if (statsEl) {
     const mins = Math.floor(G.time / 60);
     const secs = String(Math.floor(G.time % 60)).padStart(2, '0');
     statsEl.innerHTML = [
-      ['蓝军', G.teamScores[0]],
-      ['红军', G.teamScores[1]],
+      ['蓝军', wins ? `${wins[0]} 回合` : G.teamScores[0]],
+      ['红军', wins ? `${wins[1]} 回合` : G.teamScores[1]],
+      ['击杀', `${G.teamScores[0]} : ${G.teamScores[1]}`],
       ['用时', `${mins}:${secs}`],
     ].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
   }
@@ -1739,13 +2089,15 @@ function restartVersusMatch() {
   firingSlots.max = 4;
   firingSlots.at.length = 0;
   startZone();
+  conquestHostInit();
   startVersusBots(net.teamAssignments || {}, lanSession.players || []);
+  conquestSyncBroadcast();
   for (const r of net.remote.values()) {
-    r.hp = 100; r.alive = true; r.respawnAt = 0;
+    r.hp = 100; r.alive = true; r.respawnAt = 0; r.spawnGraceT = CONQUEST.SPAWN_GRACE_S;
     if (r.avatar) r.avatar.alive = true;
   }
   if (hud) {
-    hud.setMode('VERSUS', '蓝军 vs 红军');
+    hud.setMode('VERSUS', '回合制征服 · 蓝军 vs 红军');
     hud.setHealth(G.hp, pipsFor(G.armor));
   }
   input.lock();
@@ -1814,6 +2166,8 @@ function onVersusDeath(victimTeam, killerTeam, victimLabel) {
   if (!G.versusMode || G.versusOver) return;
   if (Number.isFinite(killerTeam) && killerTeam !== victimTeam) {
     G.teamScores[killerTeam] = (G.teamScores[killerTeam] || 0) + 1;
+    // round points (Phase 4b): a kill is one point toward the 25-point round
+    if (conquest) handleConquestEvents([conquest.kill(killerTeam)].filter(Boolean));
   }
   if (hud && hud.addKillFeed) {
     const who = Number.isFinite(killerTeam) ? (killerTeam === 0 ? '蓝军' : '红军') : '毒圈';
@@ -1870,14 +2224,14 @@ function disposeZoneVisual() {
   zoneVisual = null;
 }
 
-function startZone() {
+function startZone(startDelay = 120) {
   // Versus/BR zone covers the whole playable map (city + dock + foothills);
-  // co-op keeps the site rect.
+  // co-op keeps the site rect. Overtime passes a short delay: the fast ring.
   const rect = G.versusMode && level && level.bounds
     ? { ...level.bounds }
     : (G.playRect || (G.site && G.site.rect));
   if (!rect) return;
-  zoneSys = createZone({ rect, startDelay: 120, warnAt: 15 });
+  zoneSys = createZone({ rect, startDelay, warnAt: 15 });
   G.zoneWarned = false;
   G.zoneDmgT = 0;
   ensureZoneVisual();
@@ -2063,7 +2417,7 @@ function updateVersusBots(dt) {
       }
     }
     if (!e.alive && b.respawnAt && now >= b.respawnAt) {
-      const sp = versusSpawnSlot(b.team, Math.floor(Math.random() * VERSUS_TEAM_SIZE), 4);
+      const sp = versusSpawnSlot(b.team, b.slot ?? 0, 4);
       e.spawn(sp.x, sp.z,
         Math.atan2(-(controller.pos.x - sp.x), -(controller.pos.z - sp.z)), 0);
       e.maxHp = 80; e.hp = 80;     // respawn with the tuned versus trade values
@@ -2125,10 +2479,12 @@ function versusApplyPlayerDamage(targetId, amount, killerTeam, headshot) {
 }
 
 /** Host: respawn downed humans at their team spawn (snapshot carries it). */
-function updateVersusRespawns() {
+function updateVersusRespawns(dt = 0) {
   if (!G.versusMode || net.role !== 'host' || G.versusOver) return;
   const now = Date.now();
   for (const r of net.remote.values()) {
+    // tick down the remote player's post-respawn invulnerability
+    if ((r.spawnGraceT || 0) > 0) r.spawnGraceT = Math.max(0, r.spawnGraceT - dt);
     if (r.alive || !r.respawnAt || now < r.respawnAt) continue;
     const reg = net.spawnSlots && net.spawnSlots[String(r.id)];
     const sp = versusSpawnSlot(reg ? reg.team : (r.team ?? 0),
@@ -2136,6 +2492,7 @@ function updateVersusRespawns() {
     r.x = sp.x; r.z = sp.z; r.y = 0;
     r.hp = 100; r.alive = true;
     r.respawnAt = 0;
+    r.spawnGraceT = CONQUEST.SPAWN_GRACE_S;
     if (r.avatar) r.avatar.alive = true;
   }
 }
@@ -4403,9 +4760,18 @@ function onEnemyBreach(door) {
 }
 
 /* ------------------------------------------------------------------ damage */
-function applyPlayerDamage(amount, fromPos) {
+function applyPlayerDamage(amount, fromPos, attackerTeam = undefined) {
   if (G.state !== 'playing' || G.hp <= 0) return;
   if (SHOT_MODE) return;
+  // Post-respawn invulnerability (CONQUEST.SPAWN_GRACE_S).
+  if (G.versusMode && (net.spawnGraceT || 0) > 0) return;
+  // Versus friendly fire against the local human is HALVED — the lobby card
+  // promises "友军伤害减半". enemy.takeDamage already halves bot-vs-bot fire;
+  // without the same rule here the human took FULL damage from same-team
+  // bots (and from stray rounds that pass through them).
+  if (G.versusMode && attackerTeam != null && net.team != null && attackerTeam === net.team) {
+    amount *= 0.5;
+  }
   // helmet tier: flat damage reduction (lv1 8% / lv2 15% / lv3 22%)
   if (inventory) {
     const st = inventory.gearStats();
@@ -4983,7 +5349,7 @@ const enemyCtx = {
     // wasAlive gates out the rest of the killing burst (state is 'dead' by
     // then, but hp stays 0 and would re-score every pellet).
     const wasAlive = G.state === 'playing' && G.hp > 0;
-    applyPlayerDamage(amount, from);
+    applyPlayerDamage(amount, from, enemyCtx.attackerTeam);
     if (wasAlive && G.versusMode && G.hp <= 0 && net.role) {
       onVersusDeath(net.team,
         Number.isFinite(enemyCtx.attackerTeam) ? enemyCtx.attackerTeam : undefined,
@@ -5757,20 +6123,36 @@ function applyLanSnapshot(snap) {
   if (hud && hud.setWaveProgress) hud.setWaveProgress(G.waveTotal ? 1 - G.waveRemaining / G.waveTotal : 1);
 }
 
+/** Nearest hostile human. The local player is filtered by team exactly like
+    remote players are: a same-team bot must never lock onto its own human
+    teammate. Returns null when no hostile human exists — in versus the squad
+    then falls back to the enemy-team bots (nearestHostileActor). */
 function nearestLanTarget(pos, selfTeam = undefined) {
-  let best = {
-    id: net.selfId || 'local',
-    x: controller.pos.x, y: controller.pos.y, z: controller.pos.z,
-    // The deployment window (versusGraceT) hides the local player from
-    // targeting entirely: the per-enemy loop overwrites the shared
-    // enemyCtx.playerAlive with tgt.alive, so the grace gate must live here
-    // or it is silently overwritten and bots open fire mid-deployment.
-    hp: G.hp,
-    alive: G.hp > 0 && !(G.versusMode && G.versusGraceT > 0),
-    speed: controller.state.speed,
-    team: selfTeam,
-  };
-  let bestD = Math.hypot(pos.x - best.x, pos.z - best.z);
+  // The local player's faction. In versus the host is blue (0) and a client
+  // carries its assigned team; in co-op there is no faction at all.
+  const localTeam = G.versusMode ? (net.team != null ? net.team : 0) : null;
+  let best = null;
+  let bestD = Infinity;
+  // The local player needs the SAME team filter the remote players get:
+  // a same-team bot must never lock onto its own human teammate. Both sides
+  // must have a team — a naive compare of undefined === undefined would
+  // treat the whole squad as hostile and make everyone shoot their own
+  // teammates. In co-op selfTeam is undefined, so the human stays the target.
+  if (!(selfTeam != null && localTeam != null && localTeam === selfTeam)) {
+    best = {
+      id: net.selfId || 'local',
+      x: controller.pos.x, y: controller.pos.y, z: controller.pos.z,
+      // The deployment window (versusGraceT) hides the local player from
+      // targeting entirely: the per-enemy loop overwrites the shared
+      // enemyCtx.playerAlive with tgt.alive, so the grace gate must live here
+      // or it is silently overwritten and bots open fire mid-deployment.
+      hp: G.hp,
+      alive: G.hp > 0 && !(G.versusMode && G.versusGraceT > 0),
+      speed: controller.state.speed,
+      team: localTeam,
+    };
+    bestD = Math.hypot(pos.x - best.x, pos.z - best.z);
+  }
   for (const r of net.remote.values()) {
     if (!r.alive || r.hp <= 0) continue;
     // Versus filter: skip teammates. The double null-check matters — in co-op
@@ -5789,6 +6171,8 @@ function applyLanRemoteDamage(id, amount, from, attackerTeam) {
   if (!r || !r.alive) return;
   // Versus deployment grace: nothing may damage humans while teams spread out.
   if (G.versusMode && G.versusGraceT > 0) return;
+  // Post-respawn invulnerability for remote humans.
+  if (G.versusMode && (r.spawnGraceT || 0) > 0) return;
   r.hp = Math.max(0, r.hp - amount);
   if (lanSession) {
     lanSession.broadcastEvent('damage', {
@@ -6105,9 +6489,13 @@ function startLanHostGame(opts = {}) {
     firingSlots.max = 4;
     firingSlots.at.length = 0;
     startZone();
+    // conquest rounds (Phase 4b) own the match from here: the first round's
+    // deployment grace is the lobby spread (VERSUS_GRACE_S)
+    conquestHostInit();
     startVersusBots(teams, lobbyPlayers);
-    if (hud && hud.setMode) hud.setMode('VERSUS', '蓝军 vs 红军');
-    if (hud && hud.toast) hud.toast(`对抗模式 · 你是${net.team === 0 ? '蓝军' : '红军'}`, 3200);
+    conquestSyncBroadcast();
+    if (hud && hud.setMode) hud.setMode('VERSUS', '回合制征服 · 蓝军 vs 红军');
+    if (hud && hud.toast) hud.toast(`对抗模式 · 你是${net.team === 0 ? '蓝军' : '红军'} · 三局两胜`, 3200);
   } else {
     // Co-op previously started with G.operation = null, so the only thing the HUD
     // could report was "clear hostiles" — players had no idea what they were
@@ -6180,8 +6568,11 @@ function startLanClientGame(siteId = 'street', startMsg = null) {
     const sp = versusSpawnSlot(mySlot ? mySlot.team : (net.team ?? 0), mySlot ? mySlot.index : 0, 3);
     controller.revive(sp.x, sp.z);
     controller.setLook((G.site && G.site.yaw) || -0.03, -0.015);
-    if (hud && hud.setMode) hud.setMode('VERSUS', '蓝军 vs 红军');
-    if (hud && hud.toast) hud.toast(`对抗模式 · 你是${net.team === 0 ? '蓝军' : '红军'}`, 3200);
+    // conquest mirror (Phase 4b): same points as the host (deterministic per
+    // site), state arrives via cquest events
+    conquestClientInit(G.site.id);
+    if (hud && hud.setMode) hud.setMode('VERSUS', '回合制征服 · 蓝军 vs 红军');
+    if (hud && hud.toast) hud.toast(`对抗模式 · 你是${net.team === 0 ? '蓝军' : '红军'} · 三局两胜`, 3200);
   }
   if (hud) {
     if (!versus && hud.setMode) hud.setMode('SURVIVAL', 'HOLD THE LINE');
@@ -6210,6 +6601,9 @@ function respawnLanLocal() {
     sp ? sp.z : (G.site ? G.site.z : 33) + 1.0);
   controller.setLook((G.site && G.site.yaw) || -0.03, -0.015);
   viewmodel.state.dead = false;
+  // Post-respawn invulnerability (CONQUEST.SPAWN_GRACE_S) — a client that
+  // respawns into a firefight needs the same grace the host grants itself.
+  if (G.versusMode) net.spawnGraceT = CONQUEST.SPAWN_GRACE_S;
   if (hud) { hud.setHealth(G.hp, pipsFor(G.armor)); hud.setHint(''); }
 }
 
@@ -6492,6 +6886,12 @@ function updateGame(dt) {
       if (hud && hud.toast) hud.toast('交战开始 · 自由开火', 2600);
     }
   }
+  // Post-respawn invulnerability for the local human. CONQUEST.SPAWN_GRACE_S
+  // was assigned on redeploy but never ticked down and never read, so a
+  // respawning player could be shot down again before they moved.
+  if (G.versusMode && (net.spawnGraceT || 0) > 0) {
+    net.spawnGraceT = Math.max(0, net.spawnGraceT - dt);
+  }
 
   // If a prop/doorway still traps the player, nudge them to the nearest free
   // nav cell after a short pause instead of leaving them permanently stuck.
@@ -6536,9 +6936,14 @@ function updateGame(dt) {
     if (G.versusMode) {
       updateZone(dt);
       if (net.role === 'host') {
+        // The conquest round tick — capture progress, hold income, the round
+        // clock, the rubber band. It was DEFINED but never CALLED, so the
+        // whole round simulation was frozen: no clock, no captures, no
+        // scoring, and every round simply never ended.
+        updateConquest(dt);
         if (!(G.versusGraceT > 0) && !G.versusOver) updateTeamBrains(dt);
         updateVersusBots(dt);
-        updateVersusRespawns();
+        updateVersusRespawns(dt);
       }
     }
     updateInventory(dt);
@@ -6648,15 +7053,28 @@ function updateGame(dt) {
       const tgt = G.versusMode
         ? nearestHostileActor(e.root.position, e.team, brain ? brain.priorityTargetId : null)
         : nearestLanTarget(e.root.position);
+      // Who is pulling the trigger this frame — takeDamage uses it to filter
+      // friendly fire between fill bots of the same team. It describes the
+      // shooter, not the target, so it is set even when there is no target.
+      enemyCtx.attackerTeam = e.team;
+      if (!tgt) {
+        // No legal target this frame (every hostile is down): hold fire and
+        // keep the last aim point instead of shooting the air.
+        enemyCtx.targetId = undefined;
+        enemyCtx.playerAlive = false;
+        e.lastTargetId = null;
+        continue;
+      }
       enemyCtx.targetId = tgt.id;
       enemyCtx.playerPos.set(tgt.x, tgt.y, tgt.z);
       enemyCtx.playerGroundY = tgt.y;
       // versusOver: nobody is a legal target once the match is decided
       enemyCtx.playerAlive = tgt.alive && !G.versusOver;
       enemyCtx.playerSpeed = tgt.speed;
-      // who is pulling the trigger this frame — takeDamage uses it to filter
-      // friendly fire between fill bots of the same team
-      enemyCtx.attackerTeam = e.team;
+      // Remember the per-soldier target: the shared ctx above is overwritten
+      // by the next soldier in this loop, so a probe cannot reconstruct
+      // "who was aiming at whom" from it after the fact.
+      e.lastTargetId = tgt.id;
     } else {
       // Solo / client: no per-frame retargeting. targetId MUST be cleared or
       // a stale peer id from an earlier LAN session would route damage away
@@ -6691,7 +7109,11 @@ function updateGame(dt) {
         e._wallT = 0;
         const moved = Math.hypot(ep.x - (e._lastX ?? ep.x), ep.z - (e._lastZ ?? ep.z));
         const cutOff = !e.canSee && !nav.lineWalkable(ep.x, ep.z, controller.pos.x, controller.pos.z);
-        if (cutOff && ep.y < 1.2 && !e.isBoss && e.archetype !== 'sniper' && pdist > 24 && moved < 0.03) {
+        // A soldier holding a conquest control point stands still on purpose —
+        // that is not the "stuck" the soft-lock guard is looking for. Without
+        // this exemption the guard picked the runner up and teleported it off
+        // its own objective every 7 seconds, so no point was ever captured.
+        if (cutOff && ep.y < 1.2 && !e.isBoss && e.archetype !== 'sniper' && pdist > 24 && moved < 0.03 && !e.objectivePoint) {
           e._stuckT = (e._stuckT || 0) + dt;
           if (e._stuckT > 7) { if (relocateEnemy(e)) e._stuckT = 0; }
         } else {
@@ -6832,6 +7254,50 @@ window.__game = {
   get spawnDirector() { return spawnDirector; },
   get lan() { return lanSession; },
   get lanLobby() { return lanLobby; },
+  /** Per-faction squad brains (versus only) — lets a probe read the shared
+      intel / focus-fire plan the host is running. */
+  get teamBrains() { return teamBrains; },
+  /** Conquest round state (points, owners, clock) — lets a probe verify that
+      the 25-point round actually progresses instead of stalling on the clock. */
+  get conquestState() { return conquestState(); },
+  /** Which actor each live soldier is currently aiming at, keyed by the
+      soldier's net id. The per-enemy target loop rewrites a single shared
+      ctx every frame, so this snapshot is what the fight actually looked
+      like that frame. */
+  vsTargets: () => {
+    const out = {};
+    for (const e of enemies) {
+      if (!e.alive || !e.root.visible) continue;
+      if (e.team == null) continue;
+      out[e._netId] = e.lastTargetId;
+    }
+    return out;
+  },
+  /** The conquest waypoint each soldier is currently carrying (or null). */
+  vsObjectives: () => {
+    const out = {};
+    for (const b of versusBots) {
+      if (!b.e || !b.e.alive) continue;
+      out[b.e._netId] = b.e.objectivePoint
+        ? { team: b.team, id: b.e.objectiveId, x: b.e.objectivePoint.x, z: b.e.objectivePoint.z }
+        : null;
+    }
+    return out;
+  },
+  /** Raw per-point presence rows the conquest tick is fed with. */
+  vsPresence: () => {
+    try { return { rows: conquestPresence(), grace: G.versusGraceT, phase: conquest ? conquest.state.phase : null }; }
+    catch (e) { return { error: String(e) }; }
+  },
+  /** The live control points and who owns them. */
+  vsControlPoints: () => {
+    const cs = conquest ? conquest.state : null;
+    if (!cs) return null;
+    return {
+      phase: cs.phase, pts: cs.pts.slice(), t: cs.t, round: cs.round,
+      points: cs.points.map((p) => ({ id: p.id, x: p.x, z: p.z, r: p.r, owner: p.owner, prog: p.prog, progTeam: p.progTeam })),
+    };
+  },
   startLanHostGame, startLanClientGame, leaveLanSession, applyLanFire,
   pressInteract: () => { if (interact) interact.press(); },
   aiStats: () => {

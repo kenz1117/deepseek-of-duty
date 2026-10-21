@@ -290,6 +290,9 @@ export class Enemy {
     this.profile = AI_PROFILES.default;
     this.flankPoint = null;      // real-flank waypoint (director-assigned)
     this.flankDone = false;      // route finished — revert to normal flank play
+    this.objectivePoint = null;  // conquest control point to walk to and hold
+    this.objectiveId = null;     // id of that point — the assignment is sticky
+    this.objectiveR = 6;         // capture radius of that point
     this.patrolHome = null;      // garrison post centre (set on spawn)
     this.patrolPoint = null;     // current beat leg
     this.patrolT = 0;            // leg timer / dwell
@@ -747,6 +750,10 @@ export class Enemy {
   /** returns true if this damage killed */
   takeDamage(amount, point, normal, part = 'torso', attackerTeam = undefined) {
     if (!this.alive) return false;
+    // Post-respawn invulnerability (CONQUEST.SPAWN_GRACE_S, set by the host
+    // and ticked down there). Without this the grace window was pure
+    // decoration: a respawning soldier could be deleted before it moved.
+    if ((this.spawnGraceT || 0) > 0) return false;
     // boss-phase warden buff (Phase 3): fraction of incoming damage shrugged
     // off while the escort lives — applied before any branch so friendly
     // chip damage respects it too
@@ -1091,8 +1098,46 @@ export class Enemy {
     // ---- movement intent
     let moveX = 0, moveZ = 0, speedTarget = 0;
     let faceMove = false;
+    /** true while the soldier is standing ON its conquest waypoint — the A*
+        pass below must not drag it off the point again. */
+    let objectiveHold = false;
 
-    if (this.state === 'idle') {
+    // ---- conquest objective override -----------------------------------
+    // A soldier carrying an objective waypoint walks to that control point
+    // and holds it instead of pushing at the nearest enemy — the standing
+    // presence is what scores the point. Targeting is independent, so a
+    // threat that shows up still gets shot on the way. Only an enemy right
+    // on top of it stops the runner; the normal per-role standoff distance
+    // (8–26 m by role) would otherwise park the runner short of the point
+    // forever, which is what a plain "advance" did.
+    let objectiveDriving = false;
+    if (this.objectivePoint) {
+      const ox = this.objectivePoint.x - p.x;
+      const oz = this.objectivePoint.z - p.z;
+      const od = Math.hypot(ox, oz);
+      const enemyOnTop = this.canSee && dist < 6;
+      if (!enemyOnTop) {
+        objectiveDriving = true;
+        this.state = 'advance';
+        // Stop as soon as the runner is INSIDE the capture radius. Walking
+        // to the exact centre presses it against whatever geometry sits
+        // there and makes it orbit the edge instead of holding the point.
+        const holdR = Math.max(2, Math.min(5, (this.objectiveR || 6) * 0.85));
+        if (od > holdR) {
+          moveX = ox / od; moveZ = oz / od;
+          speedTarget = def.advanceSpeed * (this.advanceSpeedMult || 1);
+          faceMove = true;
+        } else {
+          speedTarget = 0;      // arrived: stand on the point and hold it
+          objectiveHold = true;
+        }
+      }
+    }
+
+    if (objectiveDriving) {
+      // movement is already decided above — the state chain below would
+      // overwrite it with the per-role standoff behaviour.
+    } else if (this.state === 'idle') {
       speedTarget = 0;
     } else if (this.state === 'patrol') {
       // garrison beat: walk one leg at a time around the post, at a slow
@@ -1352,14 +1397,19 @@ export class Enemy {
     }
 
     // ---- ground pathfinding: steer around walls when the straight line is blocked
-    if (ctx.nav && this.baseY <= 0.5 && !this.pinned
+    if (ctx.nav && this.baseY <= 0.5 && !this.pinned && !objectiveHold
         && (this.state === 'advance' || this.state === 'search' || this.state === 'cover'
             || (this.aiRole === 'breachSupport' && this.breachDoor))) {
       // breachSupport uses the door position, not the player, as its
       // navigation target — otherwise A* would path them straight at the
       // player instead of holding the support line.
       const isBreachSupport = this.aiRole === 'breachSupport' && this.breachDoor;
-      const tgt = isBreachSupport
+      // A soldier carrying a conquest waypoint paths to THAT point, not to
+      // the enemy it happens to be shooting at — otherwise A* overwrites the
+      // objective movement and the runner orbits the point forever.
+      const tgt = this.objectivePoint
+        ? this.objectivePoint
+        : isBreachSupport
         ? { x: (this.breachDoor.rect[0] + this.breachDoor.rect[1]) * 0.5,
             z: (this.breachDoor.rect[2] + this.breachDoor.rect[3]) * 0.5 }
         : (this.aiRole === 'flank' && this.flankPoint && !this.flankDone)
@@ -1376,7 +1426,9 @@ export class Enemy {
         if (steer) {
           moveX = steer.x;
           moveZ = steer.z;
-          speedTarget = Math.max(speedTarget, this.state === 'advance' ? def.advanceSpeed * 0.9 : 2.6);
+          if (!objectiveHold) {
+            speedTarget = Math.max(speedTarget, this.state === 'advance' ? def.advanceSpeed * 0.9 : 2.6);
+          }
         }
       }
     }
