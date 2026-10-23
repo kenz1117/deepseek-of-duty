@@ -509,6 +509,15 @@ function verifyTicket(body) {
 // Run validation
 // ---------------------------------------------------------------------------
 
+/** The server's current calendar day, expressed in the client's timezone. */
+function serverDayInTz(tzMin) {
+  const d = new Date(Date.now() + tzMin * 60000);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function validateRun(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { ok: false, error: 'bad_run', message: 'run 必须是对象' };
@@ -518,6 +527,29 @@ function validateRun(raw) {
   }
   if (typeof raw.runId !== 'string' || !RUN_ID_RE.test(raw.runId)) {
     return { ok: false, error: 'bad_run_id', message: 'runId 需为 8-64 位字母、数字、下划线或连字符' };
+  }
+
+  /* ---- daily bonus is bound to the server's calendar day -----------------
+     The client draws its three daily goals from its LOCAL date, so moving
+     the system clock used to re-roll the pool at will and re-claim the
+     reward on a brand new "day" — an unlimited score-farming loop. The run
+     now states which day it claims and in which timezone; the server only
+     honours it when that day is the server's current day in that timezone.
+     Otherwise the daily is voided: challengesDone drops to 0 and the score
+     falls back to scoreBase (the score without the daily multiplier). The
+     run itself is still a legitimate run and stays on the board. */
+  if (raw.challengesDone > 0) {
+    const date = typeof raw.dailyDate === 'string' ? raw.dailyDate : '';
+    const tz = Number.isInteger(raw.dailyTzMin) ? raw.dailyTzMin : null;
+    const valid = /^\d{4}-\d{2}-\d{2}$/.test(date) && tz !== null
+      && tz >= -720 && tz <= 840;
+    const serverDay = valid ? serverDayInTz(tz) : '';
+    if (!valid || date !== serverDay) {
+      raw.challengesDone = 0;
+      if (Number.isInteger(raw.scoreBase) && raw.scoreBase > 0 && raw.scoreBase <= raw.score) {
+        raw.score = raw.scoreBase;
+      }
+    }
   }
 
   const numericRules = [

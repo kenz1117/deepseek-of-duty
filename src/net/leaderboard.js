@@ -357,6 +357,20 @@ function prepareRun(run, name, { allowGenerateRunId = true } = {}) {
     ? 0
     : run.challengesDone;
 
+  // Daily-claim binding: the server honours the daily bonus only when the
+  // claimed day is the server's current day in the client's timezone. The
+  // client states which day it claims; a changed system clock therefore
+  // cannot buy a fresh daily pool.
+  const dailyDate = typeof run.dailyDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(run.dailyDate)
+    ? run.dailyDate
+    : undefined;
+  const dailyTzMin = Number.isInteger(run.dailyTzMin) && run.dailyTzMin >= -720 && run.dailyTzMin <= 840
+    ? run.dailyTzMin
+    : undefined;
+  const scoreBase = Number.isInteger(run.scoreBase) && run.scoreBase >= 0 && run.scoreBase <= score
+    ? run.scoreBase
+    : undefined;
+
   if (!isIntInRange(score, 0, MAX_SCORE)) return { ok: false, error: 'bad_score' };
   if (!isIntInRange(kills, 0, MAX_KILLS)) return { ok: false, error: 'bad_kills' };
   if (!isIntInRange(wave, 1, MAX_WAVE)) return { ok: false, error: 'bad_wave' };
@@ -393,6 +407,9 @@ function prepareRun(run, name, { allowGenerateRunId = true } = {}) {
         shots,
         hits,
         challengesDone,
+        dailyDate,
+        dailyTzMin,
+        scoreBase,
       },
     },
   };
