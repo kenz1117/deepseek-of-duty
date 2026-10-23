@@ -10,13 +10,18 @@ import { createInput } from './core/input.js';
 import { createController } from './player/controller.js';
 import { Enemy } from './entities/enemy.js';
 import { loadSettings, saveSettings, sanitizeSettings, tutorialDone, markTutorialDone, prestartSkipped, setPrestartSkipped, DEFAULT_SETTINGS } from './core/settings.js';
-import { createRunStats, runPayload, recordRun, applyDailyProgress, loadDaily, dailySummary, dailyPerks, loadCallsign, saveCallsign, bestFor } from './core/profile.js';
+import { createRunStats, runPayload, recordRun, applyDailyProgress, loadDaily, dailySummary, dailyPerks, todayKey, loadCallsign, saveCallsign, bestFor } from './core/profile.js';
 import { createPickups } from './world/pickups.js';
 import { createStreaks } from './systems/streaks.js';
 import { createMilestones, stepLabel } from './systems/milestones.js';
 import { createZone } from './systems/zone.js';
-import { createSpawnDirector, zonesWithinRect } from './systems/spawn.js';
+import {
+  createSpawnDirector, zonesWithinRect, pickNeutralSpawns,
+  assignCoopRallySpot, SPAWN_RULES, makeRng, hashSeed,
+} from './systems/spawn.js';
 import { profileFor } from './systems/ai/profiles.js';
+import { DIFF_TIERS, diffForWave, MAX_FIRING_CEILING } from './systems/ai/tiers.js';
+import { WEAPONS } from './core/weapons.js';
 import { createTeamBrain } from './systems/ai/teamBrain.js';
 import { createInventory, ITEMS } from './systems/inventory.js';
 import { createArtillery } from './systems/artillery.js';
@@ -68,24 +73,6 @@ const CINE_MODE = params.get('cine') === '1';
 const POSE = params.get('pose') || 'hero';
 const HIDE_HUD = params.get('hidehud') === '1';
 
-const WEAPONS = [
-  {
-    id: 'm4', name: 'M4A1', tag: 'PRIMARY <i></i> AR', magSize: 30, reserve: 180, dmg: 30, rpm: 720,
-    auto: true, spread: 0.0125, adsSpread: 0.0016, recoil: 1.0, variant: 'black', mode: 'AUTO',
-  },
-  {
-    // close-range: harder hitting + faster, but kicks more and needs a tighter burst
-    id: 'mk18', name: 'MK18', tag: 'PRIMARY <i></i> CQB', magSize: 25, reserve: 125, dmg: 36, rpm: 850,
-    auto: true, spread: 0.0175, adsSpread: 0.0026, recoil: 1.35, variant: 'tan', mode: 'AUTO',
-  },
-  {
-    // pump shotgun: 8 pellets, shell-by-shell reload, placeholder viewmodel
-    id: 'm870', name: 'M870', tag: 'PRIMARY <i></i> SG', magSize: 6, reserve: 30, dmg: 22, rpm: 75,
-    auto: false, spread: 0.045, adsSpread: 0.035, recoil: 1.6, variant: 'wood', mode: 'PUMP',
-    pellets: 8, shell: true,
-    falloff: (d) => (d <= 4 ? 1 : Math.max(0.3, 1 - (d - 4) * 0.06)),
-  },
-];
 
 /* Recoil pattern: the first shots kick hardest, then the climb settles into a
    small repeatable pattern with alternating horizontal drift. Values are camera
@@ -181,6 +168,10 @@ const G = {
   ffaWinner: null, ffaResultShown: false,
   // Sprint D: run counters, streak rewards, UAV window, score multiplier
   stats: null, scoreMult: 1, uavUntil: 0, uavTick: 0,
+  // Score WITHOUT the daily-challenge multiplier. The leaderboard server
+  // falls back to this number when it voids a daily bonus (claimed day ≠ the
+  // server's day), so a changed system clock cannot inflate the score.
+  scoreBase: 0,
   // Phase 1 spawn: where the player last died (solo spawn picks far from it)
   lastDeathPos: null,
   // Phase 4a LAN co-op: seconds left on the local bleed-out clock ('downed')
@@ -188,6 +179,14 @@ const G = {
 };
 
 let engine, level, viewmodel, fx, audio, hud, input, controller, vmPass, nav, cinema, voice, videoIntro, minimap, interact, intelSys;
+
+/** Award score. G.score carries the daily multiplier, G.scoreBase does not —
+    the server needs the un-multiplied total to void a daily bonus cleanly. */
+function addScore(amount) {
+  const base = Math.round(amount);
+  G.score += Math.round(base * G.scoreMult);
+  G.scoreBase += base;
+}
 let weather = null;
 let lanLobby = null, lanSession = null, worldLabels = null;
 const net = {
@@ -214,6 +213,31 @@ let perception = null, aiDirector = null, barks = null, equipment = null;
 /** Phase 1 spawn system: semantic zones + per-mode generators (systems/spawn.js). */
 let spawnDirector = null;
 const spawnWaveMemory = { recent: [] };
+/* ---- spawn reproducibility + audit ---------------------------------------
+   A wave plan used to be impossible to replay: main.js called the
+   generators without an rng, so they fell back to Math.random, and the
+   plan was thrown away the moment it was placed. "The wave that killed me
+   came from 140 m away" is not a bug report you can act on.
+
+   Every wave now derives its own seed from (session seed, mode, wave), so
+   the same session + wave always produces the same plan, and each plan is
+   recorded in G.spawnAudit with its seed and its distances. Reproduce a
+   report with ?seed=<n> (same URL => same waves). */
+const SPAWN_SEED = (() => {
+  const q = Number(new URLSearchParams(location.search).get('seed'));
+  return Number.isFinite(q) && q !== 0 ? (q >>> 0) : ((Date.now() ^ (Math.random() * 0xffffffff)) >>> 0);
+})();
+/** Per-wave rng: deterministic for a given (mode, wave) under one session. */
+function spawnRngFor(mode, wave) {
+  return makeRng(hashSeed(SPAWN_SEED, mode, wave));
+}
+/** Rolling record of recent wave plans (newest last, capped). */
+const SPAWN_AUDIT_MAX = 40;
+function recordSpawnAudit(entry) {
+  if (!G.spawnAudit) G.spawnAudit = [];
+  G.spawnAudit.push(entry);
+  while (G.spawnAudit.length > SPAWN_AUDIT_MAX) G.spawnAudit.shift();
+}
 let codex = { intel: [] };
 let mothAlly = null;
 let mothGltf = null, mothLoad = null;
@@ -462,32 +486,41 @@ function applyWeatherForAtmo(atmoKey, waveN) {
   if (hud && hud.setWeather) hud.setWeather(wLabel);
 }
 
-/* Difficulty ladder. The archetype table stays the baseline; every tier is a
-   multiplier on top so a wave can be tuned without forking enemy behaviour. */
-const DIFF_TIERS = [
-  { id: 'D1', label: 'TRAINING', wave: 1, accuracy: 0.62, damage: 0.55, firstShot: 1.9, burst: 0.65, maxFiring: 1 },
-  { id: 'D2', label: 'CONTACT', wave: 3, accuracy: 0.72, damage: 0.72, firstShot: 1.5, burst: 0.80, maxFiring: 2 },
-  { id: 'D3', label: 'PRESSURE', wave: 5, accuracy: 0.82, damage: 0.82, firstShot: 1.3, burst: 0.90, maxFiring: 2 },
-  { id: 'D4', label: 'VETERAN', wave: 8, accuracy: 0.94, damage: 0.94, firstShot: 1.1, burst: 1.00, maxFiring: 3 },
-  { id: 'D5', label: 'ELITE', wave: 12, accuracy: 0.96, damage: 0.95, firstShot: 0.9, burst: 1.05, maxFiring: 3 },
-];
+/* Difficulty ladder — see systems/ai/tiers.js (single source of truth, with
+   the maxFiring invariant enforced by tools/diff-tier-test.mjs). */
 
-function diffForWave(n) {
-  let tier = DIFF_TIERS[0];
-  for (const t of DIFF_TIERS) if (n >= t.wave) tier = t;
-  return tier;
-}
-
-/* Global aggression budget: N soldiers may open fire in the same window.
+/* Aggression budget: N soldiers may open fire in the same window.
    Without it four riflemen can start a burst on the same frame and delete
-   the player before the first tracer is readable. */
-const firingSlots = { max: 1, life: 1.15, at: [] };
-function tryEnemyFire() {
+   the player before the first tracer is readable.
+
+   The budget is PER TARGET, not per match. A single global pool meant a
+   four-player LAN squad shared ONE pool: only two enemies could ever open
+   up at a time across the whole squad, so the co-op fight was strictly
+   easier per player than the solo fight (the enemy damage does not scale
+   with the player count either). One pool per player restores the promise
+   "every player faces the solo threat level".
+
+   Versus keeps a single global pool on purpose: the 1v7 / 4v4 bot balance
+   was calibrated against that shared budget. */
+const firingSlots = { max: 1, life: 1.15, pools: new Map() };
+function firingPool(key) {
+  let p = firingSlots.pools.get(key);
+  if (!p) { p = { at: [] }; firingSlots.pools.set(key, p); }
+  return p;
+}
+function tryEnemyFire(enemy) {
   const now = performance.now() / 1000;
-  while (firingSlots.at.length && now - firingSlots.at[0] > firingSlots.life) firingSlots.at.shift();
-  if (firingSlots.at.length >= firingSlots.max) return false;
-  firingSlots.at.push(now);
+  const key = (!G.versusMode && enemy && enemy.lastTargetId != null)
+    ? String(enemy.lastTargetId)
+    : 'all';
+  const pool = firingPool(key);
+  while (pool.at.length && now - pool.at[0] > firingSlots.life) pool.at.shift();
+  if (pool.at.length >= firingSlots.max) return false;
+  pool.at.push(now);
   return true;
+}
+function resetFiringSlots() {
+  firingSlots.pools.clear();
 }
 
 function chooseArchetype(wave, index) {
@@ -2087,7 +2120,7 @@ function restartVersusMatch() {
   controller.setLook((G.site && G.site.yaw) || -0.03, -0.015);
   G.diff = DIFF_TIERS[3];
   firingSlots.max = 4;
-  firingSlots.at.length = 0;
+  resetFiringSlots();
   startZone();
   conquestHostInit();
   startVersusBots(net.teamAssignments || {}, lanSession.players || []);
@@ -2517,6 +2550,33 @@ function isSpawnAllowed(sp) {
    (b) a ground path to the player exists. Without this, random +/-1 m jitter
    dropped enemies inside walls, containers or sealed rooms and both sides
    could never find each other. */
+/* ---- spawn distance band --------------------------------------------------
+   A wave has to ARRIVE. The old rules gated the distance on the ZONE
+   centroid and then dropped the enemy on any point inside that zone, so a
+   wave could materialise 60-140 m out — past every soldier's engagement
+   range (rifleman 48 m) and past the perception cap (55 m). Nothing could
+   see the player, nothing could reach him, and the wave simply never
+   started. These bounds apply to the POINT, not to the zone. */
+const SPAWN_BAND = { min: SPAWN_RULES.pointMin, max: SPAWN_RULES.pointMax };
+const SPAWN_MAX = SPAWN_RULES.hardMax;
+
+/** Distance from a spawn point to the player (m). */
+function spawnDistTo(sp) {
+  const p = controller.pos;
+  return Math.hypot(sp.x - p.x, sp.z - p.z);
+}
+
+/** Is this spawn point inside the preferred band? */
+function spawnInBand(sp) {
+  const d = spawnDistTo(sp);
+  return d >= SPAWN_BAND.min && d <= SPAWN_BAND.max;
+}
+
+/** Is this spawn point close enough that the player can plausibly be met? */
+function spawnWithinReach(sp) {
+  return spawnDistTo(sp) <= SPAWN_MAX;
+}
+
 function resolveSpawn(x, z, y = 0) {
   if (nav.isWalkableAt ? nav.isWalkableAt(x, z, y) : nav.isWalkable(x, z)) return { x, z, y };
   const w = nav.closestWalkableOn ? nav.closestWalkableOn(x, z, y) : nav.closestWalkable(x, z);
@@ -2566,57 +2626,80 @@ function validCandidates(pool, requirePath) {
   return out;
 }
 
-function pickSpawnPoint(pool, allowFlank, requirePath = true) {
+function pickSpawnPoint(pool, allowFlank, requirePath = true, rng = Math.random) {
   const p = controller.pos;
   const valid = validCandidates(pool, requirePath);
   if (!valid.length) {
     if (requirePath) return ringSpawn();
     const any = validCandidates(pool, false);
-    return any.length ? any[Math.floor(Math.random() * any.length)] : ringSpawn();
+    return any.length ? any[Math.floor(rng() * any.length)] : ringSpawn();
   }
-  let best = null, bestD = -1, mid = null, midD = -1, near = null, nearD = 1e9, flank = null, flankD = -1;
+  // The old picker kept "the farthest point" as its last resort, which is how
+  // a wave ended up 130 m away with nobody able to perceive the player.
+  // The last resort is now the CLOSEST point, and anything past SPAWN_MAX is
+  // rejected outright.
+  const bandMid = (SPAWN_BAND.min + SPAWN_BAND.max) / 2;
+  let inBand = null, inBandD = 1e9;     // closest to the band centre
+  let nearest = null, nearestD = 1e9;   // closest point at or beyond the band
+  let beyond = null, beyondD = 1e9;     // closest point past the band but in reach
+  let anyAtAll = null, anyD = 1e9;      // absolute last resort (keeps the wave count)
+  let flank = null, flankD = -1;
   const H = controller.headingDeg * Math.PI / 180;
   const fx = Math.sin(H), fz = -Math.cos(H);
   for (const sp of valid) {
     const dx = sp.x - p.x, dz = sp.z - p.z;
     const d = Math.hypot(dx, dz);
-    if (d > bestD) { bestD = d; best = sp; }
-    // engagement band: close enough to arrive in ~10-20 s, far enough to not
-    // pop in on top of the player (the old "always farthest" rule put waves
-    // 120 m away once the dock opened)
-    if (d >= 18 && d <= 45 && d > midD) { midD = d; mid = sp; }
-    if (d > 10 && d < nearD) { nearD = d; near = sp; }
+    if (d < anyD) { anyD = d; anyAtAll = sp; }
+    if (d > SPAWN_MAX) continue;                  // out of reach of every sense
+    if (d >= SPAWN_BAND.min && d <= SPAWN_BAND.max) {
+      const off = Math.abs(d - bandMid);
+      if (off < inBandD) { inBandD = off; inBand = sp; }
+    }
+    if (d >= SPAWN_BAND.min && d < nearestD) { nearestD = d; nearest = sp; }
+    if (d > SPAWN_BAND.max && d < beyondD) { beyondD = d; beyond = sp; }
     if (d > 16 && d < 52) {
       const front = (dx * fx + dz * fz) / Math.max(1, d);
       if (front < -0.15 && d > flankD) { flankD = d; flank = sp; }
     }
   }
-  if (allowFlank && flank && Math.random() < 0.34) return flank;
-  return mid || near || best;
+  /* The flank is a WAVE-level decision, not a per-enemy coin flip. It used
+     to be rolled once per soldier, so one wave could mix a front spawn and a
+     rear spawn for no reason the player could learn. The caller now decides
+     once per wave (from the seeded wave rng) and passes the boolean here,
+     which keeps the "you cannot camp one sightline" intent while making the
+     whole wave agree on which side it comes from. */
+  if (allowFlank && flank) return flank;
+  return inBand || nearest || beyond || anyAtAll || ringSpawn();
 }
 
-function pickZoneSpawn(pool, zone) {
+function pickZoneSpawn(pool, zone, rng = Math.random) {
   const near = pool.filter((p2) => {
     const d = Math.hypot(p2.x - zone.x, p2.z - zone.z);
     return d > 7 && d < 30;
   });
   const src = near.length ? near : pool;
   const valid = validCandidates(src, true);
-  if (valid.length) return valid[Math.floor(Math.random() * valid.length)];
-  return pickSpawnPoint(pool, false) || ringSpawn();
+  // a point the player could never perceive is not a spawn, it is scenery
+  const reachable = valid.filter((sp) => spawnWithinReach(sp));
+  const use = reachable.length ? reachable : valid;
+  if (use.length) return use[Math.floor(rng() * use.length)];
+  return pickSpawnPoint(pool, false, true, rng) || ringSpawn();
 }
 
 function spawnReinforcements(count) {
   if (!level || !level.spawnPoints || !level.spawnPoints.length) return;
   // defend pressure keeps arriving along the attack axes, not from a flat pool
   const picks = buildWaveSpawnPlan(G.wave, count);
+  const waveRng = spawnRngFor(G.mode, G.wave);
+  // one flank decision for the whole reinforcement batch
+  const waveFlank = waveRng() < 0.34;
   for (let i = 0; i < count; i++) {
     let best = null;
     if (picks.length) best = placePlanPick(picks[i % picks.length], false);
     if (!best) {
       const allowed = level.spawnPoints.filter(isSpawnAllowed);
       const src = allowed.length ? allowed : level.spawnPoints;
-      best = pickSpawnPoint(src, true);
+      best = pickSpawnPoint(src, waveFlank, true, waveRng);
     }
     if (!best) break;
     G.spawnQueue.push({
@@ -2633,15 +2716,28 @@ function spawnReinforcements(count) {
 function spawnPursuitWave(count) {
   if (!spawnDirector || !spawnDirector.zones.length || !G.objective) return;
   const zones = zonesWithinRect(spawnDirector.zones, G.playRect);
-  const picks = spawnDirector.pickExtract({
+  const waveRng = spawnRngFor('extract:pursuit', G.wave);
+  let picks = spawnDirector.pickExtract({
     zones, extractZone: G.objective.zone, playerPos: controller.pos,
-    playerFacingDeg: controller.headingDeg, phase: 'pursuit', count,
+    playerFacingDeg: controller.headingDeg, phase: 'pursuit', count, rng: waveRng,
   });
+  // relaxed retry, then the neutral band-respecting picker — a pursuit wave
+  // that never arrives is worse than one that arrives from a plainer angle
+  if (!picks.length) {
+    picks = spawnDirector.pickExtract({
+      zones, extractZone: G.objective.zone, playerPos: controller.pos,
+      playerFacingDeg: controller.headingDeg, phase: 'pursuit', count,
+      rng: waveRng, relaxed: true,
+    });
+  }
+  if (!picks.length) {
+    picks = pickNeutralSpawns({ zones, playerPos: controller.pos, count, rng: waveRng });
+  }
   let spawned = 0;
   for (let i = 0; i < count; i++) {
     let best = null;
     if (picks.length) best = placePlanPick(picks[i % picks.length], false);
-    if (!best) best = pickSpawnPoint(level.spawnPoints, true);
+    if (!best) best = pickSpawnPoint(level.spawnPoints, true, true, waveRng);
     if (!best) continue;
     spawned++;
     G.spawnQueue.push({
@@ -3033,7 +3129,7 @@ async function boot() {
       smokeTexture: engine.mats.sprites.smoke,
       glowTexture: engine.mats.sprites.glow,
       targetId: null,
-  damagePlayer: (amount, from) => {
+  damagePlayer: (amount, from, attackerTeam, source = null) => {
     // Versus: the current target may be a fill bot, not a human. Route by the
     // id prefix before the human branches; co-op never produces bot: ids.
     if (G.versusMode && enemyCtx.targetId && String(enemyCtx.targetId).startsWith('bot:')) {
@@ -3047,7 +3143,7 @@ async function boot() {
     if (net.role === 'host' && enemyCtx.targetId && String(enemyCtx.targetId) !== String(net.selfId)) {
       applyLanRemoteDamage(enemyCtx.targetId, amount, from);
     } else {
-      applyPlayerDamage(amount, from);
+      applyPlayerDamage(amount, from, undefined, source);
     }
   },
       onFlash: (intensity) => applyFlashbang(intensity),
@@ -3335,9 +3431,32 @@ function startGame(lock = true, silent = false) {
       if (safe) spawn = { x: safe.x, z: safe.z, yaw: G.site.yaw };
     }
   }
-  controller.revive(spawn ? spawn.x : 1.2, spawn ? spawn.z : 33);
+  /* A scripted op start is hand-authored, so snap it to the nearest
+     walkable cell: a typo in a coordinate must not drop the player inside
+     a wall. */
+  let spawnX = spawn ? spawn.x : 1.2;
+  let spawnZ = spawn ? spawn.z : 33;
+  if (spawn && nav) {
+    const safe = resolveSpawn(spawn.x, spawn.z, spawn.y || 0);
+    if (safe) { spawnX = safe.x; spawnZ = safe.z; }
+  }
+  controller.revive(spawnX, spawnZ);
   controller.setLook(spawn ? (spawn.yaw || 0) : -0.03, -0.015);
   if (!silent) audio.uiConfirm();
+  // Campaign difficulty follows the OPERATION (OP01 -> D1, OP14 -> D5),
+  // while the wave index keeps driving the beats, the spawn mix and the
+  // checkpoints. Without this the campaign never left D2.
+  if (G.operation) {
+    G.diffSeed = G.operation.id;
+    G.diffWave0 = firstWave;
+  } else {
+    // Survival / free play: the wave index IS the difficulty axis. The seed
+    // has to equal diffWave0, otherwise the axis is shifted one wave early
+    // (diffWave = seed + n - diffWave0) and wave 8 arrives as D3 instead of
+    // the documented D4 — the whole ladder was a wave late in this mode.
+    G.diffSeed = 1;
+    G.diffWave0 = 1;
+  }
   startWave(firstWave);
   if (firstWave > 1 && hud && hud.toast) hud.toast(`从检查点继续 · 节拍 ${firstWave}`, 2600);
   if (!SHOT_MODE && !G.tutorial.done) beginTutorial();
@@ -3409,8 +3528,10 @@ function resetGame() {
   resetBossPhases();
   unmountBeatInteract();
   G.diff = DIFF_TIERS[0];
-  firingSlots.max = G.diff.maxFiring;
-  firingSlots.at.length = 0;
+  G.diffSeed = 1;      // difficulty axis base (campaign sets it per operation)
+  G.diffWave0 = 1;     // wave that corresponds to diffSeed
+  firingSlots.max = Math.min(G.diff.maxFiring, MAX_FIRING_CEILING);
+  resetFiringSlots();
   G.upgradeShown = false;
   G.upgradeCards = [];
   G.mode = 'survival';
@@ -3426,6 +3547,7 @@ function resetGame() {
   G.hp = G.maxHp;
   G.armor = G.maxArmor;
   G.score = 0;
+  G.scoreBase = 0;
   G.kills = 0;
   G.wave = 1;
   G.waveRemaining = 0;
@@ -3528,53 +3650,155 @@ function buildWaveSpawnPlan(n, total) {
   const count = Math.min(4, total);
   const playerPos = controller.pos;
   const facing = controller.headingDeg;
+  // Deterministic per (mode, wave): the same session replays the same waves.
+  const rng = spawnRngFor(mode, n);
+  const base = { zones, playerPos, playerFacingDeg: facing, rng };
+
+  /* The mode generator is the ONLY thing that decides which side of the map
+     the wave comes from. If it cannot produce a plan, we retry it in
+     relaxed mode (wider gates, same semantics) before falling back to a
+     neutral band-respecting picker. The old path dropped straight to the
+     legacy flat pool with a 34% coin flip for a flank, so the same mode
+     changed the SIDE of the map between waves — that randomness belonged
+     to the point layer, not the semantic layer. */
   let picks = [];
+  let source = mode;
   if (mode === 'defend' && G.objective) {
     picks = spawnDirector.pickDefend({
-      zones, objective: G.objective.zone, coverPoints: level.coverPoints,
-      count: Math.min(3, total),
+      ...base, objective: G.objective.zone, coverPoints: level.coverPoints,
+      count: Math.min(3, total), playerPos, playerFacingDeg: facing,
     });
+    if (!picks.length) {
+      picks = spawnDirector.pickDefend({
+        ...base, objective: G.objective.zone, coverPoints: level.coverPoints,
+        count: Math.min(3, total), playerPos, playerFacingDeg: facing, relaxed: true,
+      });
+      source = 'defend:relaxed';
+    }
   } else if (mode === 'infil' && G.objective) {
     // infil: the garrison garrisons the objective — fortify-style spread
     // AROUND the zone the player is sneaking toward, not on the player's axes
     picks = spawnDirector.pickExtract({
-      zones, extractZone: G.objective.zone, playerPos, playerFacingDeg: facing,
-      phase: 'fortify', count: Math.min(3, total),
+      ...base, extractZone: G.objective.zone, phase: 'fortify', count: Math.min(3, total),
     });
+    if (!picks.length) {
+      picks = spawnDirector.pickExtract({
+        ...base, extractZone: G.objective.zone, phase: 'fortify',
+        count: Math.min(3, total), relaxed: true,
+      });
+      source = 'infil:relaxed';
+    }
   } else if (mode === 'extract' && G.objective) {
     picks = spawnDirector.pickExtract({
-      zones, extractZone: G.objective.zone, playerPos, playerFacingDeg: facing,
-      phase: 'fortify', count: Math.min(3, total),
+      ...base, extractZone: G.objective.zone, phase: 'fortify', count: Math.min(3, total),
     });
+    if (!picks.length) {
+      picks = spawnDirector.pickExtract({
+        ...base, extractZone: G.objective.zone, phase: 'fortify',
+        count: Math.min(3, total), relaxed: true,
+      });
+      source = 'extract:relaxed';
+    }
   } else {
     picks = spawnDirector.pickSurvival({
-      zones, playerPos, playerFacingDeg: facing, wave: n,
-      recentZones: spawnWaveMemory.recent, count,
+      ...base, wave: n, recentZones: spawnWaveMemory.recent, count,
     });
+    if (!picks.length) {
+      picks = spawnDirector.pickSurvival({
+        ...base, wave: n, recentZones: spawnWaveMemory.recent, count, relaxed: true,
+      });
+      source = 'survival:relaxed';
+    }
   }
-  if (picks.length) rememberSpawnZone([...new Set(picks.map((p) => p.zone.id))]);
+
+  /* Neutral fallback: still inside the engagement band, still on the map,
+     but with no mode semantics. This is the LAST word before the legacy
+     pool picker — a wave that arrives is always better than a wave that
+     does not. */
+  if (!picks.length) {
+    picks = pickNeutralSpawns({ zones, playerPos, count, rng });
+    source = 'neutral';
+  }
+  if (!picks.length) return [];
+
+  /* Snapshot the rotation state the plan was made with, BEFORE it is
+     updated. The audit replays the wave from these values, so recording the
+     post-update list would make the replay drift by one wave. */
+  const recentAtPlan = spawnWaveMemory.recent.slice();
+
+  rememberSpawnZone([...new Set(picks.map((p) => p.zone.id))]);
+
+  /* Audit: what was planned, from where, and how far. This is the record
+     that makes "the wave landed at 140 m" an answerable question. It also
+     carries the inputs the plan depended on, so the wave can be REPLAYED
+     later — a plan that cannot be reproduced is not a diagnosis. */
+  recordSpawnAudit({
+    wave: n,
+    mode,
+    source,
+    seed: SPAWN_SEED,
+    player: { x: +playerPos.x.toFixed(1), z: +playerPos.z.toFixed(1) },
+    facing: +facing.toFixed(1),
+    recentZones: recentAtPlan,
+    picks: picks.map((p) => ({
+      zone: p.zone ? p.zone.id : null,
+      x: p.point ? +p.point.x.toFixed(1) : null,
+      z: p.point ? +p.point.z.toFixed(1) : null,
+      dist: p.point ? +Math.hypot(p.point.x - playerPos.x, p.point.z - playerPos.z).toFixed(1) : null,
+      sector: p.sector || null,
+      blind: !!p.blind,
+    })),
+  });
   return picks;
 }
 
 /** Validate one generator pick into a real spawn: jitter + nav resolve +
-    reachability (sealed campaign ops skip the reach check, as before). */
+    reachability (sealed campaign ops skip the reach check, as before) +
+    the distance band. A plan point that lands out of reach is re-picked from
+    the same zone; a zone with nothing in reach falls back to a ring spawn
+    around the player, because a wave that never arrives is worse than a
+    wave that arrives from the wrong side. */
 function placePlanPick(pick, sealed) {
+  let fallback = null;
   for (let t = 0; t < 5; t++) {
     const a = Math.random() * Math.PI * 2;
     const r = t === 0 ? 0 : 0.9 + Math.random() * 1.3;
     const cand = resolveSpawn(pick.point.x + Math.cos(a) * r, pick.point.z + Math.sin(a) * r, pick.point.y || 0);
-    if (cand && (sealed || spawnReachesPlayer(cand))) return cand;
+    if (!cand) continue;
+    if (sealed) return cand;                       // campaign ops keep their scripted placement
+    if (!spawnReachesPlayer(cand)) continue;
+    if (spawnInBand(cand)) return cand;
+    if (spawnWithinReach(cand)) { if (!fallback) fallback = cand; continue; }
   }
-  return null;
+  if (fallback) { /* keep searching for a better point in the same zone */ }
+  if (sealed) return fallback || null;
+  // The zone usually holds a better point than the one the plan picked: look
+  // for one inside the engagement band before settling for the fallback.
+  const pts = (pick.zone && pick.zone.points) || [];
+  let best = null, bestScore = 1e9;
+  for (const pt of pts) {
+    const cand = resolveSpawn(pt.x, pt.z, pt.y || 0);
+    if (!cand || !spawnReachesPlayer(cand)) continue;
+    const d = spawnDistTo(cand);
+    const score = Math.abs(d - (SPAWN_BAND.min + SPAWN_BAND.max) / 2) + (d > SPAWN_MAX ? 60 : 0);
+    if (score < bestScore) { bestScore = score; best = cand; }
+  }
+  if (best && spawnInBand(best)) return best;
+  return fallback || best || ringSpawn();
 }
 
 function startWave(n) {
   const prevTier = G.diff;
-  G.diff = diffForWave(n);
+  // The difficulty axis is NOT the wave index inside an operation: every
+  // operation used to restart at wave 1, so the whole 14-op campaign ran at
+  // D1-D2 and never saw a flank pair, a suppressor, or a single grenade.
+  // G.diffSeed shifts the axis (campaign: the operation id; survival: 0).
+  const diffWave = Math.max(1, (G.diffSeed || 0) + (n - (G.diffWave0 || 1)));
+  G.diff = diffForWave(diffWave);
   // live stragglers (defend reinforcements) pick up the new behaviour tier too
   for (const e of enemies) if (e.alive && e.setDifficulty) e.setDifficulty(G.diff);
-  firingSlots.max = G.diff.maxFiring;
-  firingSlots.at.length = 0;
+  firingSlots.max = Math.min(G.diff.maxFiring, MAX_FIRING_CEILING);
+  resetFiringSlots();
   G.wave = n;
   G.upgradeShown = false;
   // the current wave's beat, resolved once for the whole function
@@ -3596,7 +3820,12 @@ function startWave(n) {
       if (hud && hud.setWeather && wLabel) hud.setWeather(wLabel);
     }
     const lines = op.radio.filter((r) => r.at === n || (n === 1 && r.at === 'start'));
-    if (hud.radio && !(n === 1 && op.intro)) {
+    /* An intro cutscene normally eats the wave-1 radio, because the scene
+       already says it. On OP11–13 it did NOT: the scene was silent, so the
+       only line explaining why the campaign moves on never reached the
+       player. `radioAtStart` opts those ops back in. */
+    const introEatsRadio = n === 1 && op.intro && !op.radioAtStart;
+    if (hud.radio && !introEatsRadio) {
       for (const line of lines) hud.radio(line.speaker, line.text, 7200, line.voice);
     }
     if (op.bossWave === n || (opB && opB.type === 'boss')) {
@@ -3647,6 +3876,13 @@ function startWave(n) {
   const objZone = G.objective ? G.objective.zone : null;
   const sealed = !!(op && op.spawnRect);
   const planPicks = buildWaveSpawnPlan(n, total);
+  const waveRng = spawnRngFor(G.mode, n);
+  // One flank decision for the WHOLE wave. It used to be re-rolled per
+  // soldier, so a single wave could mix front and rear spawns for no reason
+  // the player could learn — the wave looked random even in a mode with a
+  // clear semantic. Now the wave agrees on its side, and the seed makes it
+  // reproducible.
+  const waveFlank = waveRng() < 0.34;
   for (let i = 0; i < total; i++) {
     let sx = null, sz = null, sy = 0;
     // mode generator first: the wave arrives as a coordinated push along its
@@ -3657,12 +3893,12 @@ function startWave(n) {
     }
     if (sx === null) {
       let best = null;
-      if (objZone) best = pickZoneSpawn(pool, objZone);
-      else best = pickSpawnPoint(pool, n >= 2, !sealed);
+      if (objZone) best = pickZoneSpawn(pool, objZone, waveRng);
+      else best = pickSpawnPoint(pool, waveFlank, !sealed, waveRng);
       if (!best) continue;
       sx = best.x; sz = best.z; sy = best.y || 0;
       for (let t = 0; t < 5; t++) {
-        const a = Math.random() * Math.PI * 2, r = 0.9 + Math.random() * 1.3;
+        const a = waveRng() * Math.PI * 2, r = 0.9 + waveRng() * 1.3;
         const cand = resolveSpawn(best.x + Math.cos(a) * r, best.z + Math.sin(a) * r, sy);
         if (cand && (sealed || spawnReachesPlayer(cand))) { sx = cand.x; sz = cand.z; sy = cand.y || sy; break; }
       }
@@ -3673,14 +3909,27 @@ function startWave(n) {
     });
   }
   const roofSpawns = level.roofSpawns || [];
-  if (roofSpawns.length && n >= 6) {
-    const count = Math.min(2, 1 + Math.floor((n - 6) / 3));
-    for (let i = 0; i < count; i++) {
-      const sp = roofSpawns[(n + i) % roofSpawns.length];
+  if (roofSpawns.length && n >= 9) {
+    // Roof snipers used to drop in at wave 6, right in the middle of D3, and
+    // they are the only enemy the player cannot answer with aim: 82 hp at
+    // 40-90 m through a roof edge, with a 92 m detection range. They now
+    // arrive with the D4/VETERAN step (wave 9), i.e. together with the tier
+    // that is built around being shot at from several axes.
+    const count = Math.min(2, 1 + Math.floor((n - 9) / 3));
+    // the NEAREST roof posts, not a rotating index into the whole table: a
+    // sniper 140 m out is a map marker, not a threat, and it keeps the wave
+    // from ever clearing. A roof post the player cannot even perceive is
+    // skipped (the wave counts stay in sync below).
+    const sorted = roofSpawns.slice().sort((a, b) => spawnDistTo(a) - spawnDistTo(b));
+    let added = 0;
+    for (let i = 0; i < count && i < sorted.length; i++) {
+      const sp = sorted[i];
+      if (spawnDistTo(sp) > SPAWN_MAX) break;
       G.spawnQueue.unshift({ x: sp.x, z: sp.z, y: sp.y, type: 'sniper', roof: true, profile: waveProfileName() });
+      added++;
     }
-    G.waveRemaining += count;
-    G.waveTotal += count;
+    G.waveRemaining += added;
+    G.waveTotal += added;
   }
   G.spawnTimer = 0.8;
   G.waveClearTimer = 0;
@@ -3797,7 +4046,7 @@ function updateHotDrop(dt) {
   const d = Math.hypot(p.x - hotDrop.x, p.z - hotDrop.z);
   if (d < 2.4 || hotDrop.t > 70) {
     if (d < 2.4) {
-      G.score += 200;
+      addScore(200);
       hud.setScore(G.score, G.kills);
       hud.toast('空投补给 · +200');
       if (audio && audio.ctx) audio.uiConfirm();
@@ -3885,6 +4134,13 @@ function spawnEnemy(pos, opts = {}) {
   } else {
     if (!sp) sp = ringSpawn() || { x: pos.x, z: pos.z, y: pos.y || 0 };
     else if (!sealed && !opts.force && sp.y <= 1 && !spawnReachesPlayer(sp)) sp = ringSpawn() || sp;
+    // final gate: a queued point the player could never perceive is not a
+    // spawn, it is scenery. Pull it into reach instead of parking a statue
+    // out where nothing can see or be seen.
+    if (!sealed && !opts.force && sp && spawnDistTo(sp) > SPAWN_MAX) {
+      const pulled = ringSpawn();
+      if (pulled) sp = pulled;
+    }
   }
   const yaw = Math.atan2(-(playerPos.x - sp.x), -(playerPos.z - sp.z));
   // a shotgun rusher stranded on a platform cannot charge; keep him a rifleman
@@ -3950,7 +4206,7 @@ function updateWaves(dt) {
     if (G.waveClearTimer === 0) {
       G.waveClearTimer = 0.001;
       hud.setHint('WAVE CLEARED');
-      G.score += Math.round(250 * G.scoreMult);
+      addScore(250);
       hud.setScore(G.score, G.kills);
       if (G.stats) {
         G.stats.wavesCleared++;
@@ -4151,6 +4407,14 @@ function fireShot() {
     if (hit) {
       _end.copy(hit.point);
       if (p === 0) _endFirst.copy(_end);
+      // Smoke is symmetric. It already cuts the AI's sight lines; if it did
+      // NOT eat the player's rounds, a cloud would be a free window to shoot
+      // an enemy who cannot see you — a pure advantage for the thrower.
+      if (perception && perception.smokeBlocks(
+        engine.camera.position.x, engine.camera.position.z, hit.point.x, hit.point.z)) {
+        if (effects < 3) { audio.impact('concrete'); effects++; }
+        continue;
+      }
       _normal.copy(hit.face ? hit.face.normal : _dir).transformDirection(hit.object.matrixWorld).negate();
       if (_normal.lengthSq() < 0.1) _normal.copy(_dir).negate();
       const destId = hit.object.userData && hit.object.userData.destructible;
@@ -4272,11 +4536,22 @@ function spawnBoss(op, beatBoss = null) {
   G.bossBeatSpawned = true;
   resetBossPhases();
   if (hud) {
-    hud.toast(`${(src && src.name) || op.bossName || '指挥官'} · 重甲`, 2600);
-    hud.setObjective(`击杀 ${(src && src.name) || op.bossName || '敌方指挥官'}`);
+    /* bossAlias: the name the HUD shows DURING the fight. The decoy must
+       read as the commander until the kill — otherwise the objective line
+       ("击杀 指挥官替身") spoils the one good reversal in the campaign. */
+    const shown = op.bossAlias || (src && src.name) || op.bossName || '指挥官';
+    hud.toast(`${shown} · 重甲`, 2600);
+    hud.setObjective(`击杀 ${shown}`);
   }
+  /* The boss entrance line. If the op has a radio line for this wave it
+     plays that; if the op opens with a boss-intro CUTSCENE, the scene has
+     already said it (OP09 says "卡里姆出来了——这次是真的" in the scene), so
+     the generic fallback would double up. */
   const bossLine = op.radio.find((r) => r.at === (beatBoss ? G.wave : op.bossWave));
-    if (hud && hud.radio) hud.radio('VEGA', bossLine?.text || '指挥官下车了。', 5600, bossLine?.voice || 'cmd_disembark');
+  if (hud && hud.radio) {
+    if (bossLine) hud.radio(bossLine.speaker || 'VEGA', bossLine.text, 5600, bossLine.voice);
+    else if (!op.bossIntro) hud.radio('VEGA', '指挥官下车了。', 5600, 'cmd_disembark');
+  }
 }
 
 /* ---- boss phases (Phase 3, plan §4.5) --------------------------------------
@@ -4343,7 +4618,14 @@ function runBossPhase(ph) {
     }
     case 'artillery':
       if (artillery) {
-        artillery.strike({ x: controller.pos.x, z: controller.pos.z }, { shells: ph.shells || 3 });
+        // The crane walks fire onto the player — but it stays READABLE: the
+        // first shell lands 1.4 s + 0.62 s of fall later, so a player who
+        // reacts to the radio line has time to leave the 4.4 m blast radius,
+        // and each shell does 0.7x so a full 3-shell dump cannot delete the
+        // whole 180 raw effective health pool on its own.
+        artillery.strike({ x: controller.pos.x, z: controller.pos.z }, {
+          shells: ph.shells || 3, delay: 1.4, playerDamage: 0.7,
+        });
       }
       break;
     default: break;
@@ -4419,7 +4701,10 @@ function finishOperation() {
       viewmodel.root.visible = true;
       victoryThenMission(op);
     });
-    if (videoIntro) videoIntro.play('/media/ending.mp4', playEnding);
+    /* The final video belongs to the real finale only. OP10's outro is the
+       street arc's FALSE ending (the command escapes, the cargo does not),
+       so it plays the in-engine scene without the ending film. */
+    if (op.outroVideo && videoIntro) videoIntro.play('/media/ending.mp4', playEnding);
     else playEnding();
     return;
   }
@@ -4471,6 +4756,27 @@ function returnToMenu() {
   rollDeployFlavor();
 }
 
+/** Each boss dies in its own words. The old single line ("指挥官倒了，车队
+ *  正在撤离") fired for EVERY boss, so killing the deputy announced the
+ *  commander's death, and killing the decoy announced a victory that the
+ *  very next debrief contradicts. */
+function bossDeathLine(op) {
+  const name = (op && op.bossName) || '';
+  if (name.indexOf('哈桑') >= 0) {
+    return { shown: '副官 · 哈桑', speaker: 'VEGA', text: '哈桑死了。到死一个字都没说。', voice: 'boss_down_hassan' };
+  }
+  if (name.indexOf('替身') >= 0) {
+    return { shown: '指挥官替身', speaker: 'VEGA', text: '车上那个不是他。真的指挥官已经进北楼了。', voice: 'boss_down_decoy' };
+  }
+  if (name.indexOf('卡里姆') >= 0) {
+    return { shown: '指挥官 · 卡里姆', speaker: '卡里姆', text: '你以为你在追我？让他到北楼来——那句话，是我写的。', voice: 'karim_down' };
+  }
+  if (name.indexOf('萨利姆') >= 0) {
+    return { shown: '萨利姆', speaker: 'VEGA', text: '电台安静了。船不会开。', voice: 'boss_down_salim' };
+  }
+  return { shown: '指挥官', speaker: 'VEGA', text: '指挥官倒了。车队失去指挥，正在撤离。', voice: 'cmd_down' };
+}
+
 function onEnemyKilled(enemy, headshot, cause = 'bullet', killerTeam) {
   // killerTeam resolution: callers pass the SHOOTER's faction (a remote
   // client's, a grenade thrower's); `null` means teamless (zone/artillery);
@@ -4488,7 +4794,7 @@ function onEnemyKilled(enemy, headshot, cause = 'bullet', killerTeam) {
   }
   G.kills++;
   G.waveRemaining = Math.max(0, G.waveRemaining - 1);
-  G.score += Math.round((headshot ? 150 : 100) * G.scoreMult);
+  addScore(headshot ? 150 : 100);
   hud.setScore(G.score, G.kills);
   hud.addKillFeed(headshot ? 'HOSTILE' : 'INSURGENT', headshot, currentWeapon().name);
   G.hitStop = 0.055;
@@ -4505,10 +4811,16 @@ function onEnemyKilled(enemy, headshot, cause = 'bullet', killerTeam) {
     if (cause === 'grenade') G.stats.grenadeKills++;
   }
   if (enemy && enemy.isBoss) {
-    G.score += Math.round(1500 * G.scoreMult);
+    addScore(1500);
     hud.setScore(G.score, G.kills);
-    hud.toast('指挥官击毙 · +1500', 2400);
-    if (hud.radio) hud.radio('VEGA', '指挥官倒了。车队失去指挥，正在撤离。', 5200, 'cmd_down');
+    const death = bossDeathLine(G.operation);
+    /* The kill banner lands AFTER the death line. Otherwise the HUD names
+       the decoy ("指挥官替身 击毙") a beat before VEGA gets to say "车上
+       那个不是他" — the UI would spoil the one good reversal in the line. */
+    setTimeout(() => {
+      if (hud) hud.toast(`${death.shown} 击毙 · +1500`, 2400);
+    }, 1400);
+    if (hud.radio) hud.radio(death.speaker, death.text, 5200, death.voice);
     G.boss = null;
   }
   // killstreak kills must not feed the next streak (CoD rule) or artillery chains forever
@@ -4688,7 +5000,14 @@ function updateGrenades(dt) {
       }
       fx.explosion(g.mesh.position.clone(), 1.0);
       audio.explosion(0, g.mesh.position.distanceTo(engine.camera.position));
-      if (perception) perception.noise(g.mesh.position.x, g.mesh.position.z, 45, 1.0);
+      if (perception) {
+        perception.noise(g.mesh.position.x, g.mesh.position.z, 45, 1.0);
+        // The blast SUPPRESSES the squad instead of only announcing the
+        // player: soldiers caught near it break for cover and stop pushing.
+        // That is what makes the player's frag a crossing tool rather than a
+        // beacon that tells every enemy exactly where to run.
+        perception.applySuppression(enemies, g.mesh.position.x, g.mesh.position.z, 7.5, 0.9);
+      }
       controller.addShake(0.85);
       // Who threw it: a remote player's grenade keeps THEIR team (friendly
       // fire + scoring both key off the thrower, never off the sim owner).
@@ -4760,7 +5079,7 @@ function onEnemyBreach(door) {
 }
 
 /* ------------------------------------------------------------------ damage */
-function applyPlayerDamage(amount, fromPos, attackerTeam = undefined) {
+function applyPlayerDamage(amount, fromPos, attackerTeam = undefined, source = null) {
   if (G.state !== 'playing' || G.hp <= 0) return;
   if (SHOT_MODE) return;
   // Post-respawn invulnerability (CONQUEST.SPAWN_GRACE_S).
@@ -4778,6 +5097,24 @@ function applyPlayerDamage(amount, fromPos, attackerTeam = undefined) {
     if (st.damageReduction > 0) amount *= (1 - st.damageReduction);
   }
   if (G.stats) G.stats.damagedThisWave = true;
+  // ---- death attribution -------------------------------------------------
+  // "Who killed me, from how far, doing what?" is the only question a
+  // player (and a designer) can act on after a bad wave. The source soldier
+  // is passed straight through from Enemy.shoot().
+  if (fromPos) {
+    const dx = fromPos.x - engine.camera.position.x;
+    const dz = fromPos.z - engine.camera.position.z;
+    G.lastDamage = {
+      x: +fromPos.x.toFixed(1), z: +fromPos.z.toFixed(1),
+      dist: +Math.hypot(dx, dz).toFixed(1),
+      archetype: (source && source.archetype) || null,
+      role: (source && source.aiRole) || null,
+      utility: !!(source && source.utility),
+      tier: G.diff ? G.diff.id : null,
+      wave: G.wave,
+      t: +(performance.now() / 1000).toFixed(2),
+    };
+  }
   G.sinceDamage = 0;
   G.hurtTimer = 0.3;
   let dmg = amount;
@@ -4862,7 +5199,7 @@ function updateInventory(dt) {
 function onPickupCollected(kind, amount) {
   const num = (v, d) => (typeof v === 'number' && v > 0 ? v : d);
   const ammo = num(kind === 'supply' && amount && amount.ammo, num(amount, 90));
-  const armor = num(kind === 'supply' && amount && amount.armor, num(amount, 25));
+  const armor = num(kind === 'supply' && amount && amount.armor, num(amount, 40));
 
   // ---- battle-royale gear: level-exclusive per slot ------------------
   if (inventory && ITEMS[kind] && ITEMS[kind].family === 'gear') {
@@ -4939,19 +5276,24 @@ function onStreakReward(id) {
     pickups.spawn('supply', p.x + 1.4, p.y, p.z + 1.4);
     if (hud.setStreakReward) hud.setStreakReward('SUPPLY DROP');
   } else if (id === 'uav') {
-    G.uavUntil = G.time + 12;
+    // 10 s, not 12 s: the UAV marks EVERY living enemy on the compass while
+    // the enemy side only ever gets a 12-20 m error circle, so the window
+    // length IS the size of the information asymmetry.
+    G.uavUntil = G.time + 10;
     G.uavTick = 0;
-    if (hud.setUav) hud.setUav(true, 12);
+    if (hud.setUav) hud.setUav(true, 10);
     if (hud.setStreakReward) hud.setStreakReward('UAV ONLINE');
     audio.uiConfirm();
   } else if (id === 'artillery') {
-    artillery.strike(aimPoint(40), { shells: 7, radius: 10, spread: 7 });
+    // hurtPlayer:false — this is the player's OWN reward. It must never kill
+    // the player who earned it (see artilleryDamageAt).
+    artillery.strike(aimPoint(40), { shells: 7, radius: 10, spread: 7, hurtPlayer: false });
     if (hud.setStreakReward) hud.setStreakReward('ARTILLERY');
   }
 }
 
 /** called by the artillery module per shell impact */
-function artilleryDamageAt(point, radius, dmg) {
+function artilleryDamageAt(point, radius, dmg, ctx) {
   for (const e of enemies) {
     if (!e.alive) continue;
     const d = e.root.position.distanceTo(point);
@@ -4962,8 +5304,20 @@ function artilleryDamageAt(point, radius, dmg) {
       if (died) onEnemyKilled(e, false, 'artillery', null);
     }
   }
-  const pd = point.distanceTo(engine.camera.position);
-  if (pd < radius * 0.8) applyPlayerDamage(Math.max(6, 55 * (1 - pd / (radius * 0.8))), point);
+  // The player side is policy-driven per strike: a strike the PLAYER earned
+  // (kill-streak artillery) must never hurt the player — the aim point is
+  // clamped to the map bounds, so standing near an edge facing outwards used
+  // to drop the whole barrage on the player's feet (7 shells x 55 = 385 raw
+  // against a 180 raw effective health pool). A strike aimed AT the player
+  // (boss phase) keeps hurting, but scales its own damage so the dodge
+  // window (delay + fall time) stays survivable.
+  const c = ctx || {};
+  if (c.hurtPlayer !== false) {
+    const pd = point.distanceTo(engine.camera.position);
+    const pr = radius * 0.8;
+    const scale = c.playerDamage == null ? 1 : c.playerDamage;
+    if (pd < pr) applyPlayerDamage(Math.max(6, 55 * scale * (1 - pd / pr)), point);
+  }
   if (G.versusMode && net.role === 'host') {
     for (const r of net.remote.values()) {
       if (!r.alive) continue;
@@ -5199,7 +5553,15 @@ function showRunResults() {
   const daily = loadDaily();
   const { state: dstate } = applyDailyProgress(daily, s);
   const summary = dailySummary(dstate);
-  const payload = runPayload(s, { score: G.score, wave: G.wave, challengesDone: summary.done });
+  const payload = runPayload(s, {
+    score: G.score, wave: G.wave, challengesDone: summary.done,
+    // daily-claim binding: which local day this run claims, the timezone it
+    // was drawn in, and the score WITHOUT the daily multiplier (the server
+    // falls back to it when it voids a bonus claimed on the wrong day).
+    scoreBase: G.scoreBase,
+    dailyDate: summary.done ? todayKey() : undefined,
+    dailyTzMin: -new Date().getTimezoneOffset(),
+  });
   lastRunPayload = payload;
 
   const rec = recordRun({
@@ -5255,6 +5617,11 @@ function playerDie() {
   if (G.state === 'dead') return;
   // remembered so the next solo spawn lands far from this spot
   G.lastDeathPos = { x: controller.pos.x, z: controller.pos.z };
+  // the death log is the attribution table (see G.lastDamage)
+  G.deathLog = G.deathLog || [];
+  if (G.deathLog.length < 40) {
+    G.deathLog.push(Object.assign({ mode: G.settings && G.settings.runMode }, G.lastDamage || {}));
+  }
   if (net.role) {
     G.hp = 0;
     // Versus keeps the arcade instant respawn; LAN CO-OP goes down instead —
@@ -5329,7 +5696,7 @@ const enemyCtx = {
   // every bullet lands on the host no matter who was aimed at.
   targetId: undefined,
   attackerTeam: undefined,
-  damagePlayer: (amount, from) => {
+  damagePlayer: (amount, from, source = null) => {
     const tid = enemyCtx.targetId;
     if (tid != null && String(tid).startsWith('bot:')) {
       const bot = botById(String(tid).slice(4));
@@ -5349,7 +5716,7 @@ const enemyCtx = {
     // wasAlive gates out the rest of the killing burst (state is 'dead' by
     // then, but hp stays 0 and would re-score every pellet).
     const wasAlive = G.state === 'playing' && G.hp > 0;
-    applyPlayerDamage(amount, from, enemyCtx.attackerTeam);
+    applyPlayerDamage(amount, from, enemyCtx.attackerTeam, source);
     if (wasAlive && G.versusMode && G.hp <= 0 && net.role) {
       onVersusDeath(net.team,
         Number.isFinite(enemyCtx.attackerTeam) ? enemyCtx.attackerTeam : undefined,
@@ -5370,14 +5737,23 @@ function setupEnemyCtx() {
   enemyCtx.groundAt = (x, z, y) => level.groundHeight(x, z, y);
   enemyCtx.playerGroundY = 0;
   // Phase 1: semantic spawn zones over the level's named regions
-  if (level) spawnDirector = createSpawnDirector({ level });
+  if (level) {
+    // The director's default rng is the seeded session stream; per-wave
+    // generators override it with a wave-specific seed so a wave can be
+    // replayed on its own.
+    spawnDirector = createSpawnDirector({ level, rng: makeRng(SPAWN_SEED) });
+  }
   // AI v2: shared perception + squad director (needs the nav grid + colliders)
   if (nav && level) {
     perception = new Perception();
     aiDirector = new AIDirector(nav, level, {
       barks,
       perception,
-      onBreach: (door) => onEnemyBreach(door),
+      onBreach: (door) => {
+        // a breach owns the fight for a moment: no utility on top of the door
+        if (equipment && equipment.suppressThrows) equipment.suppressThrows(3000);
+        onEnemyBreach(door);
+      },
     });
     enemyCtx.ai = {
       perception,
@@ -5386,6 +5762,9 @@ function setupEnemyCtx() {
       barks,
     };
   }
+  // smoke eats rounds from BOTH sides (see Enemy.shoot and the player's
+  // own hit path) — a cloud that only blinded the AI would be a free window
+  enemyCtx.smokeBlocks = (x0, z0, x1, z1) => !!(perception && perception.smokeBlocks(x0, z0, x1, z1));
   enemyCtx.panFor = (pos) => {
     const cam = engine.camera;
     const dx = pos.x - cam.position.x, dz = pos.z - cam.position.z;
@@ -5395,8 +5774,9 @@ function setupEnemyCtx() {
   };
   enemyCtx.onEnemyFire = (pos) => {
     hud.ping(pos, engine.camera, 1.4);
-    // friendly gunfire is a cue for the rest of the squad
-    if (perception) perception.noise(pos.x, pos.z, 22, 0.35, 0.35);
+    // friendly gunfire: the squad already knows where its own soldiers are,
+    // so this must not pull anyone off their post
+    if (perception) perception.noise(pos.x, pos.z, 22, 0.35, 0.35, true);
   };
 }
 
@@ -6079,6 +6459,7 @@ function applyLanSnapshot(snap) {
   G.wave = Number(snap.wave) || G.wave;
   G.kills = Number(snap.kills) || 0;
   G.score = Number(snap.score) || G.kills * 100;
+  G.scoreBase = Math.round(G.score / Math.max(1, G.scoreMult));
   if (hud) {
     hud.setWave(G.wave);
     hud.setScore(G.score, G.kills);
@@ -6127,6 +6508,20 @@ function applyLanSnapshot(snap) {
     remote players are: a same-team bot must never lock onto its own human
     teammate. Returns null when no hostile human exists — in versus the squad
     then falls back to the enemy-team bots (nearestHostileActor). */
+/**
+ * The centroid of every living LAN player. The squad director uses it as its
+ * planning anchor in co-op, so the squad converges on the TEAM instead of on
+ * whichever player happens to be the host.
+ */
+function lanSquadCentroid() {
+  let x = controller.pos.x, z = controller.pos.z, n = 1;
+  for (const r of net.remote.values()) {
+    if (!r.alive) continue;
+    x += r.x; z += r.z; n++;
+  }
+  return { x: x / n, z: z / n };
+}
+
 function nearestLanTarget(pos, selfTeam = undefined) {
   // The local player's faction. In versus the host is blue (0) and a client
   // carries its assigned team; in co-op there is no faction at all.
@@ -6148,7 +6543,8 @@ function nearestLanTarget(pos, selfTeam = undefined) {
       // or it is silently overwritten and bots open fire mid-deployment.
       hp: G.hp,
       alive: G.hp > 0 && !(G.versusMode && G.versusGraceT > 0),
-      speed: controller.state.speed,
+      speed: controller.state.speedMs,
+      eyeY: engine.camera.position.y,
       team: localTeam,
     };
     bestD = Math.hypot(pos.x - best.x, pos.z - best.z);
@@ -6161,7 +6557,7 @@ function nearestLanTarget(pos, selfTeam = undefined) {
     // squad as hostile and makes everyone shoot their own teammates.
     if (selfTeam != null && r.team != null && r.team === selfTeam) continue;
     const d = Math.hypot(pos.x - r.x, pos.z - r.z);
-    if (d < bestD) { bestD = d; best = { id: r.id, x: r.x, y: r.y, z: r.z, hp: r.hp, alive: true, speed: r.speed || 0, team: r.team }; }
+    if (d < bestD) { bestD = d; best = { id: r.id, x: r.x, y: r.y, z: r.z, hp: r.hp, alive: true, speed: r.speed || 0, eyeY: (r.y || 0) + 1.68, team: r.team }; }
   }
   return best;
 }
@@ -6387,6 +6783,7 @@ function promoteToLanHost(resume) {
     if (Number.isFinite(Number(resume.wave)) && Number(resume.wave) > 0) G.wave = Number(resume.wave);
     if (Number.isFinite(Number(resume.kills))) G.kills = Number(resume.kills);
     if (Number.isFinite(Number(resume.score))) G.score = Number(resume.score);
+    G.scoreBase = Math.round(G.score / Math.max(1, G.scoreMult));
     // Replica enemies (netRemote) become the authoritative set. Their ids were
     // the host's _netId values, so future snapshots keep the same identity.
     // Keep net.enemies populated: getOrCreateNetEnemy below must find (not
@@ -6468,11 +6865,25 @@ function startLanHostGame(opts = {}) {
     const sp = versusSpawnSlot(mySlot ? mySlot.team : net.team, mySlot ? mySlot.index : 0, 3);
     controller.revive(sp.x, sp.z);
     controller.setLook((G.site && G.site.yaw) || -0.03, -0.015);
+  } else {
+    // Co-op: the squad lands on a RALLY RING, not on one coordinate. Every
+    // peer derives the same ring from the same player list, so the squad
+    // arrives together but nobody is standing inside anybody else.
+    const ids = lobbyPlayers.map((p) => String(p.id));
+    const spot = assignCoopRallySpot({
+      site: G.site, playerIds: ids, selfId: net.selfId, seed: SPAWN_SEED,
+    });
+    controller.revive(spot.x, spot.z);
+    controller.setLook((G.site && G.site.yaw) || -0.03, -0.015);
   }
   if (lanSession) {
     lanSession.broadcastEvent('start', {
       wave: 1, site: G.site && G.site.id, versus, teams,
       grace: G.versusGraceT,
+      // Co-op peers need the full roster to derive the same rally ring the
+      // host used; without it every client would land on its own single
+      // anchor and the squad would stack.
+      players: lobbyPlayers.map((p) => ({ id: String(p.id) })),
     });
   }
   if (lanLobby) lanLobby.setPlayers(lanSession.players || []);
@@ -6487,7 +6898,7 @@ function startLanHostGame(opts = {}) {
     // wave-1 training tier, or the fill bots queue behind one firing slot.
     G.diff = DIFF_TIERS[3];
     firingSlots.max = 4;
-    firingSlots.at.length = 0;
+    resetFiringSlots();
     startZone();
     // conquest rounds (Phase 4b) own the match from here: the first round's
     // deployment grace is the lobby spread (VERSUS_GRACE_S)
@@ -6543,7 +6954,20 @@ function startLanClientGame(siteId = 'street', startMsg = null) {
   viewmodel.root.visible = true;
   G.site = siteById(siteId);
   G.playRect = G.site.rect;
-  controller.revive(G.site.x + 2.2, G.site.z + 1.0);
+  if (!versus) {
+    // Co-op: same rally ring the host used — derived from the roster the
+    // host broadcast, so this client lands beside its squadmates instead of
+    // on the single anchor point they all used to share.
+    const roster = (startMsg && Array.isArray(startMsg.players))
+      ? startMsg.players.map((p) => String(p.id))
+      : [];
+    const spot = assignCoopRallySpot({
+      site: G.site, playerIds: roster, selfId: net.selfId, seed: SPAWN_SEED,
+    });
+    controller.revive(spot.x, spot.z);
+  } else {
+    controller.revive(G.site.x + 2.2, G.site.z + 1.0);
+  }
   controller.setLook(G.site.yaw || -0.03, -0.015);
   G.wave = 1;
   G.reserve = Math.max(G.reserve, 240);
@@ -6595,6 +7019,17 @@ function respawnLanLocal() {
   if (G.versusMode && net.spawnSlots) {
     const mySlot = net.spawnSlots[String(net.selfId)];
     sp = versusSpawnSlot(mySlot ? mySlot.team : (net.team ?? 0), mySlot ? mySlot.index : 0, 3);
+  } else if (!G.versusMode && net.role === 'client') {
+    // Co-op respawn: back to this player's own spot on the rally ring, so a
+    // revived squad reforms where it started rather than at one shared
+    // anchor point.
+    const roster = (lanSession && Array.isArray(lanSession.players))
+      ? lanSession.players.map((p) => String(p.id))
+      : [];
+    const spot = assignCoopRallySpot({
+      site: G.site, playerIds: roster, selfId: net.selfId, seed: SPAWN_SEED,
+    });
+    sp = spot;
   }
   controller.revive(
     sp ? sp.x : (G.site ? G.site.x : 1.2) + 2.2,
@@ -6717,7 +7152,7 @@ function standUpFromDown() {
   G.hp = Math.max(1, Math.round(G.maxHp * REVIVE_HP_FRAC));
   controller.revive(controller.pos.x, controller.pos.z);
   viewmodel.state.dead = false;
-  if (hud) { hud.setHealth(G.hp, pipsFor(G.armor)); hud.setHint('已被救起 · 半血'); }
+  if (hud) { hud.setHealth(G.hp, pipsFor(G.armor)); hud.setHint('已被救起 · 三分之一血量'); }
   if (audio && audio.uiConfirm) audio.uiConfirm();
   if (!SHOT_MODE && input && input.lock) input.lock();
 }
@@ -6809,6 +7244,13 @@ function netTick(dt) {
     net.snapT += dt;
     if (net.snapT >= 0.05) { net.snapT = 0; sendLanSnapshot(); }
     for (const r of net.remote.values()) {
+      // The LAN payload carries position but not velocity. Derive a coarse
+      // speed from the snapshot deltas so the AI can tell a sprinting peer
+      // from a static one (hearing radius, hit falloff, intel refresh).
+      const now = performance.now() / 1000;
+      const prev = r.lastSpeedSample;
+      r.speed = prev ? Math.hypot(r.x - prev.x, r.z - prev.z) / Math.max(0.05, now - prev.t) : 0;
+      r.lastSpeedSample = { x: r.x, z: r.z, t: now };
       r.avatar.apply({ x: r.x, y: r.y, z: r.z, yaw: r.yaw, pitch: r.pitch, alive: r.alive, aim: 0.6 }, dt);
       if (r.avatar.alive) r.avatar.group.visible = Math.hypot(r.x - controller.pos.x, r.z - controller.pos.z) > 0.85;
     }
@@ -7026,13 +7468,22 @@ function updateGame(dt) {
   // AI v2: tick the shared senses, then hand out squad roles once per 0.3 s
   if (net.role !== 'client') {
   if (perception) perception.update(dt);
-  if (aiDirector && nav && !G.versusMode) aiDirector.tick(dt, enemies, controller.pos, G.diff);
+  if (aiDirector && nav && !G.versusMode) {
+    // In co-op the squad must plan around the TEAM, not around the host: a
+    // flank planned around the host while the squad is actually fighting
+    // another player produced nonsense routes.
+    const anchor = (net.role === 'host' && net.remote.size) ? lanSquadCentroid() : controller.pos;
+    aiDirector.tick(dt, enemies, anchor, G.diff, {
+      // the player's facing — "left flank" has to mean the player's left
+      x: -Math.sin(controller.yaw), z: -Math.cos(controller.yaw),
+    });
+  }
   // Versus: the grenade subsystem assumes one hostile faction and one player
   // target; both assumptions break, so it stays a co-op-only feature.
   if (equipment && !G.versusMode && !SHOT_MODE && !(net.role === 'host' && net.remote.size > 0)) {
     equipment.update(dt, {
       playerPos: controller.pos,
-      playerSpeed: controller.state.speed,
+      playerSpeed: controller.state.speedMs,
       playerAlive: G.hp > 0,
       enemies,
       tier: G.diff,
@@ -7043,6 +7494,24 @@ function updateGame(dt) {
     G.flashA = Math.max(0, G.flashA - dt * 0.8);
     if (hud && hud.setFlash) hud.setFlash(G.flashA);
   }
+  // The host owns the enemy simulation, so it publishes the local player's
+  // state to the shared context BEFORE the soldiers tick — otherwise every
+  // enemy reads last frame's position (and, on frame one, the origin).
+  if (net.role === 'host') {
+    enemyCtx.targetId = net.selfId || 'local';
+    enemyCtx.playerPos.copy(controller.pos);
+    enemyCtx.playerGroundY = controller.pos.y;
+    enemyCtx.playerAlive = G.hp > 0;
+    // metres per second — the AI reasons in m/s (hearing radius, hit falloff,
+    // "is the player still?"). controller.state.speed is normalised 0..1.
+    enemyCtx.playerSpeed = controller.state.speedMs;
+    // the player's EYE height, so the AI can actually aim at a crouched head
+    // and so cover can be tested against the real sight line.
+    enemyCtx.playerEyeY = engine.camera.position.y;
+    enemyCtx.playerFastT = Math.max(0, (enemyCtx.playerFastT || 0) - dt);
+    if (controller.state.speedMs > 3.3) enemyCtx.playerFastT = 0.15;
+  }
+
   for (const e of enemies) {
     if (!e.root.visible) continue;
     if (net.role === 'client' && e.netRemote) continue;
@@ -7068,6 +7537,7 @@ function updateGame(dt) {
       enemyCtx.targetId = tgt.id;
       enemyCtx.playerPos.set(tgt.x, tgt.y, tgt.z);
       enemyCtx.playerGroundY = tgt.y;
+      enemyCtx.playerEyeY = tgt.eyeY != null ? tgt.eyeY : (tgt.y || 0) + 1.68;
       // versusOver: nobody is a legal target once the match is decided
       enemyCtx.playerAlive = tgt.alive && !G.versusOver;
       enemyCtx.playerSpeed = tgt.speed;
@@ -7131,16 +7601,6 @@ function updateGame(dt) {
       e.root.traverse((o) => { if (o.isMesh) o.castShadow = castShadow; });
     }
     if (e.setDetailVisible) e.setDetailVisible(dx * dx + dz * dz < 24 * 24);
-  }
-
-  if (net.role === 'host') {
-    enemyCtx.targetId = net.selfId || 'local';
-    enemyCtx.playerPos.copy(controller.pos);
-    enemyCtx.playerGroundY = controller.pos.y;
-    enemyCtx.playerAlive = G.hp > 0;
-    enemyCtx.playerSpeed = controller.state.speed;
-    enemyCtx.playerFastT = Math.max(0, (enemyCtx.playerFastT || 0) - dt);
-    if (controller.state.speed > 3.3) enemyCtx.playerFastT = 0.15;
   }
 
   netTick(dt);
@@ -7252,6 +7712,35 @@ window.__game = {
   get barks() { return barks; },
   get net() { return net; }, get zoneSys() { return zoneSys; }, get zonePlanes() { return zonePlanes; }, get versusBots() { return versusBots; },
   get spawnDirector() { return spawnDirector; },
+  /** Spawn reproducibility + audit: the session seed, and the last N wave
+   *  plans with their distances and sectors. Lets a probe answer "how far
+   *  away did wave N actually land?" instead of guessing. */
+  get spawnSeed() { return SPAWN_SEED; },
+  get spawnAudit() { return (G.spawnAudit || []).slice(); },
+  /* Replay a wave from its recorded seed. The audit entry carries the
+     inputs the plan depended on (player position, facing, burned zones),
+     so the replay reproduces THAT wave rather than today's state — without
+     them the plan drifts as soon as the player walks two metres. */
+  spawnPlan: (mode, wave) => {
+    const entry = (G.spawnAudit || []).slice().reverse()
+      .find((e) => e.wave === wave && e.mode === mode);
+    const rng = spawnRngFor(mode, wave);
+    const zones = spawnDirector ? zonesWithinRect(spawnDirector.zones, G.playRect) : [];
+    if (!zones.length) return [];
+    const playerPos = entry && entry.player
+      ? { x: entry.player.x, z: entry.player.z }
+      : controller.pos;
+    const facing = entry && Number.isFinite(entry.facing) ? entry.facing : controller.headingDeg;
+    const recent = entry && entry.recentZones ? entry.recentZones.slice() : [];
+    const base = { zones, playerPos, playerFacingDeg: facing, rng };
+    if (mode === 'defend' && G.objective) {
+      return spawnDirector.pickDefend({ ...base, objective: G.objective.zone, coverPoints: level.coverPoints, count: 3 });
+    }
+    if ((mode === 'extract' || mode === 'infil') && G.objective) {
+      return spawnDirector.pickExtract({ ...base, extractZone: G.objective.zone, phase: 'fortify', count: 3 });
+    }
+    return spawnDirector.pickSurvival({ ...base, wave, recentZones: recent, count: 4 });
+  },
   get lan() { return lanSession; },
   get lanLobby() { return lanLobby; },
   /** Per-faction squad brains (versus only) — lets a probe read the shared
@@ -7308,6 +7797,9 @@ window.__game = {
       perception: perception ? perception.stats() : null,
       equipment: equipment ? equipment.stats() : null,
       barks: barks ? barks.count : null,
+      // death attribution: "who killed me, from how far, doing what"
+      lastDamage: G.lastDamage || null,
+      deaths: (G.deathLog || []).slice(-10),
       enemies: live.map((e) => ({
         a: e.archetype, role: e.aiRole, state: e.state,
         awareness: +(e.awareness || 0).toFixed(2),

@@ -2070,6 +2070,12 @@ export function createLevel(engine) {
     spawnPoints.push(
       { x: -96, z: 46 }, { x: -74, z: 10 }, { x: -46, z: -2 }, { x: -110, z: 20 },
       { x: -90, z: 20 }, { x: -76, z: 52 },
+      /* The souk's southern half had no spawn points at all, so a player
+         who pushed down to (-96,-34) had nothing inside the engagement
+         band and the wave had to arrive 50-60 m out. These fill the gap
+         and give the district a shoulder to flank from. */
+      { x: -95.7, z: -8.1 }, { x: -87.7, z: -5.7 }, { x: -78.9, z: -20.9 },
+      { x: -108.5, z: -11.3 }, { x: -103.7, z: -5.7 }, { x: -75.7, z: -40.1 },
     );
     coverPoints.push(
       { x: -74.6, z: 0.5, h: false }, { x: -52.6, z: 14, h: false }, { x: -95, z: 46, h: true },
@@ -6343,6 +6349,13 @@ export function createLevel(engine) {
     { x: 6.4, z: -18 }, { x: -7.4, z: -4 }, { x: 7.2, z: 4 },
     { x: -6.8, z: 14 }, { x: 6.6, z: 24 }, { x: 0, z: -48 },
     { x: -15.5, z: 3.2 },
+    /* Flank arrivals on the street site. Every other street point sits on
+       the x∈[-7,7] avenue, so from the site anchor they were all either
+       dead ahead or directly behind — the wave had no shoulder to come
+       from, and the rear share blew past its cap. These four sit on the
+       cross-streets 28-32 m out, which is where a flanking soldier can
+       actually appear. */
+    { x: -26.1, z: 34.3 }, { x: 29.1, z: 31.1 }, { x: 28.3, z: 23.9 }, { x: -30.9, z: 31.1 },
     // south depot yard: pressure can now arrive from behind the spawn
     { x: -15.2, z: 80.2 }, { x: 15.2, z: 80.2 }, { x: 0, z: 80.8 },
     { x: -15.4, z: 60.2 }, { x: 15.4, z: 60.4 }, { x: 13.6, z: 75.8 }

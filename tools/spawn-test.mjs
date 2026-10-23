@@ -16,7 +16,12 @@ import {
   pickSurvivalSpawns,
   pickDefendSpawns,
   pickExtractSpawns,
+  pickNeutralSpawns,
   pickPlayerSpawn,
+  assignCoopRallySpot,
+  SPAWN_RULES,
+  makeRng,
+  hashSeed,
 } from '../src/systems/spawn.js';
 
 let failures = 0;
@@ -179,6 +184,177 @@ const fakeLevel = {
   // empty district -> still returns a usable anchor
   const s3 = pickPlayerSpawn({ zonePoints: [], site, lastDeathPos: { x: 100, z: 100 }, rng });
   check('player spawn: falls back to the site anchor', Number.isFinite(s3.x) && Number.isFinite(s3.z));
+}
+
+/* ---- spawn band: a wave must start inside the engagement band -------------
+   Regression guard for the wave-convergence fix: a zone's BEARING decides
+   which side the wave comes from, but the POINT it lands on decides whether
+   the wave can fight at all. A zone whose points are all 100 m away must not
+   win over a zone that can start at 30 m, and the point chosen inside a zone
+   must be the one closest to the ideal distance. */
+{
+  const player = { x: 0, z: 0 };
+  const mkZone = (id, pts) => ({ id, points: pts, centroid: { x: pts.reduce((s, p) => s + p.x, 0) / pts.length, z: pts.reduce((s, p) => s + p.z, 0) / pts.length } });
+  const nearZone = mkZone('near', [{ x: 34, z: 0 }, { x: 42, z: 6 }, { x: 26, z: -4 }]);
+  const farZone = mkZone('far', [{ x: 110, z: 0 }, { x: 120, z: 8 }, { x: 104, z: -6 }]);
+  const rng = () => 0.5;
+
+  const picks = pickSurvivalSpawns({
+    zones: [nearZone, farZone], playerPos: player, playerFacingDeg: 90, wave: 1,
+    recentZones: [], count: 6, rng,
+  });
+  check('spawn band: the zone that can start close wins over the far one',
+    picks.length > 0 && picks.every((p) => p.zone.id === 'near'),
+    picks.map((p) => p.zone.id).join(','));
+  check('spawn band: every pick lands inside the engagement band',
+    picks.every((p) => {
+      const d = Math.hypot(p.point.x - player.x, p.point.z - player.z);
+      return d >= 18 && d <= 46;
+    }),
+    picks.map((p) => Math.round(Math.hypot(p.point.x - player.x, p.point.z - player.z))).join(','));
+
+  // the point inside the zone is chosen by DISTANCE, not at random
+  const single = pickSurvivalSpawns({
+    zones: [nearZone], playerPos: player, playerFacingDeg: 90, wave: 1,
+    recentZones: [], count: 1, rng: () => 0.0,   // no jitter -> the closest point wins
+  });
+  check('spawn band: the closest point to the ideal distance is used',
+    single.length === 1 && Math.hypot(single[0].point.x - player.x, single[0].point.z - player.z) <= 30,
+    single.length ? JSON.stringify(single[0].point) : 'no pick');
+
+  // only a far zone available -> the generator returns an EMPTY plan (its
+  // documented fallback contract: "nothing in range"), so the caller falls
+  // back to the legacy pool picker / ring spawn instead of starting the wave
+  // 120 m away
+  const onlyFar = pickSurvivalSpawns({
+    zones: [farZone], playerPos: player, playerFacingDeg: 90, wave: 1,
+    recentZones: [], count: 2, rng,
+  });
+  check('spawn band: a far-only zone yields an empty plan (caller re-picks)',
+    onlyFar.length === 0, `len=${onlyFar.length}`);
+}
+
+/* ---- the three layers must not bleed into each other ---------------------
+   The invariant this whole refactor exists to protect:
+     - the MODE decides which side of the map the wave comes from
+     - the RANDOMNESS only decides which metre inside that side
+   A generator that returns nothing must NOT silently degrade into a random
+   picker that can change the side — that is the bug the old 34% flank roll
+   created. It must degrade into a NEUTRAL, band-respecting picker. */
+{
+  const player = { x: 0, z: 0 };
+  const mkZone = (id, pts) => ({
+    id, points: pts,
+    centroid: {
+      x: pts.reduce((s, p) => s + p.x, 0) / pts.length,
+      z: pts.reduce((s, p) => s + p.z, 0) / pts.length,
+    },
+  });
+  const rng = () => 0.5;
+
+  /* Neutral fallback: no mode semantics, but every point is inside the
+     engagement band, so the wave can actually fight. */
+  const near = mkZone('near', [{ x: 34, z: 0 }, { x: 40, z: 6 }, { x: 28, z: -5 }]);
+  const neutral = pickNeutralSpawns({ zones: [near], playerPos: player, count: 3, rng });
+  check('neutral fallback: still produces a plan',
+    neutral.length > 0, `len=${neutral.length}`);
+  check('neutral fallback: every point is inside the engagement band',
+    neutral.every((p) => {
+      const d = Math.hypot(p.point.x - player.x, p.point.z - player.z);
+      return d >= SPAWN_RULES.pointMin && d <= SPAWN_RULES.pointMax;
+    }),
+    neutral.map((p) => Math.round(Math.hypot(p.point.x - player.x, p.point.z - player.z))).join(','));
+  check('neutral fallback: marks itself as a fallback',
+    neutral.every((p) => p.fallback === true));
+
+  /* A zone that is entirely out of range yields nothing — the caller then
+     falls through to the legacy pool picker. */
+  const far = mkZone('far', [{ x: 110, z: 0 }, { x: 120, z: 8 }]);
+  check('neutral fallback: out-of-range zone yields no plan',
+    pickNeutralSpawns({ zones: [far], playerPos: player, count: 2, rng }).length === 0);
+
+  /* The relaxed pass must widen the GATES without changing the SIDE. Same
+     player, same zones: the relaxed plan still comes from the same side. */
+  const zones = buildSpawnZones(fakeLevel).filter((z) => z.id !== 'centre');
+  const strict = pickSurvivalSpawns({
+    zones, playerPos: player, playerFacingDeg: 90, wave: 1, recentZones: [], count: 4, rng,
+  });
+  const loose = pickSurvivalSpawns({
+    zones, playerPos: player, playerFacingDeg: 90, wave: 1, recentZones: [], count: 4, rng, relaxed: true,
+  });
+  const strictSectors = new Set(strict.map((p) => p.sector));
+  const looseSectors = new Set(loose.map((p) => p.sector));
+  check('relaxed pass: keeps the same side as the strict plan',
+    loose.length > 0 && strict.length > 0
+      && [...looseSectors].every((s) => strictSectors.has(s)),
+    `strict=${[...strictSectors].join('/')} loose=${[...looseSectors].join('/')}`);
+
+  /* The rear share is a PROMISE: at most ~1/3 of a wave from behind the
+     player's back, even when a "front" zone's nearest point actually lands
+     behind them. */
+  const rearish = [
+    mkZone('front', [{ x: 30, z: -12 }, { x: 34, z: 10 }]),   // centroid in front
+    mkZone('back', [{ x: -30, z: -4 }, { x: -34, z: 8 }]),
+  ];
+  const rearPicks = pickSurvivalSpawns({
+    zones: rearish, playerPos: player, playerFacingDeg: 90, wave: 1,
+    recentZones: [], count: 6, rng,
+  });
+  const blindCount = rearPicks.filter((p) => p.blind).length;
+  check('survival: rear share stays at or below ~1/3',
+    blindCount <= Math.ceil(6 / 3), `blind=${blindCount}/${rearPicks.length}`);
+  check('survival: the blind flag matches the point\'s own bearing',
+    rearPicks.every((p) => {
+      const off = Math.abs(((Math.atan2(p.point.x - player.x, p.point.z - player.z) * 180 / Math.PI) + 360) % 360 - 90);
+      return p.blind === (off > 130);
+    }));
+}
+
+/* ---- determinism: the same seed must replay the same wave --------------- */
+{
+  const player = { x: 0, z: 0 };
+  const zones = buildSpawnZones(fakeLevel).filter((z) => z.id !== 'centre');
+  const planFor = (seed) => pickSurvivalSpawns({
+    zones, playerPos: player, playerFacingDeg: 90, wave: 3,
+    recentZones: ['east'], count: 6,
+    rng: makeRng(hashSeed(seed, 'survival', 3)),
+  });
+  const a = planFor(12345);
+  const b = planFor(12345);
+  const c = planFor(99999);
+  const key = (p) => p.map((x) => `${x.zone.id}:${x.point.x.toFixed(3)}:${x.point.z.toFixed(3)}`).join('|');
+  check('seed: the same seed replays the same wave', key(a) === key(b));
+  check('seed: a different seed produces a different wave', key(a) !== key(c));
+  check('seed: hashSeed is stable', hashSeed(1, 'survival', 3) === hashSeed(1, 'survival', 3));
+}
+
+/* ---- co-op rally: the squad lands together but not on one point --------- */
+{
+  const site = { x: 10, z: -20 };
+  const ids = ['p1', 'p2', 'p3', 'p4'];
+  const spots = ids.map((id) => assignCoopRallySpot({ site, playerIds: ids, selfId: id, seed: 7 }));
+  check('coop rally: every player gets a spot',
+    spots.length === 4 && spots.every((s) => Number.isFinite(s.x) && Number.isFinite(s.z)));
+  check('coop rally: no two players share a point',
+    new Set(spots.map((s) => `${s.x.toFixed(2)}:${s.z.toFixed(2)}`)).size === 4);
+  const gaps = [];
+  for (let i = 0; i < spots.length; i++) {
+    for (let j = i + 1; j < spots.length; j++) {
+      gaps.push(Math.hypot(spots[i].x - spots[j].x, spots[i].z - spots[j].z));
+    }
+  }
+  const minGap = Math.min(...gaps);
+  check('coop rally: neighbours keep a minimum separation',
+    minGap >= 2.5, `minGap=${minGap.toFixed(2)}`);
+  // determinism: the same roster and id must yield the same spot on every
+  // peer, otherwise the squad would land in different places per client
+  const again = assignCoopRallySpot({ site, playerIds: ids, selfId: 'p2', seed: 7 });
+  check('coop rally: the same player gets the same spot on every peer',
+    Math.abs(again.x - spots[1].x) < 1e-9 && Math.abs(again.z - spots[1].z) < 1e-9);
+  // a peer that only knows its own id still lands somewhere valid
+  const solo = assignCoopRallySpot({ site, playerIds: [], selfId: 'p9', seed: 7 });
+  check('coop rally: an unknown roster still returns a usable spot',
+    Number.isFinite(solo.x) && Number.isFinite(solo.z));
 }
 
 console.log(failures === 0 ? '\n[spawn-test] all checks passed' : `\n[spawn-test] ${failures} check(s) failed`);

@@ -213,6 +213,18 @@ Boss 从"血厚的大兵"升级为 2-3 阶段：
 **Phase 1 — 出生系统**：SpawnZone 数据结构 + 生存/防守/撤离三个生成器 + 站点内玩家出生随机化。纯后端改动，AI 不变也能立刻感到"模式不一样了"。
 
 > **状态：已完成（逻辑层 + 真实数据校验）。** 落地为纯逻辑模块 `src/systems/spawn.js`（zone 按 level 命名区域分桶、`zonesWithinRect` 裁剪当前战区、survival 双轴轮换 / defend 进攻轴线 / extract 布防-追击两段式、`pickPlayerSpawn` 远离上次死亡点）。main.js 接入点：`startWave` 先走模式生成器、失败回落旧池选点；`spawnReinforcements` 沿轴线续兵；extract 清场即触发身后追击波（rusher 倾向 + VEGA 播报）；单人自由玩法玩家出生在战区内离上一次死亡最远的点。回归测试 `tools/spawn-test.mjs`（19 项，已入 npm test）。
+>
+> **状态：已强化（分层落地 + 点级几何 + 可复现审计 + 真实地图校验）。** Phase 1 的初版仍留了三个隐患，本轮一并解决：
+>
+> **① 三层分离（子strate / 语义 / 随机）。** 距离规则统一到 `SPAWN_RULES`（`systems/spawn.js` 单一来源，main.js 引用而非重定义——此前 spawn.js 的 18/55 是"zone 质心带"、main.js 的 20/46 是"点位带"，同名不同量）。**语义层（模式决定从哪边来）各模式独立，**随机层只在选定的边内选具体点位。旧的 34% 侧后掷骰被彻底移除：它是"随机决定方位"，会让同一模式在不同波次换边——现在整波一次决定侧向，34% 改为**波级**开关而非每敌一次。
+>
+> **② 几何判定改为点级。** 初版按 zone **质心**做距离门禁，在真实地图上是错的：`container_yard` 横跨 120m（(54,-93)→(108,24)），质心 (70,-67) 不代表任何实际出生点，把玩家逼到港区北端时整区被误杀。现在所有生成器先收集 zone 内的**候选点**（满足距离带的点，带自身方位角），语义层基于候选点判定；zone 只保留"轮换单位"的角色。撤离的两段式也改用**线段投影**（走廊=点到玩家→撤离点连线的垂距）而非原始方位角差。
+>
+> **③ 可复现 + 审计。** 每波从 `(session seed, mode, wave)` 派生独立 rng，`?seed=<n>` 可复现整局波次；`G.spawnAudit` 记录每波计划（模式/来源/种子/玩家位置朝向/被烧毁的 zone/每个落点的距离与扇区），`window.__game.spawnPlan(mode, wave)` 用记录中的输入**重放**该波。实测：同 seed 两次独立运行，波次计划逐点一致。
+>
+> **④ 真实地图校验（`tools/spawn-audit-probe.mjs`，已入 npm test）。** 用真实 level + 真实 `OBJECTIVE_SPOTS` 跑四个战区 × 五个站位，校验距离带、后方面额上限、可行走性、defend 进攻轴、extract 走廊布防、种子多样性。探针查出并已修的真实问题：① 撤离走廊无人把守（港区三个撤离点全空）——改用线段投影后修复；② 玩家背后 50-60m 无带内点位（集市南端整段无出生点）——补 6 个点位；③ 街道站点所有点位集中在 x∈[-7,7] 主街，从站点锚点看非前即后、**没有侧翼**，后方面额必然破上限——在两条横街补 4 个侧翼点（-26.1,34.3 / 29.1,31.1 / 28.3,23.9 / -30.9,31.1）。
+>
+> **⑤ LAN 合作落点分散。** 原先所有客户端都落在 `site + (2.2, 1.0)` 同一点，四人叠在一起（手雷友伤、医疗包互踩）。现在 `assignCoopRallySpot` 由**全体玩家名单**派生环位，主机与客户端各自用同一份名单推导同一个环（名单随 start 事件广播），环半径随人数增长以保证最小间距 ≥2.6m。回归：`tools/coop-rally-test.mjs`（9 项）。
 **Phase 2 — AI 画像**：profile 策略层 + garrison/hunter/assault/interceptor 四画像 + 情报公平化 + 真包抄 + 巡逻。
 
 > **状态：已完成（逻辑层 + 单元/守护测试；实机手感待验）。** 落地为纯逻辑模块 `src/systems/ai/profiles.js`：六套画像（default/hunter/assault/interceptor/interceptorPursuit/garrison/squad）+ 三个纯函数（`pickFlankPoint` 侧后扇区路点、`pickPatrolPoint` 单向转向巡逻腿、`decideIntel` 公平情报决策）。main.js 按模式盖画像：生存=hunter、防守波=assault、撤离布防=interceptor、追击波=interceptorPursuit、对抗 bot=squad、战役首波=garrison（巡逻+只认刺激源，摸近背刺成立）；zoneAnchor 画像无新鲜情报时向任务区域推进（"目标是区域不是玩家"）。director.js 情报公平化：删掉两段免费透视（开局/滞后直接给玩家坐标±3-10m），改为"刺激源（枪声/弹着/队友阵亡）±2-7m > 区域质心±12-20m > 无"，versus bot 全跳过（brain 独占情报）；flank 指派时算侧后 80-150°/14-20m 扇区点并过 nav 校验。enemy.js：新增 patrol 态（驻军绕岗+扫头）、flank 路线承诺制（中途见敌不脱线，路线上可还击）、压制 >0.55 改移动（减速 45%+避火线+要掩体，rusher 豁免）、rusher/sniper 纳入全局开火预算（maxFiring D1=1…D5=3）、晚闪避复核（命中且 0.15s 内高速位移 → 一次几何复核）。perception.js：4.2m 近身自动发现尊重朝向——安静+背后+未警觉不再 360° 发现（背刺成立）。main.js：卡死瞬移改 26-40m 远环 + 侧翼 bark 预警。回归：`tools/ai-profile-test.mjs`（22 项，入 npm test）+ versus-guard "Phase 2 AI-profile guards"（20 项）。garrison 巡逻的战役级展开（未警觉段编排）留给 Phase 3 beat 引擎。
