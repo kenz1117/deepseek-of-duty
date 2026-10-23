@@ -18,6 +18,11 @@ export const OPERATIONS = [
     waves: 3,
     atmosphere: 'dusk',
     intro: 'op01_intro',
+    /* The scripted campaign must own its geography. Without an explicit
+       start/spawnRect the op inherits the rotating free-play district, so
+       "OP05 南院" could be fought in the old souk. Every op pins both. */
+    start: { x: 1.2, z: 33, yaw: -0.03 },
+    spawnRect: { x0: -28, x1: 44, z0: -28, z1: 82 },
     zoneLabel: 'AL-MAZRAH 街区',
     threat: 'HIGH',
     brief: '街区已失守。清出三条街，让后续车队能进来。',
@@ -41,6 +46,8 @@ export const OPERATIONS = [
     zoneLabel: '后院市场',
     threat: 'HIGH',
     brief: '市场里有我们需要的补给。潜入、夺取、守住、带装备撤离。',
+    start: { x: 8, z: -12, yaw: -Math.PI / 2 },
+    spawnRect: { x0: -28, x1: 44, z0: -28, z1: 82 },
     /* Phase 3 beat chain: ghost the market (garrison patrol — killing is
        optional), seize the yard, hold it through a two-axis counterattack,
        then run the interceptors gauntlet back to the apartment gate. */
@@ -56,7 +63,7 @@ export const OPERATIONS = [
     radio: [
       { at: 'start', speaker: 'VEGA', voice: 'op2_1', text: '市场里有我们需要的补给。守军还没进入警戒——能不开枪就别开枪。' },
       { at: 3, speaker: 'VEGA', voice: 'op2_2', text: '他们开始反扑了。盯住两个入口。' },
-      { at: 4, speaker: 'VEGA', text: '补给到手就撤。他们会在巷子里设拦截线。', voice: 'op2_2' },
+      { at: 4, speaker: 'VEGA', text: '补给到手就撤。他们会在巷子里设拦截线。', voice: 'op2_3' },
     ],
     debrief: '补给到手。下一站是后院货仓——他们在那藏了一台通讯车。',
   },
@@ -71,6 +78,8 @@ export const OPERATIONS = [
     zoneLabel: '后院 · 货仓',
     threat: 'SEVERE',
     brief: '暴雨压住了他们的无人机。趁现在穿过后院，找通讯车。',
+    start: { x: 16, z: -12, yaw: -Math.PI / 2 },
+    spawnRect: { x0: -28, x1: 44, z0: -28, z1: 82 },
     radio: [
       { at: 'start', speaker: 'VEGA', voice: 'op3_1', text: '暴雨把他们的无人机压在地面。趁现在，穿过后院。' },
       { at: 2, speaker: 'VEGA', voice: 'op3_2', text: '货仓里有他们的通讯设备。打掉它，我们就能听见他们的调度。' },
@@ -90,6 +99,8 @@ export const OPERATIONS = [
     zoneLabel: '公寓正门',
     threat: 'SEVERE',
     brief: '天黑之前离开这一区。清空街区，到公寓正门集合。',
+    start: { x: 2, z: -12, yaw: Math.PI / 2 },
+    spawnRect: { x0: -28, x1: 44, z0: -28, z1: 82 },
     radio: [
       { at: 'start', speaker: 'VEGA', voice: 'op4_1', text: '天黑之前必须离开这一区。清空街区，到公寓正门集合。' },
       { at: 2, speaker: 'VEGA', voice: 'op4_2', text: '撤离点已经标出来了。别恋战。' },
@@ -109,15 +120,19 @@ export const OPERATIONS = [
     zoneLabel: '南院车场',
     threat: 'CRITICAL',
     brief: '副官的指挥车停在南院。搜车、顶住警卫、抓住哈桑。',
+    start: { x: -8, z: 60, yaw: Math.PI },
+    spawnRect: { x0: -24, x1: 24, z0: 50, z1: 82 },
     /* Phase 3: search the command car (interact) → the alarm trips and the
        yard guards rush in → Hassan enters WITH a shield escort (he resists
        half damage while the escort lives) and charges at half health → mop
-       up. spot:'site' resolves to the active rotation site's zone centre. */
+       up. The spots are literal yard coordinates: the op pins its own start,
+       so 'site' (the rotating free-play district) would move the car and the
+       boss to whatever district the cursor happened to land on. */
     beats: [
-      { type: 'interact', name: '搜索', text: '找到指挥车 · 搜出情报', label: '按住 E 搜查指挥车', spot: 'site' },
+      { type: 'interact', name: '搜索', text: '找到指挥车 · 搜出情报', label: '按住 E 搜查指挥车', spot: { x: -12, z: 66, r: 2.8 } },
       { type: 'assault', name: '暴露', text: '警报触发 · 清掉集结的卫队', ai: 'assault', enemies: 6 },
       { type: 'boss', name: '哈桑', text: '哈桑带卫队进场 · 击杀副官', ai: 'assault', enemies: 0,
-        boss: { hp: 560, scale: 1.16, name: '副官 · 哈桑' } },
+        boss: { hp: 560, scale: 1.16, name: '副官 · 哈桑', spawn: { x: -6, z: 66 } } },
       { type: 'survival', name: '收尾', text: '清掉车场残部', ai: 'hunter', enemies: 4 },
     ],
     bossPhases: [
@@ -128,11 +143,11 @@ export const OPERATIONS = [
     ],
     radio: [
       { at: 'start', speaker: 'VEGA', voice: 'op5_1', text: '车场里停着副官的指挥车。搜他的车——别让他跑了。' },
+      { at: 2, speaker: '灰狼', voice: 'op5_5', text: '车里没有指挥官。只有一张北门通行令——他往北去了。' },
       { at: 2, speaker: 'VEGA', voice: 'op5_2', text: '警报响了。卫队全压上来了——找掩体，别硬顶。' },
       { at: 3, speaker: 'VEGA', voice: 'op5_3', text: '哈桑下车了——重甲，正面打不动。绕后，或者打头。' },
-      { at: 4, speaker: 'VEGA', voice: 'op5_4', text: '副官死了。搜他的车——我要知道指挥官在哪。' },
     ],
-    debrief: '哈桑到死没开口。车里只有一张北门通行令——指挥官在北边。',
+    debrief: '哈桑到死没开口。通行令上签的是卡里姆——他一直就在北边。',
   },
   {
     id: 6,
@@ -147,8 +162,10 @@ export const OPERATIONS = [
     zoneLabel: '北检查站',
     threat: 'CRITICAL',
     brief: '车队要从北门撤出。守住检查站 60 秒，别让他们碰到闸门。',
+    start: { x: 0, z: -76, yaw: 0 },
+    spawnRect: { x0: -28, x1: 28, z0: -94, z1: -68 },
     radio: [
-      { at: 'start', speaker: 'VEGA', voice: 'op6_1', text: '检查站是我们的退路。守住它 60 秒，让车队通过。' },
+      { at: 'start', speaker: 'VEGA', voice: 'op6_1b', text: '守住检查站六十秒。别让他们碰到闸门——指挥官就在车队里。' },
       { at: 'start', speaker: 'DISPATCH', voice: 'dispatch_1', text: '北门车队，两分钟内到闸口，把路让开。' },
       { at: 2, speaker: 'VEGA', voice: 'op6_2', text: '他们从后墙翻进来了。别让任何人靠近闸门。' },
     ],
@@ -165,16 +182,22 @@ export const OPERATIONS = [
     bossWave: 3,
     bossIntro: 'boss_reveal',
     bossName: '指挥官替身',
+    /* The HUD must believe the same lie the radio does: before the kill the
+       target reads as the commander, the reveal is the dialogue after it. */
+    bossAlias: '指挥官 · 重甲',
+    bossSpawn: { x: 0, z: -86 },
     zoneLabel: '北检查站',
     threat: 'CRITICAL',
     brief: '指挥官在北门露了面。这一次，别让他再离开。',
+    start: { x: 0, z: -76, yaw: 0 },
+    spawnRect: { x0: -28, x1: 28, z0: -94, z1: -68 },
     radio: [
       { at: 'start', speaker: 'VEGA', voice: 'op7_1', text: '北门传来消息——指挥官本人出现了。这次别让他再离开。' },
-      { at: 'start', speaker: 'DISPATCH', voice: 'dispatch_3', text: '指挥官车队已过北门，重复，已过北门。' },
+      { at: 'start', speaker: 'DISPATCH', voice: 'dispatch_4', text: '指挥官车队已就位，重复，已就位。' },
       { at: 2, speaker: 'VEGA', voice: 'op7_2', text: '重装部队下车了。撑住。' },
       { at: 3, speaker: 'VEGA', voice: 'op7_3', text: '他下车了——重甲。解决他。' },
     ],
-    debrief: '不对。这是个替身。真的指挥官已经进了北楼。',
+    debrief: '不对。这是个替身。真的指挥官退进了北楼——他打算自己从北门突围。',
   },
   {
     id: 8,
@@ -188,11 +211,13 @@ export const OPERATIONS = [
     zoneLabel: '北门',
     threat: 'CRITICAL',
     brief: '暴雨里北门还开着。清空检查站，把门夺下来。',
+    start: { x: 0, z: -78, yaw: 0 },
+    spawnRect: { x0: -28, x1: 28, z0: -94, z1: -68 },
     radio: [
-      { at: 'start', speaker: 'VEGA', voice: 'op8_1', text: '北门还开着。清空检查站，把门夺下来——别让车队出去。' },
+      { at: 'start', speaker: 'VEGA', voice: 'op8_1b', text: '北门还开着。卡里姆要自己冲出来——把门夺下来。' },
       { at: 2, speaker: 'VEGA', voice: 'op8_2', text: '车队想冲门。守住闸口。' },
     ],
-    debrief: '门夺下来了。指挥官被堵在北楼里，跑不掉。',
+    debrief: '门夺下来了。卡里姆被关在北楼里，出不来了。',
   },
   {
     id: 9,
@@ -208,7 +233,7 @@ export const OPERATIONS = [
     bossName: '指挥官 · 卡里姆',
     zoneLabel: '北楼',
     threat: 'CRITICAL',
-    brief: '卡里姆在北楼里。破门、逐房清理、在办公室结束这一切。',
+    brief: '卡里姆在北楼里。破门、逐房清理，在办公室找到那份命令——然后结束这一切。',
     /* Phase 3: breach & clear the ground floor room by room (garrison first,
        then hunters), then the Karim standoff: he relocates twice through the
        office floor (70% / 40% HP) and each move calls in reinforcements. */
@@ -227,9 +252,8 @@ export const OPERATIONS = [
     radio: [
       { at: 'start', speaker: 'MOTH', voice: 'moth_1', text: '无人机在你头顶。北楼里有两个热源，一个在办公室。' },
       { at: 'start', speaker: 'VEGA', voice: 'op9_1', text: '他在北楼里，身边只剩卫队。结束这件事。' },
-      { at: 3, speaker: 'VEGA', voice: 'op9_2', text: '卡里姆出来了——这次是真的。' },
     ],
-    debrief: '卡里姆倒在办公室里。北楼的电台还在响，但已经没人回答了。',
+    debrief: '卡里姆倒在办公室里。桌上那份手写命令写着：「灰狼进入街区后，不要拦截。让他到北楼来。」这一路，他都在放你走。北楼的电台还在响，但已经没人回答了。',
   },
   {
     id: 10,
@@ -240,15 +264,18 @@ export const OPERATIONS = [
     waves: 1,
     atmosphere: 'storm',
     start: { x: 40.0, z: -84.0, yaw: Math.PI },
+    spawnRect: { x0: 30, x1: 46, z0: -92, z1: -70 },
     zone: { x: 43.5, z: -81.0, r: 4.5 },
     zoneLabel: '东码头',
     threat: 'CRITICAL',
     brief: '从东码头撤出去。车队的残部还在外面。',
     radio: [
+      { at: 'start', speaker: 'VEGA', voice: 'op10_1', text: '卡里姆上了卡车。但货没跟着走——撤离清单上那批货还在城里。' },
       { at: 'start', speaker: 'MOTH', voice: 'moth_2', text: '东码头有一辆卡车，钥匙在驾驶室。动作快。' },
-      { at: 'start', speaker: 'VEGA', voice: 'fin_1', text: '指挥官倒了。车队正在撤离，这一区暂时安全。' },
     ],
-    debrief: '卡车开出码头。后视镜里，北楼的火还在烧。',
+    debrief: '卡车开出码头。后视镜里，北楼的火还在烧。但清单上那批货还在城里——他们会回来拿。',
+    /* The street arc's ending is a FALSE ending: the command escapes, the
+       cargo does not. The final video is reserved for OP14. */
     outro: 'finale',
   },
   {
@@ -262,12 +289,15 @@ export const OPERATIONS = [
     start: { x: -96, z: 46, yaw: 1.7 },
     spawnRect: { x0: -116, x1: -40, z0: -42, z1: 72 },
     intro: 'souk_intro',
+    /* The intro cutscene used to swallow the wave-1 radio (and those lines
+       were silent), so the only explanation of why the campaign moves to the
+       old souk never reached the player. Now the radio plays. */
+    radioAtStart: true,
     zoneLabel: '老城集市',
     threat: 'HIGH',
-    brief: '车队退进老城。穿过集市，把他们的前哨清掉。',
+    brief: '车队把货转进了老城。穿过集市，把他们的前哨清掉。',
     radio: [
       { at: 'start', speaker: 'VEGA', text: '离开码头之后，车队把货转进了老城。窄巷、棚顶、两层铺面——别走直线。', voice: 'op3_4' },
-      { at: 2, speaker: '灰狼', text: '他们在屋顶架了枪。我从摊位下面过去。', voice: 'op3_5' },
       { at: 3, speaker: 'VEGA', text: '集市清空，北站的门就开了。', voice: 'op3_6' },
     ],
     debrief: '集市安静下来。北边的货场整夜亮着灯。',
@@ -285,12 +315,12 @@ export const OPERATIONS = [
     spawnRect: { x0: -38, x1: 42, z0: -194, z1: -106 },
     zone: { x: 4, z: -150, r: 7 },
     intro: 'rail_intro',
+    radioAtStart: true,
     zoneLabel: '北站货场',
     threat: 'SEVERE',
     brief: '守住站台下的调度台 60 秒，让车队拿不到那批弹药。',
     radio: [
       { at: 'start', speaker: 'VEGA', text: '北站整夜都在卸货。站台高、仓库深，别让他们把你压进死角。', voice: 'op6_3' },
-      { at: 2, speaker: 'MOTH', text: '热源从站台两侧接近。一个在集装箱后面。', voice: 'op6_4' },
     ],
     debrief: '调度台还在我们手里。港区的吊臂开始转动，船在等货。',
   },
@@ -306,15 +336,15 @@ export const OPERATIONS = [
     spawnRect: { x0: 48, x1: 122, z0: -98, z1: 34 },
     zone: { x: 98, z: -44, r: 6 },
     intro: 'port_intro',
+    radioAtStart: true,
     zoneLabel: '东港集装箱场',
     threat: 'CRITICAL',
     brief: '穿过集装箱阵，把撤离点从车队手里抢下来。',
     radio: [
       { at: 'start', speaker: 'VEGA', text: '港区是他们的最后一站。集装箱之间只有几条缝，手雷会比子弹先到。', voice: 'op7_4' },
-      { at: 2, speaker: '灰狼', text: '起重机上有反光。我先去清高台。', voice: 'op7_5' },
       { at: 3, speaker: 'VEGA', text: '撤离点就在吊臂下面。别让他们把货装船。', voice: 'op7_6' },
     ],
-    debrief: '吊臂停了。指挥官还在港区，他知道船走不了。',
+    debrief: '吊臂停了。接管卡里姆频道的那个人还在港区——萨利姆。',
   },
   {
     id: 14,
@@ -327,11 +357,14 @@ export const OPERATIONS = [
     start: { x: 80, z: -80, yaw: 3.6 },
     spawnRect: { x0: 48, x1: 122, z0: -98, z1: 34 },
     bossIntro: 'finale2_intro',
-    bossName: '指挥官 · 萨利姆',
+    /* The title 指挥官 belongs to Karim alone. Salim runs the port on Karim's
+       radio, which is why he can still command a convoy with his boss dead. */
+    bossName: '萨利姆 · 卡里姆的接线员',
     outro: 'ending2',
+    outroVideo: true,
     zoneLabel: '东港 · 起重机',
     threat: 'CRITICAL',
-    brief: '港区推进、顶住水边侧袭、击杀萨利姆，在吊臂下登船。',
+    brief: '港区推进、顶住水边侧袭、击杀萨利姆，在吊臂下登船。他用的是卡里姆的频率。',
     /* Phase 3: push the container axes → waterside flank must be held →
        Salim: at 60% he walks artillery onto you from the crane (the player
        killstreak system, fired by the enemy), at 30% his shield guard
@@ -340,7 +373,7 @@ export const OPERATIONS = [
       { type: 'survival', name: '推进', text: '沿集装箱阵推进 · 清出射界', ai: 'hunter', enemies: 6 },
       { type: 'assault', name: '侧袭', text: '水边有侧袭 · 守住吊臂区', ai: 'assault', enemies: 5 },
       { type: 'boss', name: '萨利姆', text: '击杀萨利姆 · 结束这条线', ai: 'assault', enemies: 0,
-        boss: { hp: 900, scale: 1.2, name: '指挥官 · 萨利姆', spawn: { x: 98, z: -44 } } },
+        boss: { hp: 900, scale: 1.2, name: '萨利姆 · 卡里姆的接线员', spawn: { x: 98, z: -44 } } },
       { type: 'extract', name: '登船', text: '到吊臂下撤离点 · 登船', ai: 'interceptorPursuit', enemies: 4,
         zone: { x: 98, z: -44, r: 6 }, hold: 3 },
     ],

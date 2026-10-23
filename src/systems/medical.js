@@ -14,10 +14,15 @@
  * a mirror just for mounting revive prompts.
  * ========================================================================= */
 
-export const DOWN_BLEED_S = 30;      // seconds from downed to dead
+/* Downed-state budget. The old numbers (30 s bleed, revive at 50 % HP) made
+   dying nearly free: a player could trade a wave for a free second life at
+   half health with no cost at all, and the four-player squad could farm
+   waves without ever being threatened. 18 s and a third of the health keep
+   the "hold on, I'm coming" promise while making the trade a real cost. */
+export const DOWN_BLEED_S = 18;      // seconds from downed to dead
 export const REVIVE_RANGE_M = 3.5;   // reviver must be this close
 export const REVIVE_HOLD_S = 2.0;    // interact channel time
-export const REVIVE_HP_FRAC = 0.5;   // pick up at half health
+export const REVIVE_HP_FRAC = 0.35;  // pick up at a third of your health
 export const WIPE_RESPAWN_S = 5;     // squad-wiped redeploy delay
 
 export function createDownedRegistry({ bleedS = DOWN_BLEED_S, range = REVIVE_RANGE_M } = {}) {

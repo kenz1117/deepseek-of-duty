@@ -28,7 +28,7 @@ const UP = new THREE.Vector3(0, 1, 0);
 
 // shared option objects: fx.tracer only reads them, so no allocation per frame
 const TRAIL_OPTS = { color: 0xffb268, width: 0.032, life: 0.09 };
-const DEFAULT_OPTS = { shells: 6, radius: 9, delay: 0.9, spread: 6 };
+const DEFAULT_OPTS = { shells: 6, radius: 9, delay: 0.9, spread: 6, hurtPlayer: true, playerDamage: 1 };
 
 export function createArtillery({ scene, level, fx = null, audio = null, damageAt, onShake }) {
   const group = new THREE.Group();
@@ -76,6 +76,11 @@ export function createArtillery({ scene, level, fx = null, audio = null, damageA
       fired: false,
       at: 0,
       spread: 0,
+      // per-strike damage policy: a strike the PLAYER earned must never hurt
+      // the player (see hurtPlayer), and a strike aimed AT the player scales
+      // its own damage so the counter window stays readable.
+      hurtPlayer: true,
+      playerDamage: 1,
       point: new THREE.Vector3(),
       shell: null,
     });
@@ -118,7 +123,12 @@ export function createArtillery({ scene, level, fx = null, audio = null, damageA
   function detonate(point, p) {
     if (fx && fx.explosion) fx.explosion(point, 0.95 + Math.random() * 0.2);
     if (fx && fx.addDecal) fx.addDecal(point, UP, 0.16 + Math.random() * 0.1, 'hole');
-    if (damageAt) damageAt(point, DAMAGE_RADIUS, DAMAGE_AMOUNT);
+    if (damageAt) {
+      damageAt(point, DAMAGE_RADIUS, DAMAGE_AMOUNT, {
+        hurtPlayer: p ? p.hurtPlayer !== false : true,
+        playerDamage: p && p.playerDamage != null ? p.playerDamage : 1,
+      });
+    }
     if (onShake) onShake(0.5 + Math.random() * 0.3);
     if (audio && audio.explosion) audio.explosion((Math.random() - 0.5) * 0.5, 26);
     if (p) {
@@ -182,6 +192,8 @@ export function createArtillery({ scene, level, fx = null, audio = null, damageA
     const radius = Math.max(0, o.radius === undefined ? DEFAULT_OPTS.radius : o.radius);
     const delay = Math.max(0, o.delay === undefined ? DEFAULT_OPTS.delay : o.delay);
     const spread = Math.max(0, o.spread === undefined ? DEFAULT_OPTS.spread : o.spread);
+    const hurtPlayer = o.hurtPlayer === undefined ? DEFAULT_OPTS.hurtPlayer : !!o.hurtPlayer;
+    const playerDamage = o.playerDamage === undefined ? DEFAULT_OPTS.playerDamage : Number(o.playerDamage);
 
     let scheduled = 0;
     for (let i = 0; i < n; i++) {
@@ -200,6 +212,8 @@ export function createArtillery({ scene, level, fx = null, audio = null, damageA
       const y = groundHeight(x, z, 60);
       p.point.set(x, y + 0.04, z);
       p.spread = spread;
+      p.hurtPlayer = hurtPlayer;
+      p.playerDamage = playerDamage;
       p.at = time + delay + (i / n) * STAGGER + Math.random() * 0.12;
       p.used = true;
       p.fired = false;

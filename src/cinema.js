@@ -38,20 +38,22 @@ export const SCENES = {
     ],
   },
 
-  /* OP 05 — Hassan, the deputy, talks before the shield escort dismounts. */
+  /* OP 05 — Hassan, the deputy, talks before the shield escort dismounts.
+     STAGE: the south yard (南院车场, z 55.8–82.2). The old shot stood on
+     the main street 40 m away, so the reveal happened nowhere the player was. */
   hassan_intro: {
     duration: 8.6,
     fadeIn: 0.6,
     fadeOut: 0.8,
     actors: [
-      { variant: 2, archetype: 'shield', x: 1.6, z: 16.5, yaw: 0, pose: 'walk', walk: true, scale: 1.16 },
-      { variant: 0, archetype: 'rifleman', x: -2.6, z: 18.5, yaw: 0, pose: 'aim' },
-      { variant: 0, archetype: 'rifleman', x: 4.4, z: 19.0, yaw: 0, pose: 'aim' },
+      { variant: 2, archetype: 'shield', x: -6, z: 66, yaw: Math.PI, pose: 'walk', walk: true, scale: 1.16 },
+      { variant: 0, archetype: 'rifleman', x: -8, z: 66, yaw: Math.PI, pose: 'aim' },
+      { variant: 0, archetype: 'rifleman', x: -4, z: 66, yaw: Math.PI, pose: 'aim' },
     ],
     camera: [
-      { t: 0, pos: [0.2, 3.2, 30], look: [0.4, 1.35, 17] },
-      { t: 4.4, pos: [0.6, 1.9, 24.5], look: [1.4, 1.45, 16.5] },
-      { t: 8.6, pos: [0.9, 1.72, 22.0], look: [1.7, 1.45, 16] },
+      { t: 0, pos: [-6.4, 2.9, 57.5], look: [-6, 1.45, 65.8] },
+      { t: 4.4, pos: [-6.2, 1.95, 60.5], look: [-6, 1.45, 65.9] },
+      { t: 8.6, pos: [-6.0, 1.78, 62.6], look: [-6, 1.40, 66.0] },
     ],
     lines: [
       { t: 0.4, speaker: '哈桑', voice: 'hassan_1', text: 'VEGA 的人？车场是我哈桑的地盘。你走不出去。' },
@@ -61,7 +63,7 @@ export const SCENES = {
 
   /* OP 09 — Karim, inside the north HQ office. */
   karim_intro: {
-    duration: 8.4,
+    duration: 10.4,
     fadeIn: 0.5,
     fadeOut: 0.7,
     actors: [
@@ -71,11 +73,12 @@ export const SCENES = {
     camera: [
       { t: 0, pos: [10.5, 2.5, -73.8], look: [12.0, 1.75, -68.4] },
       { t: 4.2, pos: [10.4, 1.95, -71.4], look: [12.1, 1.7, -68.5] },
-      { t: 8.4, pos: [10.9, 1.8, -70.4], look: [12.2, 1.65, -68.6] },
+      { t: 10.4, pos: [10.9, 1.8, -70.4], look: [12.2, 1.65, -68.6] },
     ],
     lines: [
       { t: 0.4, speaker: '卡里姆', voice: 'karim_1', text: '灰狼。你进了我的楼，就别想再出去。' },
-      { t: 4.6, speaker: 'VEGA', voice: 'op9_2', text: '卡里姆出来了——这次是真的。' },
+      { t: 4.4, speaker: 'VEGA', voice: 'op9_3b', text: '桌上那份命令是手写的——灰狼进入街区后，不要拦截，让他到北楼来。他一直在放你走。' },
+      { t: 7.8, speaker: 'VEGA', voice: 'op9_2', text: '卡里姆出来了——这次是真的。' },
     ],
   },
 
@@ -94,8 +97,8 @@ export const SCENES = {
       { t: 9.0, pos: [-86, 1.9, 36], look: [-76, 1.8, 18] },
     ],
     lines: [
-      { t: 0.6, speaker: 'VEGA', text: '老城。五百年的巷子，两米宽的门洞。车队把货藏在铺面后面。', silent: true },
-      { t: 5.0, speaker: '灰狼', text: '屋顶有人。我从棚子下面走。', silent: true },
+      { t: 0.6, speaker: 'VEGA', text: '老城。五百年的巷子，两米宽的门洞。', silent: true },
+      { t: 5.0, speaker: '灰狼', voice: 'op3_5', text: '他们在屋顶架了枪。我从摊位下面过去。' },
     ],
   },
 
@@ -114,8 +117,8 @@ export const SCENES = {
       { t: 9.0, pos: [0.2, 2.0, -164], look: [0.4, 1.8, -138] },
     ],
     lines: [
-      { t: 0.6, speaker: 'VEGA', text: '北站。整夜都在卸货，站台比街面高四米。', silent: true },
-      { t: 5.0, speaker: 'MOTH', text: '热源在集装箱后面。站台上有一个。', silent: true },
+      { t: 0.6, speaker: 'VEGA', text: '北站。站台比街面高四米，仓库能藏下一整列货车。', silent: true },
+      { t: 5.0, speaker: 'MOTH', voice: 'op6_4', text: '热源从站台两侧接近。一个在集装箱后面。' },
     ],
   },
 
@@ -134,8 +137,8 @@ export const SCENES = {
       { t: 9.0, pos: [84, 2.1, -70], look: [100, 2.0, -46] },
     ],
     lines: [
-      { t: 0.6, speaker: 'VEGA', text: '港区。集装箱之间只有几条缝，手雷会比子弹先到。', silent: true },
-      { t: 5.0, speaker: '灰狼', text: '吊臂上有反光。我先上高台。', silent: true },
+      { t: 0.6, speaker: 'VEGA', text: '港区。龙门吊停在半空，舱单一半对不上船期。', silent: true },
+      { t: 5.0, speaker: '灰狼', voice: 'op7_5', text: '起重机上有反光。我先上高台。' },
     ],
   },
 
@@ -154,8 +157,8 @@ export const SCENES = {
       { t: 10.0, pos: [96, 2.0, -52], look: [98, 1.9, -44] },
     ],
     lines: [
-      { t: 0.6, speaker: 'VEGA', text: '萨利姆在吊臂下面。他把最后的货和人全压在这一场。', silent: true },
-      { t: 5.4, speaker: 'VEGA', text: '卡里姆的频道还在响——是萨利姆在用他的频率。别听。', silent: true },
+      { t: 0.6, speaker: 'VEGA', voice: 'op14_2', text: '他在用卡里姆的频率。卡里姆死了，接线的人还在替他把货装船。' },
+      { t: 5.4, speaker: 'MOTH', voice: 'op14_3', text: '热源在吊臂下面。三个，还有一个在船上。' },
     ],
   },
 
@@ -172,27 +175,28 @@ export const SCENES = {
       { t: 12.0, pos: [104, 2.2, -30], look: [122, 1.6, -18] },
     ],
     lines: [
-      { t: 0.8, speaker: 'VEGA', text: '吊臂停了。船离港的时候，天刚亮。', silent: true },
-      { t: 5.4, speaker: '灰狼', text: '这座城结束了。', silent: true },
-      { t: 8.0, speaker: 'VEGA', text: '暂时。下一座城更大。', silent: true },
+      { t: 0.8, speaker: 'VEGA', voice: 'end_1', text: '吊臂停了。船离港的时候，天刚亮。' },
+      { t: 5.4, speaker: '灰狼', voice: 'end_2', text: '货没上船。三箱文件，两箱在我们手里。' },
+      { t: 8.0, speaker: 'VEGA', voice: 'end_3', text: '让他到北楼来——那是他的命令。现在他死了。北楼那台没人应答的电台，第二次响了。' },
     ],
   },
 
-  /* OP 05/07/09 — the armoured boss steps off the APC. */
-
+  /* OP 07 — the decoy steps off the APC at the north gate. STAGE: the north
+     checkpoint (北检查站, z −96…−66). This scene used to reuse OP05's south-yard
+     camera verbatim, so the "commander" surfaced a hundred metres away. */
   boss_reveal: {
     duration: 9.5,
     fadeIn: 0.6,
     fadeOut: 0.8,
     actors: [
-      { variant: 2, archetype: 'shield', x: 1.6, z: 16.5, yaw: 0, pose: 'walk', walk: true, scale: 1.16 },
-      { variant: 0, archetype: 'rifleman', x: -2.6, z: 18.5, yaw: 0, pose: 'aim' },
-      { variant: 0, archetype: 'rifleman', x: 4.4, z: 19.0, yaw: 0, pose: 'aim' },
+      { variant: 2, archetype: 'shield', x: 0, z: -86, yaw: 0, pose: 'walk', walk: true, scale: 1.16 },
+      { variant: 0, archetype: 'rifleman', x: -4, z: -86, yaw: 0, pose: 'aim' },
+      { variant: 0, archetype: 'rifleman', x: 4, z: -86, yaw: 0, pose: 'aim' },
     ],
     camera: [
-      { t: 0, pos: [0.2, 3.2, 30], look: [0.4, 1.35, 17] },
-      { t: 4.5, pos: [0.6, 1.9, 24.5], look: [1.4, 1.45, 16.5] },
-      { t: 9.5, pos: [0.9, 1.72, 22.0], look: [1.7, 1.45, 16] },
+      { t: 0, pos: [-1.8, 2.85, -76.5], look: [0, 1.55, -85.6] },
+      { t: 4.5, pos: [0.4, 1.95, -79.6], look: [0, 1.50, -85.6] },
+      { t: 9.5, pos: [1.0, 1.80, -82.2], look: [0, 1.45, -85.7] },
     ],
     lines: [
       { t: 0.4, speaker: 'VEGA', voice: 'boss_1', text: '指挥车停了。重装护卫先下车——别被他们的盾骗了。' },
@@ -201,24 +205,25 @@ export const SCENES = {
     ],
   },
 
-  /* Finale — dust settles, the squad pulls out. */
+  /* Finale — dust settles, the squad pulls out. STAGE: the east dock
+     (东码头, x 30–46 / z −92…−70), where OP10's truck actually is. */
   finale: {
     duration: 12,
     fadeIn: 1.0,
     fadeOut: 1.6,
     actors: [
-      { variant: 0, archetype: 'rifleman', x: -1.4, z: 30, yaw: Math.PI * 0.2, pose: 'walk', walk: true },
-      { variant: 1, archetype: 'rifleman', x: 2.2, z: 31.5, yaw: Math.PI * 0.15, pose: 'walk', walk: true },
+      { variant: 0, archetype: 'rifleman', x: 36, z: -84, yaw: 0.6, pose: 'walk', walk: true },
+      { variant: 1, archetype: 'rifleman', x: 40, z: -88, yaw: 0.9, pose: 'walk', walk: true },
     ],
     camera: [
-      { t: 0, pos: [0.8, 2.6, 40], look: [0, 1.7, 28] },
-      { t: 6, pos: [2.6, 2.0, 34], look: [-1.2, 1.5, 24] },
-      { t: 12, pos: [5.5, 3.2, 28], look: [-2.0, 1.2, 16] },
+      { t: 0, pos: [36.0, 2.70, -90.5], look: [43.0, 1.80, -83.5] },
+      { t: 6, pos: [37.2, 2.10, -88.8], look: [43.5, 1.65, -82.5] },
+      { t: 12, pos: [38.6, 1.85, -87.0], look: [44.5, 1.55, -81.5] },
     ],
     lines: [
-      { t: 0.6, speaker: 'VEGA', voice: 'fin_1', text: '指挥官倒了。车队正在撤离，这一区暂时安全。' },
-      { t: 4.8, speaker: '灰狼', voice: 'fin_2', text: '暂时。' },
-      { t: 7.2, speaker: 'VEGA', voice: 'fin_3', text: '对，暂时。上车吧，我们还有下一座城。' },
+      { t: 0.6, speaker: 'VEGA', voice: 'fin_4', text: '卡里姆没死在北楼。他上了卡车，从东码头跑了。' },
+      { t: 4.4, speaker: '灰狼', voice: 'fin_6', text: '那批货呢？' },
+      { t: 7.4, speaker: 'VEGA', voice: 'fin_5', text: '还在。撤离清单上写着三箱文件——他们会回来拿。' },
     ],
   },
 };

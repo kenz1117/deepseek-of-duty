@@ -24,8 +24,8 @@ function check(name, ok, detail = '') {
 const T0 = 1_000_000;
 
 check('constants are the tuned co-op values',
-  DOWN_BLEED_S === 30 && REVIVE_RANGE_M === 3.5 && REVIVE_HOLD_S === 2
-  && REVIVE_HP_FRAC === 0.5 && WIPE_RESPAWN_S === 5);
+  DOWN_BLEED_S === 18 && REVIVE_RANGE_M === 3.5 && REVIVE_HOLD_S === 2
+  && REVIVE_HP_FRAC === 0.35 && WIPE_RESPAWN_S === 5);
 
 const reg = createDownedRegistry();
 reg.down('p1', 10, 20, T0);
@@ -41,10 +41,10 @@ check('canRevive accepts the 3.5 m ring (+ grace)',
 check('canRevive rejects a cleared target', !reg.canRevive('p2', { x: 0, z: 0 }, T0));
 
 // bleed-out: exactly 30 s still alive, 30.001 s expired and swept
-check('bleed-out keeps the player revivable just inside 30 s',
+check('bleed-out keeps the player revivable just inside the bleed clock',
   reg.canRevive('p1', { x: 10, z: 20 }, T0 + DOWN_BLEED_S * 1000 - 1));
 const expired = reg.expired(T0 + (DOWN_BLEED_S + 0.5) * 1000);
-check('expired sweeps past the 30 s clock', expired.includes('p1') && !reg.isDown('p1'));
+check('expired sweeps past the bleed clock', expired.includes('p1') && !reg.isDown('p1'));
 
 // wipe: nobody standing among 2+ humans
 const w = createDownedRegistry();
