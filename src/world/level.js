@@ -3,6 +3,7 @@ import { projectBoxUV, mergeStatic } from '../core/geo.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mulberry32 } from '../core/materials.js';
 import { buildBoundsTreeFor } from '../core/bvh.js';
+import { createKit } from './kit.js';
 
 /* =========================================================================
    LEVEL: "AL-MAZRAH CROSSING" — a contested city block at dusk.
@@ -47,6 +48,7 @@ export function createLevel(engine) {
 
   const rr = (a, b) => a + rnd() * (b - a);
   const pick = (arr) => arr[(rnd() * arr.length) | 0];
+  const jitter = (a) => (rnd() - 0.5) * a;
   const T = 2.4;          // default world texture tile (m)
 
   /* ------------------------------------------------------------------ utils */
@@ -196,6 +198,30 @@ export function createLevel(engine) {
     statics.add(m);
     return m;
   }
+
+  /* ------------------------------------------------------------------ kit */
+  /* Flora / water / small-cover builders. Every builder takes the district
+     group first (S / R / P), so the merge pass keeps each district's own
+     bounding volume and the frustum cost stays flat. */
+  const kit = createKit({
+    mats,
+    rnd,
+    box: (g, w, h, d, mat, x, y, z, rot = 0, o = {}) => meshBox(w, h, d, mat, x, y, z, rot, { ...o, group: g }),
+    cyl: (g, rt, rb, h, seg, mat, x, y, z, o = {}) => meshCyl(rt, rb, h, seg, mat, x, y, z, { ...o, group: g }),
+    gnd: (g, w, d, mat, x, z, y = 0.006, uv = 3) => meshPlane(w, d, mat, x, y, z, { rx: -Math.PI / 2, uvScale: uv, recv: true, group: g }),
+    win: (g, w, h, mat, x, y, z, ry) => {
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), mat);
+      m.position.set(x, y, z);
+      m.rotation.y = ry;
+      m.castShadow = false; m.receiveShadow = true;
+      g.add(m);
+      return m;
+    },
+    addCollider,
+    addColliderRot,
+    blob,
+    lightPool,
+  });
 
   /* ------------------------------------------------------------------ ground */
   function buildGround() {
@@ -2014,8 +2040,14 @@ export function createLevel(engine) {
     }
     // fountain
     C(S, 2.6, 2.8, 0.7, 14, mats.concrete, -95, 0.35, 52.5);
-    C(S, 2.1, 2.1, 0.08, 14, mats.puddle, -95, 0.55, 52.5, { cast: false });
+    C(S, 2.1, 2.1, 0.08, 14, mats.water, -95, 0.55, 52.5, { cast: false });
     C(S, 0.4, 0.55, 1.5, 8, mats.plasterC, -95, 1.1, 52.5);
+    // the jet: a column of water and the ring of spray where it falls back
+    C(S, 0.07, 0.11, 1.05, 8, mats.water, -95, 2.05, 52.5, { cast: false });
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + 0.4;
+      C(S, 0.14, 0.14, 0.02, 6, mats.water, -95 + Math.cos(a) * 1.5, 0.6, 52.5 + Math.sin(a) * 1.5, { cast: false });
+    }
     addCollider(-95, 52.5, 5.0, 5.0, 0.1);
     // arcade along the courtyard's east side
     for (let i = 0; i < 4; i++) {
@@ -6062,9 +6094,259 @@ export function createLevel(engine) {
     }
   }
 
+  /* ------------------------------------------------------------------ flora */
+  /* The city had no green and almost no water: the streets read as a
+     concrete box. This pass drops trees, bushes, grass, flowers, vines and
+     window boxes along the street and the three expansion districts, fills
+     the fountain and the yard basins with water, and adds the small cover
+     (pipes, pallets, tyres, cones, spools, planters) a fight happens around.
+
+     Plants are visual-only: they never touch the navigation grid, so the AI
+     paths and the spawn audit stay exactly where they were. Only the
+     planters and the small cover props get colliders. */
+  function buildFlora() {
+    const S = EXPANSION_GROUPS.souk;
+    const R = EXPANSION_GROUPS.rail;
+    const P = EXPANSION_GROUPS.port;
+
+    /* ---------------------------------------------------------- the street */
+    // street trees along both sidewalks (the sidewalk band is x 6.9..9.85)
+    for (const side of [-1, 1]) {
+      for (let z = -58; z <= 50; z += 9) {
+        if (rnd() < 0.18) continue;              // a few gaps, not a metronome
+        const x = side * (8.55 + jitter(0.22));
+        kit.tree(statics, x, z + jitter(0.6), { kind: 'street', h: 4.6 + rnd() * 1.4, yaw: rnd() * 6.28 });
+      }
+    }
+    // grass + flowers at the wall bases
+    for (const side of [-1, 1]) {
+      for (let z = -60; z <= 52; z += 2.6) {
+        const x = side * (9.25 + jitter(0.15));
+        if (rnd() < 0.55) kit.grassTuft(statics, x, z + jitter(0.5), 0.8 + rnd() * 0.7);
+        if (rnd() < 0.12) kit.flowerBed(statics, x + jitter(0.2), z + jitter(0.6), 0.5);
+      }
+    }
+    // potted plants by the doors
+    for (const [x, z] of [[-8.4, 20.5], [8.4, 8.5], [-8.4, -22.5], [8.4, -30.5], [-8.4, -48.5], [8.4, 44.5]]) {
+      kit.potPlant(statics, x, z, 1.05 + rnd() * 0.35);
+    }
+    // window boxes on the street facades (below the first-floor windows)
+    for (const [x, y, z, ry] of [
+      [-9.62, 2.5, 22, -Math.PI / 2], [9.62, 2.5, 16, Math.PI / 2],
+      [-9.62, 2.5, -8, -Math.PI / 2], [9.62, 2.5, -14, Math.PI / 2],
+      [-9.62, 2.5, -38, -Math.PI / 2], [9.62, 2.5, -44, Math.PI / 2],
+      [-9.62, 6.4, 22, -Math.PI / 2], [9.62, 6.4, 16, Math.PI / 2],
+    ]) {
+      kit.windowBox(statics, x, y, z, ry, 1.05 + rnd() * 0.4);
+    }
+    // vines climbing the plaster
+    for (const [x, y, z, ry, h] of [
+      [-9.6, 0.2, 6, -Math.PI / 2, 4.2], [9.6, 0.2, -2, Math.PI / 2, 3.4],
+      [-9.6, 0.2, -44, -Math.PI / 2, 3.8], [9.6, 0.2, -52, Math.PI / 2, 3.0],
+    ]) kit.vine(statics, x, y, z, ry, h);
+    // small cover where the street opens up
+    kit.planter(statics, -8.0, 28.5, 1.5, 0.75, Math.PI / 2);
+    kit.planter(statics, 8.0, 4.5, 1.5, 0.75, Math.PI / 2);
+    kit.pipeCover(statics, -7.9, -36.5, 0.1, 2.2);
+    kit.tireStack(statics, 7.8, -18.5, 3);
+    kit.cone(statics, -7.6, -6.5, 0.4);
+    kit.toolbox(statics, 7.7, 34.5, -0.5);
+
+    /* ---------------------------------------------------------- the hills */
+    // the river that cuts the west fringe, with a culvert bridge where the
+    // path crosses it (the bridge deck is flush, so nobody has to climb)
+    kit.river(statics, -233, -37, -197, -30.5, { width: 8 });
+    kit.river(statics, -200, -31, -156, -36.5, { width: 7 });
+    kit.river(statics, -153, -35.5, -121, -30, { width: 8 });
+    kit.flatBridge(statics, -178, -33.2, 0.09, { span: 12, width: 3.6 });
+    kit.flatBridge(statics, -150, -33.6, 0.09, { span: 10, width: 3.0 });
+    for (const [x, z] of [[-206, -30], [-196, -37], [-165, -29], [-142, -36], [-186, -26]]) {
+      kit.bush(statics, x, z, 1.2 + rnd() * 0.6);
+    }
+    for (const [x, z] of [[-190, -31], [-160, -37], [-215, -33]]) {
+      kit.flowerBed(statics, x, z, 0.9);
+    }
+
+    /* ------------------------------------------------------------ the souk */
+    // alley trees: the souk's paved lanes are 7-8 m wide, one row each side
+    for (const [laneX, zs] of [
+      [-102.6, [-36, -24, -12, 0, 12, 24, 36]],
+      [-99.4, [-30, -18, -6, 6, 18, 30]],
+      [-78.6, [-36, -24, -12, 0, 12, 24, 36]],
+      [-73.4, [-30, -18, -6, 6, 18, 30]],
+      [-54.9, [-36, -24, -12, 0, 12, 24, 36]],
+      [-50.6, [-30, -18, -6, 6, 18, 30]],
+    ]) {
+      for (const z of zs) {
+        if (rnd() < 0.2) continue;
+        kit.tree(S, laneX + jitter(0.4), z + jitter(0.8), { kind: 'acacia', h: 5.4 + rnd() * 1.6, yaw: rnd() * 6.28 });
+      }
+    }
+    // the courtyard east-west lane (z 16..24)
+    for (const x of [-112, -105, -92, -85, -78, -66, -58, -50]) {
+      if (rnd() < 0.2) continue;
+      kit.tree(S, x + jitter(0.6), 21.4 + jitter(0.6), { kind: 'acacia', h: 5.0 + rnd() * 1.8, yaw: rnd() * 6.28 });
+    }
+    // plaza: the level's fountain got real water in its basin (see above),
+    // and the courtyard gets shade trees
+    for (const [x, z] of [[-99.5, 55.5], [-91.0, 56.5], [-104.5, 52.5], [-86.5, 49.5], [-87.5, 55.5]]) {
+      kit.tree(S, x, z, { kind: 'acacia', h: 5.6 + rnd() * 1.4, yaw: rnd() * 6.28 });
+    }
+    for (const [x, z] of [[-92.5, 47.5], [-89.5, 42.0], [-102.5, 40.5], [-97.5, 58.5], [-85.5, 45.0]]) {
+      kit.bush(S, x, z, 1.1 + rnd() * 0.6);
+    }
+    // courtyard dressing: bushes, flowers, reeds around the well
+    for (const [x, z] of [[-98.5, 45.0], [-93.5, 43.5], [-101.0, 50.5], [-96.0, 47.5]]) {
+      kit.flowerBed(S, x, z, 0.9 + rnd() * 0.5);
+    }
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      kit.reeds(S, -100.5 + Math.cos(a) * 1.5, 47.2 + Math.sin(a) * 1.5, 0.7 + rnd() * 0.4);
+    }
+    // cisterns: raised water tanks against the courtyard walls
+    kit.pool(S, -87.2, 31.5, { w: 2.6, d: 1.8, depth: 0.85, rim: 0.16, rot: 0 });
+    kit.pool(S, -79.2, 7.5, { w: 2.2, d: 1.6, depth: 0.8, rim: 0.16, rot: 0 });
+    kit.reeds(S, -87.2, 30.2, 0.9);
+    kit.reeds(S, -79.2, 6.2, 0.8);
+    // vines on the courtyard walls
+    for (const [x, z, ry, h] of [
+      [-88.0, 30.5, -Math.PI / 2, 4.4], [-88.0, 36.0, -Math.PI / 2, 3.6],
+      [-104.0, 30.0, Math.PI / 2, 4.0], [-72.0, 8.0, -Math.PI / 2, 3.4],
+      [-80.0, 34.0, Math.PI / 2, 3.8],
+    ]) kit.vine(S, x, 0.15, z, ry, h);
+    // window boxes under the courtyard windows
+    for (const [x, y, z, ry] of [
+      [-88.2, 2.45, 28.5, -Math.PI / 2], [-88.2, 2.45, 35.5, -Math.PI / 2],
+      [-114.1, 2.45, 40.04, 0], [-108.6, 2.45, 40.04, 0],
+      [-112.1, 2.45, 55.96, Math.PI], [-80.1, 2.25, 2.0, Math.PI / 2],
+      [-80.1, 2.25, 9.0, Math.PI / 2], [-72.1, 2.25, 4.0, -Math.PI / 2],
+    ]) kit.windowBox(S, x, y, z, ry, 1.0 + rnd() * 0.45);
+    // potted plants by the shop doors
+    for (const [x, z] of [[-48.6, 8.3], [-48.6, -0.3], [-41.2, 24], [-63.0, 30], [-40.8, 16], [-49.6, 30.5]]) {
+      kit.potPlant(S, x, z, 1.0 + rnd() * 0.4);
+    }
+    // small cover in the souk lanes
+    kit.planter(S, -49.2, 20.5, 1.6, 0.8, Math.PI / 2);
+    kit.planter(S, -76.2, 5.5, 1.4, 0.8, Math.PI / 2);
+    kit.palletStack(S, -86.5, 38.5, 3, 0.3);
+    kit.sandbagPile(S, -71.0, 22.0, 0.1, 3, 4);
+    kit.cone(S, -62.5, 21.0, 0.5);
+    kit.toolbox(S, -88.5, 26.5, -0.4);
+    // facade dressing: dishes, aerials and a fire escape on the residential
+    // faces, so the walls are not blank plaster any more
+    kit.satelliteDish(S, -88.2, 4.7, 33.0, -Math.PI / 2);
+    kit.satelliteDish(S, -88.2, 6.6, 26.5, -Math.PI / 2);
+    kit.satelliteDish(S, -113.8, 4.5, 43.0, 0);
+    kit.satelliteDish(S, -107.8, 5.7, 58.5, Math.PI);
+    kit.satelliteDish(S, -79.8, 4.5, 14.5, Math.PI / 2);
+    kit.satelliteDish(S, -72.2, 5.2, 10.5, -Math.PI / 2);
+    kit.fireEscape(S, -72.2, 4.3, 5.0, -Math.PI / 2, 2.2, 1.1);
+    kit.fireEscape(S, -104.2, 4.3, 31.5, Math.PI / 2, 2.2, 1.1);
+
+    /* ------------------------------------------------------------ the rail */
+    // grass along the platform edge and the warehouse wall
+    for (let z = -192; z <= -108; z += 2.2) {
+      for (const x of [-7.4, 6.2, 30.5]) {
+        if (rnd() < 0.45) kit.grassTuft(R, x + jitter(0.4), z + jitter(0.8), 0.7 + rnd() * 0.6);
+      }
+    }
+    for (let z = -190; z <= -160; z += 3.4) {
+      if (rnd() < 0.5) kit.grassTuft(R, -5.4 + jitter(0.3), z, 0.8 + rnd() * 0.5);
+    }
+    // the settling pond west of the warehouse + its duckboard bridge
+    kit.pool(R, -32, -186, { w: 8.5, d: 6.0, depth: 0.7, rim: 0.22, rot: 0 });
+    kit.duckBridge(R, -32, -182.6, 0, { span: 3.6, width: 2.0 });
+    for (let i = 0; i < 10; i++) {
+      kit.reeds(R, -35.5 + rnd() * 7, -188.5 + rnd() * 5, 0.8 + rnd() * 0.6);
+    }
+    // a drainage channel across the south of the yard with plank crossings
+    // (kept clear of the two tracks at z -168 / -160)
+    kit.canal(R, -30, -132, 36, -132, { width: 2.2, depth: 0.3 });
+    kit.duckBridge(R, -10, -132, 0, { span: 3.0, width: 1.8 });
+    kit.duckBridge(R, 18, -132, 0, { span: 3.0, width: 1.8 });
+    for (let i = 0; i < 12; i++) {
+      kit.reeds(R, -28 + rnd() * 62, -133.6 + rnd() * 3.2, 0.7 + rnd() * 0.5);
+    }
+    // a couple of trees where the yard meets the city
+    kit.tree(R, -30.5, -118.5, { kind: 'street', h: 4.8 });
+    kit.tree(R, 33.5, -116.5, { kind: 'street', h: 5.2 });
+    kit.bush(R, -28.5, -119.5, 1.2);
+    kit.flowerBed(R, 32.0, -113.0, 0.8);
+    // small cover in the yard
+    kit.palletStack(R, 16.5, -158.0, 3, 0.4);
+    kit.palletStack(R, 21.0, -160.5, 2, -0.2);
+    kit.cableSpool(R, -20.5, -156.0, 0.4);
+    kit.cableSpool(R, 27.5, -133.0, 1.2);
+    kit.tireStack(R, 12.5, -133.5, 4);
+    kit.pipeCover(R, 24.0, -120.5, 0.2, 2.6);
+    kit.toolbox(R, -18.5, -112.5, 0.6);
+    kit.cone(R, 4.5, -160.5, 0.3);
+    kit.cone(R, -8.5, -162.0, 0.9);
+    kit.sandbagPile(R, 30.5, -150.0, 0.2, 3, 4);
+    // warehouse roof dressing
+    kit.satelliteDish(R, -12.0, 9.2, -172.0, 0.6);
+    kit.satelliteDish(R, -16.5, 9.2, -184.0, 2.4);
+    kit.toolbox(R, -9.0, -165.0, 0.4);
+
+    /* ------------------------------------------------------------ the port */
+    // the drainage canal across the yard + duckboard crossings
+    kit.canal(P, 50, -28, 114, -28, { width: 2.6, depth: 0.32 });
+    kit.duckBridge(P, 70, -28, 0, { span: 3.4, width: 2.0 });
+    kit.duckBridge(P, 100, -28, 0, { span: 3.4, width: 2.0 });
+    for (let i = 0; i < 16; i++) {
+      kit.reeds(P, 52 + rnd() * 60, -29.8 + rnd() * 3.4, 0.7 + rnd() * 0.6);
+    }
+    // a settling tank by the warehouse + one at the yard's north end
+    kit.pool(P, 76.0, 1.5, { w: 5.0, d: 3.2, depth: 0.9, rim: 0.2, rot: 0 });
+    kit.pool(P, 92.0, -94.0, { w: 4.0, d: 2.4, depth: 0.8, rim: 0.18, rot: 0 });
+    kit.reeds(P, 76.0, -0.4, 0.9);
+    // palms along the quay
+    for (let z = -90; z <= 28; z += 11) {
+      if (rnd() < 0.25) continue;
+      kit.tree(P, 113.4 + jitter(0.4), z + jitter(1.2), { kind: 'palm', h: 5.0 + rnd() * 1.6, yaw: rnd() * 6.28, pit: false });
+    }
+    // weeds along the fence and the perimeter wall
+    for (let x = 50; x <= 114; x += 2.4) {
+      if (rnd() < 0.5) kit.grassTuft(P, x + jitter(0.8), -94.5 + jitter(0.6), 0.7 + rnd() * 0.6);
+      if (rnd() < 0.4) kit.grassTuft(P, x + jitter(0.8), 31.5 + jitter(0.6), 0.7 + rnd() * 0.6);
+    }
+    for (let z = -92; z <= 30; z += 3.2) {
+      if (rnd() < 0.45) kit.grassTuft(P, 113.0 + jitter(0.5), z + jitter(0.8), 0.7 + rnd() * 0.5);
+    }
+    // bushes at the yard edges
+    for (const [x, z] of [[50.5, -20], [50.5, 6], [112.0, -46], [112.0, 22], [56.0, -92], [104.0, 28]]) {
+      kit.bush(P, x, z, 1.1 + rnd() * 0.5);
+    }
+    for (const [x, z] of [[52.0, -6.0], [110.0, 10.0], [66.0, 28.0]]) {
+      kit.flowerBed(P, x, z, 0.9);
+    }
+    // small cover across the yard
+    kit.palletStack(P, 58.5, -34.0, 3, 0.3);
+    kit.palletStack(P, 106.0, -40.0, 2, -0.4);
+    kit.cableSpool(P, 66.0, -48.0, 0.5);
+    kit.cableSpool(P, 96.0, 12.0, 1.1);
+    kit.tireStack(P, 88.0, -62.0, 4);
+    kit.tireStack(P, 60.0, 10.0, 3);
+    kit.pipeCover(P, 100.0, -50.0, 0.15, 2.8);
+    kit.pipeCover(P, 62.0, -66.0, 0.1, 2.4);
+    kit.toolbox(P, 78.0, -60.0, 0.5);
+    kit.toolbox(P, 104.0, -20.0, -0.7);
+    kit.cone(P, 68.0, -30.5, 0.4);
+    kit.cone(P, 92.0, -26.0, 1.0);
+    kit.cone(P, 54.0, -22.0, 0.2);
+    kit.sandbagPile(P, 80.0, -80.0, 0.1, 3, 4);
+    kit.planter(P, 52.5, 20.0, 1.6, 0.8, 0);
+    kit.planter(P, 111.0, -6.0, 1.4, 0.8, Math.PI / 2);
+    // warehouse roof + quay dressing
+    kit.satelliteDish(P, 66.0, 9.0, 7.4, Math.PI);
+    kit.satelliteDish(P, 78.0, 9.0, 7.4, Math.PI + 0.4);
+    kit.satelliteDish(P, 60.0, 6.2, -40.0, 1.2);
+    kit.potPlant(P, 112.0, 24.0, 1.1);
+    kit.potPlant(P, 112.0, -34.0, 1.0);
+  }
+
   /* ------------------------------------------------------------------ build */
   buildGround();
-
   const BUILDINGS = [
     // left side
     { side: -1, z0: 26, z1: 54, depth: 14, h: 19, detail: 'high', plaster: mats.plasterB, ground: 'wall', bays: 7 },
@@ -6120,6 +6402,8 @@ export function createLevel(engine) {
   fireEscape(-1, 13.5, 4, 3.3);
   fireEscape(1, 2.5, 4, 3.3);
   fireEscape(1, -18.5, 3, 3.1);
+
+  buildFlora();
 
   /* ---- hero street props ------------------------------------------------ */
   carWreck(-3.3, 13.2, 0.34, true);
@@ -6425,6 +6709,11 @@ export function createLevel(engine) {
     time += dt;
     dustTime.value = time;
     if (seaMatRef && seaMatRef.userData.shader) seaMatRef.userData.shader.uniforms.uSeaTime.value = time;
+    // every basin shares one water material, so one offset ripples them all
+    if (mats.water && mats.water.normalMap) {
+      mats.water.normalMap.offset.x = time * 0.012;
+      mats.water.normalMap.offset.y = time * 0.008;
+    }
     // destructible debris
     for (let i = debris.length - 1; i >= 0; i--) {
       const p = debris[i];

@@ -1388,6 +1388,96 @@ export function buildMaterials(maxAniso = 8) {
     signC: mk(signC, { roughness: 0.78, metalness: 0.1, envMapIntensity: 0.5 }),
     dirt: new THREE.MeshStandardMaterial({ color: 0x453b30, roughness: 1, metalness: 0 }),
 
+    // ---- flora: leaves, bark, blossoms, soil. Plants must never stop a
+    // bullet and the small ones must not cost a shadow pass.
+    leaf: (() => {
+      const m = new THREE.MeshStandardMaterial({
+        color: 0x4e6b38, roughness: 0.95, metalness: 0.0,
+        side: THREE.DoubleSide, envMapIntensity: 0.35,
+      });
+      m.userData.noBullet = true; m.userData.noShadow = true;
+      return m;
+    })(),
+    leafDeep: (() => {
+      const m = new THREE.MeshStandardMaterial({
+        color: 0x35502c, roughness: 0.96, metalness: 0.0,
+        side: THREE.DoubleSide, envMapIntensity: 0.3,
+      });
+      m.userData.noBullet = true; m.userData.noShadow = true;
+      return m;
+    })(),
+    leafDry: (() => {
+      const m = new THREE.MeshStandardMaterial({
+        color: 0x8a7a45, roughness: 0.97, metalness: 0.0,
+        side: THREE.DoubleSide, envMapIntensity: 0.3,
+      });
+      m.userData.noBullet = true; m.userData.noShadow = true;
+      return m;
+    })(),
+    bark: (() => {
+      const m = new THREE.MeshStandardMaterial({
+        color: 0x4a3a2b, roughness: 1.0, metalness: 0.0, envMapIntensity: 0.25,
+      });
+      m.userData.noBullet = true; m.userData.noShadow = true;
+      return m;
+    })(),
+    blossomA: (() => {
+      const m = new THREE.MeshStandardMaterial({
+        color: 0xd9687a, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide,
+      });
+      m.userData.noBullet = true; m.userData.noShadow = true;
+      return m;
+    })(),
+    blossomB: (() => {
+      const m = new THREE.MeshStandardMaterial({
+        color: 0xe8c05a, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide,
+      });
+      m.userData.noBullet = true; m.userData.noShadow = true;
+      return m;
+    })(),
+    blossomC: (() => {
+      const m = new THREE.MeshStandardMaterial({
+        color: 0x9f86d8, roughness: 0.9, metalness: 0.0, side: THREE.DoubleSide,
+      });
+      m.userData.noBullet = true; m.userData.noShadow = true;
+      return m;
+    })(),
+    soil: (() => {
+      const m = new THREE.MeshStandardMaterial({
+        color: 0x3a2b20, roughness: 1.0, metalness: 0.0, envMapIntensity: 0.2,
+      });
+      m.userData.noBullet = true; m.userData.noShadow = true;
+      return m;
+    })(),
+
+    // ---- water: one shared surface, the normal map scrolls in the level
+    // update so every basin ripples together.
+    water: (() => {
+      const size = 256;
+      const h = new Uint8Array(size * size);
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          const u = (x / size) * Math.PI * 2;
+          const v = (y / size) * Math.PI * 2;
+          const a = Math.sin(u * 3 + Math.sin(v * 2) * 1.4);
+          const b = Math.sin(v * 4.5 - u * 1.6);
+          const c = Math.sin((u + v) * 7.5) * 0.35;
+          h[y * size + x] = 128 + (a * 46 + b * 34 + c * 22);
+        }
+      }
+      const nrm = tex(normalFromHeight(h, size, 1.5));
+      nrm.repeat.set(3, 3);
+      const m = new THREE.MeshStandardMaterial({
+        color: 0x35666d, roughness: 0.06, metalness: 0.28,
+        envMapIntensity: 2.2, transparent: true, opacity: 0.74,
+        emissive: 0x0d2226, emissiveIntensity: 0.6,
+        normalMap: nrm, normalScale: new THREE.Vector2(0.6, 0.6),
+      });
+      m.userData.noBullet = true; m.userData.noShadow = true;
+      m.userData.scroll = { x: 0, y: 0 };
+      return m;
+    })(),
+
     // ---- windows / interiors
     windowGlass: new THREE.MeshStandardMaterial({
       color: 0x24333c, roughness: 0.18, metalness: 0.45, envMapIntensity: 1.3,

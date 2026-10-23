@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>Minimap Lab</title>
+<link rel="stylesheet" href="/src/style.css" />
+<style>
+  html, body { background: #0b0f13; margin: 0; }
+  body { padding: 28px; }
+  #hosts { display: flex; gap: 36px; align-items: flex-start; }
+  .panel { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .panel h2 { font: 10px var(--mono); color: #7d8a94; letter-spacing: .18em; margin: 0; }
+  .stage { position: relative; width: 166px; height: 166px; }
+  .stage.big { width: 332px; height: 332px; }
+  .stage .minimap-wrap { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .stage canvas { width: 100%; height: 100%; display: block; }
+  .stage .mm-legend { position: absolute; top: 170px; left: 0; width: 166px; }
+  .stage.big .mm-legend { top: 336px; }
+</style>
+</head>
+<body>
+<div id="hosts"></div>
+<script type="module">
+import { createMinimap } from '/src/ui/minimap.js';
+
+/* ------------------------------------------------------------- fake city */
+function makeLevel() {
+  const colliders = [];
+  const add = (x0, x1, z0, z1, top) => colliders.push({ x0, x1, z0, z1, top });
+  for (let i = 0; i < 0; i++) { /* noop */ }
+  // a four-block grid with 8 m streets; the player stands at the crossing
+  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    const x0 = sx < 0 ? -20 : 4;
+    const x1 = sx < 0 ? -4 : 20;
+    const z0 = sz < 0 ? -20 : 4;
+    const z1 = sz < 0 ? -4 : 20;
+    add(x0, x1, z0, z1, 8);
+  }
+  // street clutter (low cover) and two mid walls
+  add(-3, 3, 9, 13, 1.4);
+  add(-16, -8, 9, 14, 2.2);
+  add(8, 14, -18, -12, 5.5);
+  add(-22, -14, -18, -10, 3.2);
+  return { colliders, regionAt: (x, z) => ({ name: '后院市场' }) };
+}
+
+const level = makeLevel();
+const hosts = document.getElementById('hosts');
+
+function mount(label, big, state, want) {
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  const h = document.createElement('h2');
+  h.textContent = label;
+  const stage = document.createElement('div');
+  stage.className = big ? 'stage big' : 'stage';
+  const wrap = document.createElement('div');
+  wrap.id = `minimap-wrap-${label}`;
+  wrap.className = 'minimap-wrap';
+  const canvas = document.createElement('canvas');
+  canvas.id = `minimap-${label}`;
+  canvas.width = 320; canvas.height = 320;
+  wrap.appendChild(canvas);
+  const north = document.createElement('span'); north.className = 'mm-north'; north.textContent = 'N';
+  const region = document.createElement('span'); region.className = 'mm-region'; region.id = `mm-region-${label}`; region.textContent = '街区';
+  const hint = document.createElement('span'); hint.className = 'mm-hint'; hint.textContent = 'M';
+  wrap.append(north, region, hint);
+  stage.appendChild(wrap);
+  panel.append(h, stage);
+  hosts.appendChild(panel);
+
+  // the module resolves the DOM by id, so temporarily alias the ids it wants
+  const prevWrap = document.getElementById('minimap-wrap');
+  const prevCanvas = document.getElementById('minimap');
+  const prevRegion = document.getElementById('mm-region');
+  const prevLegend = document.getElementById('mm-legend');
+  if (prevLegend) prevLegend.id = 'mm-legend-prev';
+  wrap.id = 'minimap-wrap';
+  canvas.id = 'minimap';
+  region.id = 'mm-region';
+  const mm = createMinimap({ level });
+  wrap.id = `minimap-wrap-${label}`;
+  canvas.id = `minimap-${label}`;
+  region.id = `mm-region-${label}`;
+  if (prevWrap) prevWrap.id = 'minimap-wrap';
+  if (prevCanvas) prevCanvas.id = 'minimap';
+  if (prevRegion) prevRegion.id = 'mm-region';
+  // the module looks its chrome up by id: suffix every id in this panel so the
+  // next panel builds its own zoom button / scale bar / distance chip
+  for (const el of wrap.querySelectorAll('[id]')) el.id = `${el.id}-${label}`;
+  const legend = wrap.parentNode.querySelector('#mm-legend');
+  if (legend) legend.id = `mm-legend-${label}`;
+  if (want) { for (let i = 0; i < 4 && mm.range !== want; i++) mm.cycleZoom(); }
+  mm.draw(state, 0.35);
+  window.__mm = mm;
+  return { mm, wrap, rect: () => wrap.getBoundingClientRect() };
+}
+
+const enemy = (x, z, extra) => ({ alive: true, pos: { x, z }, ...extra });
+
+/* The player stands in the street crossing at the origin:
+     · (0,-14)  north street   -> in sight, 14 m
+     · (14,0)   east street    -> in sight, 14 m
+     · (10,10)  inside a block -> hidden (no line of sight)
+     · (0,-24)  boss           -> shown (bosses are always marked)
+     · (-26,-26) far away      -> hidden                                        */
+const full = {
+  x: 0, z: 0, heading: 0, time: 1.2, uav: false,
+  enemies: [
+    enemy(0, -14, {}),
+    enemy(14, 0, {}),
+    enemy(10, 10, {}),
+    enemy(0, -24, { isBoss: true }),
+    enemy(-26, -26, {}),
+  ],
+  objective: { zone: { x: 18, z: -20, r: 4.5 }, done: false },
+  zone: { x: 6, z: 4, r: 30, nextX: 2, nextZ: 0, nextR: 18, shrinking: false, finished: false },
+  pickups: [
+    { kind: 'ammo', x: 0, z: 9 },      // in the street  -> shown
+    { kind: 'medkit', x: 2, z: -3 },   // in the street  -> shown
+    { kind: 'armor', x: -18, z: 0 },   // west street    -> shown
+    { kind: 'grenade', x: 10, z: 10 }, // inside a block -> hidden
+  ],
+  allies: [{ x: -6, z: 0, yaw: Math.PI / 2 }],
+};
+
+const combat = {
+  x: 0, z: 0, heading: 0, time: 1.2, uav: true,
+  enemies: [enemy(0, -12, { burstLeft: 0.4 }), enemy(12, 0, { isBoss: true })],
+  objective: { zone: { x: -30, z: -34, r: 4.5 }, done: false },
+  zone: null,
+  pickups: [{ kind: 'ammo', x: 4, z: 6 }],
+  allies: [],
+};
+
+const mounted = [];
+mounted.push(mount('A-42M', false, full, 42));
+mounted.push(mount('B-70M', false, full, 70));
+mounted.push(mount('C-42M-COMBAT', false, combat, 42));
+mounted.push(mount('D-70M-BIG', true, full, 70));
+
+window.__LAB__ = true;
+window.__labRects = () => mounted.map((m) => { const r = m.rect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; });
+</script>
+</body>
+</html>

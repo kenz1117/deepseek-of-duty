@@ -7306,6 +7306,51 @@ function netTick(dt) {
   }
 }
 
+/* ---- tactical map feed ------------------------------------------------
+   The minimap only shows what the player could reasonably know: loot that
+   is lying in the world and the squadmates that are fighting next to you.
+   Both lists are tiny, but the map only repaints at 10 Hz, so they are
+   rebuilt on a slow tick instead of every frame. */
+let minimapFeedT = 0;
+let minimapLootCache = null;
+let minimapAllyCache = null;
+
+function minimapLoot() {
+  if (!pickups) return null;
+  return pickups.list();
+}
+
+function minimapAllies() {
+  const out = [];
+  if (net.started) {
+    for (const [, r] of net.remote) {
+      if (!r || !r.alive) continue;
+      // in versus only the own faction is a squadmate; in co-op everyone is
+      if (G.versusMode && net.team != null && r.team != null && r.team !== net.team) continue;
+      out.push({ x: r.x, z: r.z, yaw: r.yaw });
+    }
+  }
+  if (G.versusMode && net.team != null) {
+    for (const b of versusBots) {
+      if (!b.e || !b.e.alive || b.team !== net.team) continue;
+      out.push({
+        x: b.e.root.position.x,
+        z: b.e.root.position.z,
+        yaw: b.e.root.rotation.y,
+      });
+    }
+  }
+  return out;
+}
+
+function minimapFeed(dt) {
+  minimapFeedT -= dt;
+  if (minimapFeedT > 0) return;
+  minimapFeedT = 0.2;
+  minimapLootCache = minimapLoot();
+  minimapAllyCache = minimapAllies();
+}
+
 function updateGame(dt) {
   G.time += dt;
   const playing = G.state === 'playing';
@@ -7638,6 +7683,7 @@ function updateGame(dt) {
   hud.setHeading(controller.headingDeg);
   hud.setSpread(spreadToPixels(playerSpread()), controller.adsAmount > 0.6);
   if (minimap) {
+    minimapFeed(dt);
     const zoneState = G.versusMode
       ? (net.role === 'host' ? (zoneSys && zoneSys.state) : (netZoneMirror && netZoneMirror.state))
       : null;
@@ -7648,6 +7694,8 @@ function updateGame(dt) {
       objective: G.objective,
       uav: G.uavUntil > G.time,
       time: G.time,
+      pickups: minimapLootCache,
+      allies: minimapAllyCache,
       zone: zoneState ? {
         x: zoneState.x, z: zoneState.z, r: zoneState.r,
         nextX: zoneState.nextX, nextZ: zoneState.nextZ, nextR: zoneState.nextR,

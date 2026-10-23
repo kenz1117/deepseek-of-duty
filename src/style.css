@@ -1614,16 +1614,35 @@ html.reduce-motion .cine-bar{height:8vh;}
 /* ---------------- tactical minimap ---------------- */
 .minimap-wrap{position:absolute;top:calc(max(20px,2.6vh) + 158px);left:clamp(20px,2.4vw,44px);
   width:166px;height:166px;border:1px solid rgba(233,238,240,.16);
-  background:rgba(4,7,10,.5);box-shadow:0 12px 32px rgba(0,0,0,.45);overflow:hidden;
+  background:#070b0f;box-shadow:0 12px 32px rgba(0,0,0,.45),inset 0 0 0 1px rgba(0,0,0,.5);
+  overflow:hidden;
   animation:hudIn .5s cubic-bezier(.2,.7,.2,1) both;animation-delay:.1s;}
 .minimap-wrap.hidden{display:none;}
 #minimap{width:100%;height:100%;display:block;}
-.mm-north{position:absolute;top:4px;left:50%;transform:translateX(-50%);
-  font-family:var(--mono);font-size:8px;letter-spacing:.12em;color:rgba(233,238,240,.6);}
-.mm-region{position:absolute;left:7px;bottom:5px;font-family:var(--mono);font-size:7px;
-  letter-spacing:.14em;color:rgba(233,238,240,.55);}
-.mm-hint{position:absolute;right:5px;bottom:4px;font-family:var(--mono);font-size:6px;
-  color:rgba(233,238,240,.35);border:1px solid rgba(233,238,240,.18);padding:0 3px;line-height:1.6;}
+.mm-north{position:absolute;top:5px;left:50%;transform:translateX(-50%);z-index:2;
+  font-family:var(--mono);font-size:8px;letter-spacing:.12em;color:rgba(233,238,240,.55);
+  text-shadow:0 1px 3px rgba(0,0,0,.9);pointer-events:none;}
+.mm-region{position:absolute;left:6px;bottom:5px;z-index:2;padding:1px 4px;
+  font-family:var(--mono);font-size:7px;letter-spacing:.14em;color:rgba(233,238,240,.62);
+  background:rgba(4,7,10,.55);pointer-events:none;}
+.mm-hint{position:absolute;right:5px;bottom:4px;z-index:2;font-family:var(--mono);font-size:6px;
+  color:rgba(233,238,240,.35);border:1px solid rgba(233,238,240,.18);padding:0 3px;line-height:1.6;
+  pointer-events:none;}
+
+/* loot legend: a thin strip under the map, never on top of it */
+.mm-legend{display:flex;align-items:center;justify-content:space-between;gap:4px;
+  width:166px;flex:0 0 auto;align-self:flex-end;margin-top:-4px;
+  font-family:var(--mono);font-size:6px;letter-spacing:.06em;color:rgba(233,238,240,.42);
+  pointer-events:none;}
+.mm-legend.hidden{display:none;}
+.mm-legend span{display:flex;align-items:center;gap:3px;white-space:nowrap;}
+.mm-legend em{font-style:normal;}
+.mmk{display:block;width:5px;height:5px;background:#d8d2c4;}
+.mmk-ammo{background:#ffab4d;clip-path:polygon(0 0,100% 0,100% 100%,0 100%);}
+.mmk-armor{background:#6ea9d4;clip-path:polygon(50% 0,100% 100%,0 100%);}
+.mmk-medkit{background:#ff6a5e;clip-path:polygon(34% 0,66% 0,66% 34%,100% 34%,100% 66%,66% 66%,66% 100%,34% 100%,34% 66%,0 66%,0 34%,34% 34%);}
+.mmk-grenade{background:#8fbc84;border-radius:50%;}
+.mmk-supply{background:#d8d2c4;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);}
 
 /* ---------------- controls manual ---------------- */
 .pc-head{grid-column:1/-1;margin:16px 0 5px;}
@@ -1917,11 +1936,13 @@ html.reduce-motion .cine-bar{height:8vh;}
 }
 
 /* minimap range cycle */
-.mm-zoom{position:absolute;top:4px;right:4px;z-index:2;pointer-events:auto;
-  height:15px;padding:0 3px;border:1px solid rgba(233,238,240,.18);
-  background:rgba(4,7,10,.55);font-family:var(--mono);font-size:6px;line-height:1;
-  letter-spacing:.04em;color:rgba(233,238,240,.55);cursor:pointer;transition:border-color .15s,color .15s;}
-.mm-zoom:hover,.mm-zoom:focus-visible{border-color:rgba(227,178,106,.58);color:var(--amber-hi);outline:none;}
+.mm-zoom{position:absolute;top:4px;right:4px;z-index:3;pointer-events:auto;
+  height:17px;min-width:26px;padding:0 4px;border:1px solid rgba(233,238,240,.22);
+  background:rgba(4,7,10,.66);font-family:var(--mono);font-size:7px;line-height:1;
+  letter-spacing:.04em;color:rgba(233,238,240,.68);cursor:pointer;
+  transition:border-color .15s,color .15s,background .15s;}
+.mm-zoom:hover,.mm-zoom:focus-visible{border-color:rgba(227,178,106,.58);color:var(--amber-hi);
+  background:rgba(10,14,18,.8);outline:none;}
 
 /* OPS mission list: 14 operations stay inside the deck and scroll cleanly */
 .ops-list{max-height:128px;overscroll-behavior:contain;scrollbar-gutter:stable;}
@@ -1936,8 +1957,8 @@ html.reduce-motion .cine-bar{height:8vh;}
 #lan-start.ll-primary span{color:#fff3d6;}
 #lan-start.ll-primary:hover{background:rgba(227,178,106,.32);}
 
-/* minimap 70m readability: scale bar + objective distance */
-.mm-scale{position:absolute;left:50%;bottom:5px;transform:translateX(-50%);z-index:2;
+/* minimap readability: scale bar + objective distance */
+.mm-scale{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);z-index:2;
   display:flex;align-items:flex-end;gap:4px;pointer-events:none;color:rgba(233,238,240,.55);}
 .mm-scale i{position:relative;display:block;flex:0 0 auto;height:1px;min-width:8px;
   background:rgba(233,238,240,.58);transition:width .15s ease;}
@@ -1946,13 +1967,14 @@ html.reduce-motion .cine-bar{height:8vh;}
 .mm-scale i::before{left:0;}
 .mm-scale i::after{right:0;}
 .mm-scale b{font-family:var(--mono);font-size:6.5px;font-weight:400;line-height:1;
-  letter-spacing:.04em;color:rgba(233,238,240,.55);white-space:nowrap;}
-.mm-objdist{position:absolute;left:5px;top:5px;z-index:2;padding:1px 3px;
-  border-left:1px solid rgba(227,178,106,.55);background:rgba(4,7,10,.58);
+  letter-spacing:.04em;color:rgba(233,238,240,.62);white-space:nowrap;
+  text-shadow:0 1px 2px rgba(0,0,0,.95);}
+.mm-objdist{position:absolute;left:5px;top:5px;z-index:2;padding:1px 4px;
+  border-left:1px solid rgba(227,178,106,.55);background:rgba(4,7,10,.62);
   font-family:var(--mono);font-size:6.5px;line-height:1.45;letter-spacing:.06em;
-  color:rgba(255,190,110,.9);pointer-events:none;white-space:nowrap;}
+  color:rgba(255,190,110,.92);pointer-events:none;white-space:nowrap;}
 .mm-objdist[hidden]{display:none;}
-.mm-objdist.is-done{color:rgba(157,255,168,.9);border-left-color:rgba(157,255,168,.55);}
+.mm-objdist.is-done{color:rgba(157,255,168,.92);border-left-color:rgba(157,255,168,.55);}
 
 /* Season 3: minimap lives under the score card in the top-right stack */
 .hud-topright .minimap-wrap{

@@ -636,6 +636,14 @@ export function createPickups({ scene, level, audio = null, onCollect, onNotify 
     dropWeapon,
     update,
     reset,
+    /** Read-only snapshot for the tactical map: kind + ground position. */
+    list() {
+      return pickups.map((it) => ({
+        kind: it.kind,
+        x: it.root.position.x,
+        z: it.root.position.z,
+      }));
+    },
     get counts() {
       return { pickups: pickups.length, weapons: weapons.length, total: pickups.length + weapons.length };
     },
