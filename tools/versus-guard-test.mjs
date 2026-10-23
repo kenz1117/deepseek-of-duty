@@ -63,8 +63,13 @@ function check(name, ok, detail = '') {
     /equipment && !G\.versusMode/.test(mainSrc));
   check('director: breach disabled for teamed soldiers',
     /updateBreach[\s\S]{0,400}e\.team != null/.test(directorSrc));
+  const coverSrc = readFileSync(path.join(ROOT, 'src', 'systems', 'ai', 'cover.js'), 'utf8');
   check('director: cover keys namespaced per faction',
-    /t\$\{e\.team == null \? 0 : e\.team\}/.test(directorSrc));
+    // the writer (director) and the reader (cover system) must build the
+    // SAME key — they used to disagree, so no cover was ever reserved
+    /coverKey\(pt\.x, pt\.z, team\)/.test(directorSrc)
+    && /t\$\{team == null \? 0 : team\}/.test(coverSrc)
+    && /coverKey\(x, z, team\)/.test(coverSrc));
 }
 
 /* --- guard 4: versus snapshot fields -------------------------------------- */
@@ -86,7 +91,8 @@ function check(name, ok, detail = '') {
   check('wiring: per-bot targeting consults the brain priority',
     /nearestHostileActor\(e\.root\.position, e\.team, brain \? brain\.priorityTargetId : null\)/.test(mainSrc));
   check('wiring: PvE director gated off in versus (per-faction instances)',
-    /aiDirector && nav && !G\.versusMode\) aiDirector\.tick/.test(mainSrc));
+    /aiDirector && nav && !G\.versusMode/.test(mainSrc)
+    && /aiDirector\.tick\(dt, enemies, anchor/.test(mainSrc));
   check('wiring: coordination tick is called from the game loop',
     /updateTeamBrains\(dt\)/.test(mainSrc));
   check('wiring: coordination tick is host-only',
@@ -169,7 +175,7 @@ function check(name, ok, detail = '') {
 
   // Enemy damage must follow the per-frame target, not land on the host.
   check('ai damage: routed by targetId (bot / remote / local)',
-    /damagePlayer: \(amount, from\) => \{[\s\S]{0,200}startsWith\('bot:'\)/.test(mainSrc)
+    /damagePlayer: \(amount, from[^)]*\) => \{[\s\S]{0,200}startsWith\('bot:'\)/.test(mainSrc)
       && /applyLanRemoteDamage\(String\(tid\), amount, from, enemyCtx\.attackerTeam\)/.test(mainSrc));
   check('ai damage: stale targetId cleared on the solo branch',
     /else \{[\s\S]{0,320}enemyCtx\.targetId = undefined;/.test(mainSrc));
@@ -254,7 +260,9 @@ function check(name, ok, detail = '') {
   check('phase2: patrol movement branch exists', /state === 'patrol'[\s\S]{0,900}pickPatrolPoint\(/.test(enemySrc));
 
   // real flanking
-  check('phase2: flank assignment computes a validated waypoint', /const fp = pickFlankPoint\(\{[\s\S]{0,200}side: e\.aiSide/.test(directorSrc));
+  check('phase2: flank assignment computes a validated waypoint',
+    /fp = pickFlankPoint\(\{[\s\S]{0,220}side: e\.aiSide/.test(directorSrc)
+    && /isWalkableAt\(fp\.x, fp\.z, 0\)/.test(directorSrc));
   check('phase2: flankers commit to the route', /this\.aiRole === 'flank' && this\.flankPoint && !this\.flankDone[\s\S]{0,340}else this\.state = 'advance';/.test(enemySrc));
   check('phase2: flankers may return fire on the route', /!\(this\.state === 'advance' && this\.aiRole === 'flank'/.test(enemySrc));
 
@@ -263,14 +271,21 @@ function check(name, ok, detail = '') {
     /this\.state === 'advance' && this\.suppression > 0\.55[\s\S]{0,300}this\.wantCover = true;/.test(enemySrc));
 
   // open-fire budget covers every archetype
-  check('phase2: rusher fire gated by the budget', /updateRusherFire[\s\S]{0,400}ctx\.tryFire && !ctx\.tryFire\(\)/.test(enemySrc));
+  check('phase2: rusher fire gated by the budget', /updateRusherFire[\s\S]{0,400}ctx\.tryFire && !ctx\.tryFire\(this\)/.test(enemySrc));
   check('phase2: sniper fire gated by the budget at trigger time',
-    /this\.warnT <= 0\) \{[\s\S]{0,300}ctx\.tryFire && !ctx\.tryFire\(\)/.test(enemySrc));
-  check('phase2: fire budget scales by tier', /maxFiring: 1 \}/.test(mainSrc) && /maxFiring: 3 \}/.test(mainSrc));
+    /this\.warnT <= 0\) \{[\s\S]{0,300}ctx\.tryFire && !ctx\.tryFire\(this\)/.test(enemySrc));
+  // the tier ladder lives in its own module now (systems/ai/tiers.js) so a
+  // headless test can assert it without the three.js bundle
+  const tierSrc = readFileSync(path.join(ROOT, 'src', 'systems', 'ai', 'tiers.js'), 'utf8');
+  check('phase2: fire budget scales by tier',
+    /maxFiring: 1 \}/.test(tierSrc) && /maxFiring: 2 \}/.test(tierSrc)
+    // HARD INVARIANT: one player must never face three open-fire slots
+    && !/maxFiring: [3-9]/.test(tierSrc)
+    && /MAX_FIRING_CEILING = 2/.test(tierSrc));
 
   // late-dodge fairness recheck
   check('phase2: rolled hits re-check geometry during a late dodge',
-    /let hit = !path\.blocked && Math\.random\(\) < hitChance;[\s\S]{0,560}hit = this\.canSeeTarget\(playerPos, dist\);/.test(enemySrc));
+    /let hit = !path\.blocked && Math\.random\(\) < hitChance;[\s\S]{0,900}hit = this\.canSeeTarget\(playerPos, dist, ctx\.playerEyeY\);/.test(enemySrc));
   check('phase2: ctx arms the late-dodge window', /playerFastT = 0\.15;/.test(mainSrc));
 
   // quiet-behind stealth: the 4.2 m auto-detect respects the facing

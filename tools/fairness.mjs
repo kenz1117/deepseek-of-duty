@@ -82,15 +82,30 @@ function cleanup(code) {
     });
     await send('Page.enable');
     await send('Runtime.enable');
-    await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
+    // The device-metrics override re-creates the renderer on current Chrome
+    // builds, which reloads the page and kills the CDP session mid-probe
+    // ("Inspected target navigated or closed"). The --window-size flag already
+    // gives us the viewport we want, so the override is opt-in only.
+    if (process.env.SET_METRICS) {
+      await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
+    }
     await send('Page.navigate', { url });
-    await sleep(Number(process.env.BOOT_MS || 9000));
+    // Vite's dependency optimizer forces a full page reload on the first
+    // load of a fresh dev server, which kills the CDP session if we evaluate
+    // too early. 20 s is the safe default; override with BOOT_MS.
+    await sleep(Number(process.env.BOOT_MS || 20000));
 
     const expr = `(async () => {
       const g = window.__game;
       if (!g) return { error: 'no __game' };
       const G = g.state;
+      // Force survival mode. The menu pill click is unreliable in a
+      // production bundle, and a CAMPAIGN run is fatal for the probe:
+      // OP01 is three waves long, so startWave(8) would finish the
+      // operation and the probe would measure an empty map.
+      try { g.setSetting('runMode', 'survival'); } catch (e) {}
       document.querySelector('#mode-select-pills button[data-mode="survival"]')?.click();
+      try { g.setSetting('runMode', 'survival'); } catch (e) {}
       g.startGame(false);
       if (g.finishTutorial) g.finishTutorial();
       G.tutorial.done = true; G.tutorial.active = false;
@@ -152,6 +167,9 @@ function cleanup(code) {
         damage: +dmg.toFixed(1), deaths, deathAt,
         equipment: g.aiStats ? g.aiStats().equipment : null,
         barks: g.aiStats ? g.aiStats().barks : null,
+        // ---- death attribution: who killed the bot, from how far, doing what
+        deathLog: (G.deathLog || []).slice(),
+        lastDamage: G.lastDamage || null,
       };
     })()`;
     const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true });
@@ -160,6 +178,33 @@ function cleanup(code) {
 
     const hpMin = Math.min(...raw.samples.map((s) => s.hp));
     const spent = raw.damage;
+    /* ---- death attribution table ---------------------------------------
+       "Who killed me" is the only question a wave can answer. Bucket the
+       death log by archetype, by squad role and by range so a bad wave can
+       be attributed instead of guessed at. */
+    const log = raw.deathLog || [];
+    const bucket = (d) => {
+      if (d < 10) return '0-10m';
+      if (d < 20) return '10-20m';
+      if (d < 35) return '20-35m';
+      return '35m+';
+    };
+    const tally = (key) => {
+      const m = {};
+      for (const d of log) {
+        const k = key(d);
+        m[k] = (m[k] || 0) + 1;
+      }
+      return m;
+    };
+    const attribution = {
+      deaths: log.length,
+      byArchetype: tally((d) => d.archetype || (d.utility ? 'utility' : 'unknown')),
+      byRole: tally((d) => d.role || 'unknown'),
+      byRange: tally((d) => bucket(d.dist || 0)),
+      byUtility: tally((d) => (d.utility ? 'utility' : 'bullet')),
+      log,
+    };
     const summary = {
       wave: raw.wave, tier: raw.tier, seconds: raw.seconds,
       kills: raw.kills, shots: raw.shots, hits: raw.hits,
@@ -168,6 +213,7 @@ function cleanup(code) {
       hpMin,
       deaths: raw.deaths,
       deathAt: raw.deathAt,
+      attribution,
       equipment: raw.equipment,
       barks: raw.barks,
     };

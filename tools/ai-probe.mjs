@@ -7,6 +7,7 @@
  *
  * usage: node tools/ai-probe.mjs <wave> [seconds] [url] [outfile]
  *   WAVE=8 node tools/ai-probe.mjs 8 14
+ *   PX=0 PZ=20 node tools/ai-probe.mjs 8 14   # pin the player (cross-district!)
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -83,21 +84,44 @@ function cleanup(code) {
     });
     await send('Page.enable');
     await send('Runtime.enable');
-    await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
+    // The device-metrics override re-creates the renderer on current Chrome
+    // builds, which reloads the page and kills the CDP session mid-probe
+    // ("Inspected target navigated or closed"). The --window-size flag already
+    // gives us the viewport we want, so the override is opt-in only.
+    if (process.env.SET_METRICS) {
+      await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
+    }
     await send('Page.navigate', { url });
-    await sleep(Number(process.env.BOOT_MS || 9000));
+    // Vite's dependency optimizer forces a full page reload on the first
+    // load of a fresh dev server, which kills the CDP session if we evaluate
+    // too early. 20 s is the safe default; override with BOOT_MS.
+    await sleep(Number(process.env.BOOT_MS || 20000));
 
     const expr = `(async () => {
       const g = window.__game;
       if (!g) return { error: 'no __game' };
       const G = g.state;
       // free-play mode: no campaign intro/cinematic, no operation scripting
+      // Force survival mode. The menu pill click is unreliable in a
+      // production bundle, and a CAMPAIGN run is fatal for the probe:
+      // OP01 is three waves long, so startWave(8) would finish the
+      // operation and the probe would measure an empty map.
+      try { g.setSetting('runMode', 'survival'); } catch (e) {}
       document.querySelector('#mode-select-pills button[data-mode="survival"]')?.click();
+      try { g.setSetting('runMode', 'survival'); } catch (e) {}
       g.startGame(false);
       if (g.finishTutorial) g.finishTutorial();
       G.tutorial.done = true; G.tutorial.active = false;
       G.freezeEnemies = false;
-      g.player.revive(${Number(process.env.PX || 0)}, ${Number(process.env.PZ || 20)});
+      // Player placement. Teleporting the player is OPT-IN: the game keeps
+      // the district rect (G.playRect) of the district it rolled at startup,
+      // so a player dragged to another part of the map ends up fighting a
+      // wave that spawns 70-140 m away in a district he is not in. Every
+      // "the enemy never engages" number measured that way is an artefact.
+      // Pass PX/PZ explicitly when you really want the fixed position.
+      const PXV = ${process.env.PX === undefined ? 'null' : Number(process.env.PX)};
+      const PZV = ${process.env.PZ === undefined ? 'null' : Number(process.env.PZ)};
+      if (PXV !== null && PZV !== null) g.player.revive(PXV, PZV);
       g.player.setLook(0, -0.02);
       g.startWave(${wave});
       const AUTO = ${process.env.AUTO === '1' ? 'true' : 'false'};

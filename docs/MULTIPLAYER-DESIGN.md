@@ -8,8 +8,10 @@
 | --- | --- |
 | Players | **2–4 human** (host + up to 3) |
 | Faction | All humans on **TASK FORCE**; AI on **INSURGENT** |
-| AI soldiers | **8–16 per wave**, scaled by human count: `min(16, 3 + wave + 2 × (humans − 1))` |
+| AI soldiers | **4–14 per wave**, scaled by human count: `min(14, 3 + wave + 2 × (humans − 1))` (code: `src/main.js`, `min(14, …)` — the 16 here was never implemented) |
 | AI on field | `min(12, 6 + 2 × (humans − 1))` alive at once |
+| Fire budget | The open-fire budget is **per player**, not per match: each player can face the solo threat level (`maxFiring` bursts per 1.15 s). Versus keeps one shared pool on purpose. |
+| Downed | 18 s bleed-out, revive with a 2 s hold, back up at **35 % HP** (was 30 s / 50 % — dying was almost free) |
 | Objective | Shared survival waves; downed player redeploys after 4 s |
 | Friendly fire | Off |
 | Sync | Host-authoritative enemies/waves; 20 Hz snapshots |
@@ -20,9 +22,10 @@ Scaling example:
 
 | Humans | AI per wave | AI alive |
 | --- | --- | --- |
-| 2 | 9–15 | 8 |
-| 3 | 11–16 | 10 |
-| 4 | 13–16 | 12 |
+| 1 (solo PvE) | 4–14 | 6 |
+| 2 | 6–14 | 8 |
+| 3 | 8–14 | 10 |
+| 4 | 10–14 | 12 |
 
 ### VERSUS 4v4 — designed, locked
 

@@ -89,5 +89,29 @@ const path = (ax, az, bx, bz, colliders, opts = {}) =>
     path(0, 0, 10, 0, [{ x0: 4.75, x1: 5.25, z0: -3, z1: 3, top: 3 }]).blocked === true);
 }
 
+/* --- CROUCH vs STAND: the eye height has to matter ----------------------
+   The AI used to trace its sight line to the target's FEET, so a crouched
+   player and a standing one produced the identical ray — crouching bought
+   nothing. These pin the fix at the geometry level (deterministic, no
+   browser): the same crate hides a crouched player and not a standing one. */
+{
+  const crate = [{ x0: 9.4, x1: 10.6, z0: -1, z1: 1, top: 1.2 }];  // 1.2 m crate at x=10
+  const shooter = { x: 0, z: 0 };
+  const player = { x: 11, z: 0 };    // right behind the crate
+  const stand = path(shooter.x, shooter.z, player.x, player.z, crate, { ay: 1.685, by: 1.68 });
+  const crouch = path(shooter.x, shooter.z, player.x, player.z, crate, { ay: 1.685, by: 1.05 });
+  check('a 1.2 m crate hides a CROUCHED player right behind it', crouch.blocked === true);
+  check('the same crate does NOT hide a STANDING player', stand.blocked === false);
+  // the feet-height ray (the old, broken target) hides both
+  const feet = path(shooter.x, shooter.z, player.x, player.z, crate, { ay: 1.685, by: 0 });
+  check('the old feet-height ray hid a STANDING player too (that was the bug)',
+    feet.blocked === true && stand.blocked === false);
+  // at range the sight line clears a low crate for both postures
+  const farStand = path(0, 0, 40, 0, crate, { ay: 1.685, by: 1.68 });
+  const farCrouch = path(0, 0, 40, 0, crate, { ay: 1.685, by: 1.05 });
+  check('at range the sight line clears a low crate for both postures',
+    farStand.blocked === false && farCrouch.blocked === false);
+}
+
 console.log(failures === 0 ? '\n[enemy-los] all checks passed' : `\n[enemy-los] ${failures} check(s) failed`);
 process.exit(failures === 0 ? 0 : 1);

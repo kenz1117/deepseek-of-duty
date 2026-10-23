@@ -301,8 +301,11 @@ export function createMinimap({ level }) {
         const ex = e.root ? e.root.position.x : e.pos.x;
         const ez = e.root ? e.root.position.z : e.pos.z;
         const dist = Math.hypot(ex - px, ez - pz);
+        // enemies: nearby, firing, or UAV. The "engaged" radius used to be
+        // 46 m, which turned the radar into a wallhack: any soldier that
+        // opened up lit up on the map well outside the player's own reach.
         const engaged = (e.burstLeft > 0) || e.warnActive || e.isBoss;
-        if (!(dist < 20 || (s.uav && dist < 55) || (engaged && dist < 46))) continue;
+        if (!(dist < 20 || (s.uav && dist < 55) || (engaged && dist < 38))) continue;
         const x = toX(ex);
         const y = toY(ez);
         if (x < -6 || y < -6 || x > W + 6 || y > H + 6) continue;
