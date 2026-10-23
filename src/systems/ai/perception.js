@@ -52,10 +52,15 @@ export class Perception {
     this.smokes.push({ x, z, r, t: duration });
   }
 
-  /** A loud event at (x,z). radius in metres, strength 0..1. */
-  noise(x, z, radius = 55, strength = 1, life = 0.55) {
+  /**
+   * A loud event at (x,z). radius in metres, strength 0..1.
+   * `friendly` marks the squad's OWN gunfire: a soldier learns nothing new
+   * from hearing his squadmate shoot (he knows where his squadmate is), and
+   * counting it made soldiers leave their post to walk towards a teammate.
+   */
+  noise(x, z, radius = 55, strength = 1, life = 0.55, friendly = false) {
     if (this.noises.length > 24) this.noises.shift();
-    this.noises.push({ x, z, r: radius, s: strength, life });
+    this.noises.push({ x, z, r: radius, s: strength, life, friendly });
   }
 
   /**
@@ -163,7 +168,7 @@ export class Perception {
     let visible = false;
     if (inCone && e.losTimer <= 0) {
       e.losTimer = (e.archetype === 'sniper' ? 0.26 : 0.13) + Math.random() * 0.1;
-      visible = e.canSeeTarget(player, dist);
+      visible = e.canSeeTarget(player, dist, ctx.playerEyeY);
       this.losChecks++;
       if (visible) this.losHits++;
       e.losCache = visible;
@@ -182,9 +187,14 @@ export class Perception {
     e.canSee = visible;
 
     // ---------------- hearing ----------------
-    let heardX = 0, heardZ = 0, heard = false;
+    // A soldier that hears anything must end up with a DIRECTION to look at.
+    // The old code only set `heard` for a clear signal (occK > 0.12), so an
+    // occluded shot could lift awareness WITHOUT producing a belief — and
+    // Enemy.advance then fell through to the LIVE player position.
+    let heardX = 0, heardZ = 0, heard = false, bestOcc = 0;
     if (!visible) {
       for (const n of this.noises) {
+        if (n.friendly) continue;         // own squad's gunfire is not news
         const nd = Math.hypot(n.x - P.x, n.z - P.z);
         if (nd > n.r) continue;
         // acoustic occlusion: a building between us and the noise cuts
@@ -200,7 +210,9 @@ export class Perception {
         const occK = blocked ? baseK * 0.28 : baseK;
         if (occK <= 0) continue;
         e.awareness = Math.min(0.92, e.awareness + occK * dt * 2.6);
-        if (occK > 0.12) { heard = true; heardX = n.x; heardZ = n.z; }
+        // the clearest stimulus wins, and it always wins: no signal, no
+        // awareness, no belief — awareness and belief stay in lockstep.
+        if (occK > bestOcc) { bestOcc = occK; heard = true; heardX = n.x; heardZ = n.z; }
       }
     }
 
@@ -210,6 +222,7 @@ export class Perception {
     // accumulate a rough bearing so the cover system can route the soldier
     // away from that lane instead of back toward it.
     let bumpDirX = 0, bumpDirZ = 0, bumpAny = false;
+    let impX = 0, impZ = 0, impBest = 0;
     for (let i = 0; i < this.impacts.length; i++) {
       const imp = this.impacts[i];
       const dx2 = imp.x - P.x, dz2 = imp.z - P.z;
@@ -226,11 +239,20 @@ export class Perception {
       const fromShooter = Math.max(0, -dot);
       const lift = k * (0.18 + 0.22 * fromShooter);
       e.awareness = Math.min(1, e.awareness + lift * dt * 6);
+      if (k > impBest) { impBest = k; impX = imp.x; impZ = imp.z; }
       if (fromShooter > 0.2 && d2 > 0.5) {
         bumpDirX += imp.nx * fromShooter * prox;
         bumpDirZ += imp.nz * fromShooter * prox;
         bumpAny = true;
       }
+    }
+    // Rounds cracking nearby are a DIRECTION to look at, not just a number:
+    // the impact sits roughly on the shooter's line. Without this, awareness
+    // from impacts could rise with nothing to look at, and the soldier fell
+    // back to the live player position.
+    if (impBest > 0 && !e.investigate) {
+      e.investigate = { x: impX, z: impZ };
+      e.investigateT = 0;
     }
     if (bumpAny) {
       e.fireBearingX = bumpDirX;
@@ -291,6 +313,8 @@ export class Perception {
         e.contact = true;
         e.acquireT = 0;
         e.reactionDelay = reactionDelay(B, e.archetype);
+        // a new contact re-arms the tier's first-shot delay
+        e._firedEver = false;
         // the squad announces first contact (cooldown-gated by the bark system)
         if (ctx.ai && ctx.ai.barks) ctx.ai.barks.say('contact', e.root.position);
       }

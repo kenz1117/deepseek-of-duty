@@ -55,7 +55,10 @@ export const AI_BEHAVIOR = {
     assault: 2, flank: 2, suppress: 1,
     cover: 0.72,
     reaction: [0.46, 0.86],
-    fov: 1.16, sight: 82,
+    // The player's view cone is ~0.68 rad half-angle (78 deg FOV). An enemy
+    // cone of 1.16 rad (133 deg total) starts the reaction clock in places
+    // the player cannot even see, which reads as "shot from nowhere".
+    fov: 1.08, sight: 82,
     gain: 1.16, decay: 0.60,
     settle: 0.74,
     lead: 0.60,
@@ -67,7 +70,10 @@ export const AI_BEHAVIOR = {
     assault: 2, flank: 2, suppress: 2,
     cover: 0.88,
     reaction: [0.32, 0.62],
-    fov: 1.28, sight: 92,
+    // 1.28 rad (147 deg total) was almost twice the player's own field of
+    // view. 1.14 rad keeps the elite soldiers genuinely wide-eyed without
+    // letting them open fire from behind the player's head.
+    fov: 1.14, sight: 92,
     gain: 1.30, decay: 0.65,
     settle: 0.60,
     lead: 0.85,

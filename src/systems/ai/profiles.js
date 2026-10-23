@@ -37,7 +37,7 @@ export const AI_PROFILES = {
     /** metres added to the role stand-off table (hold 20 / flank 17 / …) */
     standoffMod: 0,
   },
-  hunter: { id: 'hunter', intel: 'area', patrol: null, zoneAnchor: false, standoffMod: 0 },
+  hunter: { id: 'hunter', intel: 'area', patrol: { radius: 11, dwell: [3, 7] }, zoneAnchor: false, standoffMod: 0 },
   assault: { id: 'assault', intel: 'area', patrol: null, zoneAnchor: true, standoffMod: -2 },
   interceptor: { id: 'interceptor', intel: 'area', patrol: null, zoneAnchor: true, standoffMod: 8 },
   interceptorPursuit: { id: 'interceptorPursuit', intel: 'area', patrol: null, zoneAnchor: true, standoffMod: -6 },
@@ -63,30 +63,50 @@ const DEG = Math.PI / 180;
  * planned from stale intel reads as "he swung around where I was", not
  * "he read my coordinates".
  *
+ * `walkable` (optional) lets the caller reject unreachable points so the
+ * tries can walk the WHOLE sector instead of giving up on the first
+ * candidate. The old loop returned on iteration 0, which capped the
+ * reachable band at 80-92° — a sidestep, never a flanking arc.
+ *
+ * `ref` (optional) is the point the arc is measured FROM. It defaults to
+ * `from` (the flanker itself), which produces a SIDESTEP: the arc point is
+ * then perpendicular to the flanker's own approach, so the soldier slides
+ * sideways instead of swinging around. The squad brain passes the squad's
+ * CENTROID instead, so the arc is measured from the mass of the squad: the
+ * flanker ends up on the far side of the target from everyone else, which
+ * is what a pincer actually looks like.
+ *
  * @returns {{x:number, z:number, dir:number}|null} dir = bearing from the
  *          point back to the threat (rad), so callers can face the threat
- *          on arrival. null when the sector maths cannot produce a point
- *          (degenerate geometry) — the caller then falls back to strafe.
+ *          on arrival. null when the sector maths cannot produce a reachable
+ *          point (degenerate geometry) — the caller then falls back.
  */
-export function pickFlankPoint({ from, threat, side = 1, rng = Math.random,
-  minDist = 14, maxDist = 20, minAngle = 80, maxAngle = 150, tries = 6 }) {
+export function pickFlankPoint({ from, threat, ref = null, side = 1, rng = Math.random,
+  minDist = 14, maxDist = 20, minAngle = 100, maxAngle = 170, tries = 8, walkable = null }) {
   if (!from || !threat) return null;
-  const dx = from.x - threat.x;
-  const dz = from.z - threat.z;
+  const anchor = ref || from;
+  const dx = anchor.x - threat.x;
+  const dz = anchor.z - threat.z;
   if (!Number.isFinite(dx) || !Number.isFinite(dz)) return null;
   if (Math.hypot(dx, dz) < 0.5) return null;
   const base = Math.atan2(dz, dx);
   const sgn = side >= 0 ? 1 : -1;
-  for (let i = 0; i < tries; i++) {
-    // spread tries across the sector instead of clustering on the first rng
+  // Start at a random slice: with a fixed start the first candidate always
+  // fell in the lowest slice of the sector, so every flank began with the
+  // same shallow sidestep and only the REJECTED candidates could ever
+  // produce a deep arc.
+  const start = Math.floor(rng() * tries);
+  for (let k = 0; k < tries; k++) {
+    const i = (start + k) % tries;
+    // spread the tries across the whole sector, not just its first slice
     const frac = (i + rng()) / tries;
     const off = (minAngle + frac * (maxAngle - minAngle)) * DEG;
     const r = minDist + rng() * Math.max(0, maxDist - minDist);
     const a = base + sgn * off;
     const x = threat.x + Math.cos(a) * r;
     const z = threat.z + Math.sin(a) * r;
+    if (walkable && !walkable(x, z)) continue;
     const back = Math.atan2(threat.z - z, threat.x - x);
-    // first geometric candidate wins; reachability is the caller's job
     return { x, z, dir: back };
   }
   return null;

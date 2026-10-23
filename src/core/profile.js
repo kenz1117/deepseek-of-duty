@@ -232,6 +232,13 @@ export function runPayload(stats, overrides = {}) {
     shots: Math.max(0, int(stats.shots)),
     hits: Math.max(0, int(stats.hits)),
     challengesDone: Math.max(0, int(overrides.challengesDone)),
+    // Daily-claim binding. The server only honours the daily bonus when the
+    // claimed day is the server's current day in `dailyTzMin`; otherwise it
+    // voids the bonus and falls back to `scoreBase` (the score without the
+    // daily multiplier). A changed system clock therefore buys nothing.
+    dailyDate: typeof overrides.dailyDate === 'string' ? overrides.dailyDate : undefined,
+    dailyTzMin: Number.isInteger(overrides.dailyTzMin) ? overrides.dailyTzMin : undefined,
+    scoreBase: Number.isInteger(overrides.scoreBase) ? Math.max(0, overrides.scoreBase) : undefined,
   };
 }
 

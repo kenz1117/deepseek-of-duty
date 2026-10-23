@@ -2,8 +2,8 @@
  * COVER — cover-point evaluation and reservation.
  *
  * The old cover move was "pick the nearest cover point within 14 m", with no
- * check that the point actually hides you. That produced soldiers crouching in
- * the open. This module scores a point by:
+ * check that the point actually hides you. That produced soldiers crouching
+ * in the open. This module scores a point by:
  *
  *   • it really breaks the player's line of sight at crouch height (0.95 m),
  *   • it is in a useful distance band from the player (6.5–32 m),
@@ -15,48 +15,57 @@
  * makes cover work on long streets that never had explicit cover props — the
  * soldier hugs the wall face that puts masonry between him and you.
  *
+ * THE COVER TEST IS 3D NOW. It used to be a 2D slab test ("is there a wall
+ * between us in plan view"), while the real line of sight is a 3D segment
+ * (see systems/ai/geom.js). The mismatch produced the classic "the soldier
+ * is crouched right there but I can still see him and he is not shooting"
+ * stalemate — he was behind "cover" that did not actually cover.
+ *
  * Peeking works because standing eye height (1.685 m) clears most of these
- * waist-high covers, so the existing canSeePlayer() ray decides when a soldier
- * can actually shoot from behind it.
+ * waist-high covers, so the existing canSeeTarget() ray decides when a
+ * soldier can actually shoot from behind it.
  * ========================================================================= */
+
+import { segmentBlockedByColliders, segmentHitsBox } from './geom.js';
 
 const CROUCH_SIGHT_Y = 0.95;
 const OFFSET = 0.62;
+const PLAYER_EYE_STAND = 1.68;
+const PLAYER_EYE_CROUCH = 1.05;
 
-function segmentHitsBox(x0, z0, x1, z1, bx0, bx1, bz0, bz1) {
-  // 2D slab test: does the segment pass through the AABB?
-  const dx = x1 - x0, dz = z1 - z0;
-  let tmin = 0, tmax = 1;
-  if (Math.abs(dx) < 1e-6) {
-    if (x0 < bx0 || x0 > bx1) return false;
-  } else {
-    let t1 = (bx0 - x0) / dx, t2 = (bx1 - x0) / dx;
-    if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
-    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
-    if (tmin > tmax) return false;
-  }
-  if (Math.abs(dz) < 1e-6) {
-    if (z0 < bz0 || z0 > bz1) return false;
-  } else {
-    let t1 = (bz0 - z0) / dz, t2 = (bz1 - z0) / dz;
-    if (t1 > t2) { const s = t1; t1 = t2; t2 = s; }
-    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
-    if (tmin > tmax) return false;
-  }
-  return true;
+/**
+ * Canonical reservation key. The director writes into the reservation map
+ * with this key and the cover system checks it with this key — they used to
+ * disagree on the format (the map stored "t0:12.3,45.6", the lookup asked
+ * for "12.3,45.6"), so two soldiers could claim the same crate.
+ */
+export function coverKey(x, z, team = 0) {
+  return `t${team == null ? 0 : team}:${x.toFixed(1)},${z.toFixed(1)}`;
 }
 
 export function createCoverSystem(level, nav) {
   const colliders = level.colliders || [];
   const points = (level.coverPoints || []).filter((p) => !(p.y > 0.4));
 
+  /**
+   * How good is this spot as cover?
+   *   2 — hidden from a STANDING player (real cover)
+   *   1 — hidden only from a CROUCHED player (half cover)
+   *   0 — not cover at all
+   * The test is the same 3D segment test the AI's own sight line uses, from
+   * the player's eye down to the crouched soldier's head.
+   */
+  function coverQuality(x, z, px, pz) {
+    const fromStand = segmentBlockedByColliders(
+      px, PLAYER_EYE_STAND, pz, x, CROUCH_SIGHT_Y, z, colliders).blocked;
+    if (!fromStand) return 0;
+    const fromCrouch = segmentBlockedByColliders(
+      px, PLAYER_EYE_CROUCH, pz, x, CROUCH_SIGHT_Y, z, colliders).blocked;
+    return fromCrouch ? 2 : 1;
+  }
+
   function blocksCrouched(x, z, px, pz) {
-    for (let i = 0; i < colliders.length; i++) {
-      const c = colliders[i];
-      if (c.top != null && c.top < CROUCH_SIGHT_Y) continue;
-      if (segmentHitsBox(x, z, px, pz, c.x0, c.x1, c.z0, c.z1)) return true;
-    }
-    return false;
+    return coverQuality(x, z, px, pz) >= 2;
   }
 
   /**
@@ -91,6 +100,7 @@ export function createCoverSystem(level, nav) {
   function find(e, playerPos, opts = {}) {
     const maxFromEnemy = opts.maxFromEnemy || 15;
     const reserved = opts.reserved || null;
+    const team = opts.team == null ? 0 : opts.team;
     // a "fresh" fire-direction hint (last few seconds of incoming rounds)
     // is treated as a known threat lane; cover closer to the inbound axis
     // is downgraded so the soldier is not sent right back into the fire.
@@ -100,41 +110,53 @@ export function createCoverSystem(level, nav) {
     const px = e.root.position.x, pz = e.root.position.z;
     let best = null, bestScore = -Infinity;
 
-    const test = (x, z) => {
-      if (reserved && reserved.has(`${x.toFixed(1)},${z.toFixed(1)}`)) return;
-      const de = Math.hypot(x - px, z - pz);
-      if (de > maxFromEnemy) return;
-      const dp = Math.hypot(x - playerPos.x, z - playerPos.z);
-      if (dp < 6.5 || dp > 32) return;
-      if (nav && !nav.isWalkableAt(x, z, 0)) return;
-      if (!blocksCrouched(x, z, playerPos.x, playerPos.z)) return;
-      let score = 5 - Math.abs(dp - 15) * 0.22 - de * 0.30;
-      if (nav && !nav.lineWalkable(px, pz, x, z)) score -= 1.4;
-      // penalty for cover that sits between the soldier and a known fire
-      // direction: hiding behind something on the fire axis is fine for
-      // the cover test, but it tells the soldier they are still facing
-      // the threat lane. We nudge them sideways instead.
-      if (threat) {
-        const tx = x - px, tz = z - pz;
-        const tl = Math.hypot(tx, tz) || 1;
-        const align = (tx / tl) * threat.x + (tz / tl) * threat.z;
-        if (align > 0.45) score -= 1.6;          // cover sits "in front" of the fire direction
-        else if (align < -0.45) score += 0.6;    // cover sits off-axis: better flank, less obvious
+    // Pass 1 insists on REAL cover (hidden from a standing player). If the
+    // map offers none nearby, pass 2 accepts half cover rather than sending
+    // the soldier to stand in the open.
+    const runPass = (minQuality) => {
+      best = null; bestScore = -Infinity;
+      const test = (x, z) => {
+        if (reserved && reserved.has(coverKey(x, z, team))) return;
+        const de = Math.hypot(x - px, z - pz);
+        if (de > maxFromEnemy) return;
+        const dp = Math.hypot(x - playerPos.x, z - playerPos.z);
+        if (dp < 6.5 || dp > 32) return;
+        if (nav && !nav.isWalkableAt(x, z, 0)) return;
+        const q = coverQuality(x, z, playerPos.x, playerPos.z);
+        if (q < minQuality) return;
+        let score = 5 - Math.abs(dp - 15) * 0.22 - de * 0.30;
+        if (q >= 2) score += 1.2;              // real cover beats half cover
+        if (nav && !nav.lineWalkable(px, pz, x, z)) score -= 1.4;
+        // penalty for cover that sits between the soldier and a known fire
+        // direction: hiding behind something on the fire axis is fine for
+        // the cover test, but it tells the soldier they are still facing
+        // the threat lane. We nudge them sideways instead.
+        if (threat) {
+          const tx = x - px, tz = z - pz;
+          const tl = Math.hypot(tx, tz) || 1;
+          const align = (tx / tl) * threat.x + (tz / tl) * threat.z;
+          if (align > 0.45) score -= 1.6;          // cover sits "in front" of the fire direction
+          else if (align < -0.45) score += 0.6;    // cover sits off-axis: better flank, less obvious
+        }
+        // peer-spread: cover 1.4 m from a chosen cover is suspicious, but
+        // we want some breathing room, not just clutter. Soft penalty.
+        if (best && Math.hypot(best.x - x, best.z - z) < 1.4) return;
+        if (score > bestScore) { bestScore = score; best = { x, z, quality: q }; }
+      };
+
+      for (const cp of points) { if (!cp.invalid) test(cp.x, cp.z); }
+
+      if (maxFromEnemy >= 12) {
+        const faces = nearbyFaces(e, playerPos, maxFromEnemy);
+        for (const [x, z] of faces) test(x, z);
       }
-      // peer-spread: cover 1.4 m from a chosen cover is suspicious, but
-      // we want some breathing room, not just clutter. Soft penalty.
-      if (best && Math.hypot(best.x - x, best.z - z) < 1.4) return;
-      if (score > bestScore) { bestScore = score; best = { x, z }; }
+      return best;
     };
 
-    for (const cp of points) { if (!cp.invalid) test(cp.x, cp.z); }
-
-    if (maxFromEnemy >= 12) {
-      const faces = nearbyFaces(e, playerPos, maxFromEnemy);
-      for (const [x, z] of faces) test(x, z);
-    }
-    return best;
+    let found = runPass(2);
+    if (!found) found = runPass(1);
+    return found;
   }
 
-  return { find, points, blocksCrouched };
+  return { find, points, blocksCrouched, coverQuality };
 }

@@ -25,7 +25,11 @@ export function createController(camera, colliders, bounds, audio, groundProvide
   let lastDamage = 0;
   const SPEED = { walk: 4.3, sprint: 7.0, crouch: 2.2, ads: 2.9 };
   const radius = 0.36;
-  const state = { speed: 0, moving: false, sprinting: false, crouching: false, ads: false };
+  // speed: normalised 0..1 (relative to sprint speed) — used by the viewmodel.
+  // speedMs: the real velocity in m/s — the AI side reasons in metres per
+  // second (hearing radius, hit falloff, "is the player still?"), so it must
+  // never read the normalised value.
+  const state = { speed: 0, speedMs: 0, moving: false, sprinting: false, crouching: false, ads: false };
   // per-frame basis vectors, hoisted: fresh Vector3s here cost ~180 allocs/sec
   const forward = new THREE.Vector3();
   const right = new THREE.Vector3();
@@ -143,6 +147,7 @@ export function createController(camera, colliders, bounds, audio, groundProvide
 
     // ---- speed readout
     state.speed = Math.hypot(vel.x, vel.z) / SPEED.sprint;
+    state.speedMs = Math.hypot(vel.x, vel.z);
     state.moving = len > 0 && state.speed > 0.08;
     state.sprinting = wantSprint && state.moving;
     state.crouching = wantCrouch;

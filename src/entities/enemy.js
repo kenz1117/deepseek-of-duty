@@ -3,6 +3,7 @@ import { buildSoldier, applyPose, applyRagdoll } from './soldierParts.js';
 import { behaviorFor, reactionDelay } from '../systems/ai/tuning.js';
 import { separate, avoidBody, pullString, arrival } from '../systems/ai/steering.js';
 import { AI_PROFILES, pickPatrolPoint } from '../systems/ai/profiles.js';
+import { segmentBlockedByColliders } from '../systems/ai/geom.js';
 
 /* =========================================================================
    Enemy soldier — four archetypes on one rig:
@@ -33,6 +34,22 @@ let _variantCounter = 0;
 
 const EYE_Y = 1.685;
 const CHEST_Y = 1.30;
+
+/**
+ * The vertical point a soldier actually aims at: the target's CHEST.
+ *
+ * The AI used to aim at the target's FEET (the shared player position
+ * carries the ground height), so the muzzle dipped at the floor, the tracer
+ * ended at the player's shoes, and crouching changed nothing. The eye height
+ * now travels with the context, so a crouched player is a smaller target
+ * and a standing one is a chest-high one.
+ */
+function aimPointY(ctx, playerPos) {
+  const eye = (ctx && ctx.playerEyeY != null)
+    ? ctx.playerEyeY
+    : (playerPos && playerPos.y != null ? playerPos.y + 1.68 : CHEST_Y);
+  return eye - 0.45;
+}
 // animated leg segment lengths (mirrors soldierParts.js)
 const THIGH_SIZE = 0.435;
 const SHIN_SIZE = 0.395;
@@ -92,7 +109,7 @@ const ARCHETYPES = {
     engageSpeed: 1.7,
     wantDist: 34,
     fireRange: 82, engageRange: 95,
-    shotDamage: [38, 48],
+    shotDamage: [28, 34],
     hitBase: 0.93, hitFalloff: 0.0025, hitSpeedFalloff: 0.015,
     useCover: false, coverHp: 0,
     crouchEngage: 0.55,
@@ -111,6 +128,23 @@ function wrapPi(a) {
   return a;
 }
 const clamp = THREE.MathUtils.clamp;
+
+/** Contact range (m) inside which a soldier counts as "in the fight". A
+    soldier further out than this with no visual contact is not tactically
+    holding anything — it is out of the battle, and the wave stalls. */
+const CLOSE_RANGE = 22;
+
+/** How many soldiers may run the closeout push at the same time. The push is
+    the last resort for soldiers the intel never reached, not the default way
+    a wave arrives: an entire squad A*-ing to the player at once is both a
+    CPU spike (every one of them re-paths) and a flat-looking charge. Four
+    at a time keeps the pressure readable. */
+const CLOSEOUT_CAP = 4;
+/** A push that cannot make progress (geometry in the way, unreachable
+    target) must not hold a slot forever: after this many seconds the
+    soldier falls back to intel-driven behaviour and the slot frees. */
+const CLOSEOUT_MAX_T = 14;
+let _closeoutActive = 0;
 
 /* --------------------------------------------------------------- ragdoll */
 // 7 bodies / 8 distance constraints per corpse: head, chest, pelvis,
@@ -142,62 +176,10 @@ const _ragS = {
   forward: new THREE.Vector3(0, 0, -1),
 };
 
-/**
- * Analytic segment-vs-AABB occlusion test (see Enemy.pathBlocked).
- * Module-level and pure so it can be unit-tested without three.js.
- *
- * @returns {{blocked: boolean, tEnd: number}} tEnd is the path fraction at
- *          the blocking point (1 when clear), for tracer truncation.
- */
-export function segmentBlockedByColliders(ax, ay, az, bx, by, bz, colliders, occluders = [], host = null) {
-  const dx = bx - ax, dz = bz - az, dy3 = by - ay;
-
-  // 3D roof decks: an elevated shooter cannot see through a deck into the room below
-  if (occluders && occluders.length && ay > by + 0.2) {
-    for (const o of occluders) {
-      if (!(ay > o.y && by < o.y - 0.05)) continue;
-      const t = (o.y - ay) / (by - ay);
-      if (t <= 0 || t >= 1) continue;
-      const x = ax + dx * t, z = az + dz * t;
-      if (x > o.x0 && x < o.x1 && z > o.z0 && z < o.z1) return { blocked: true, tEnd: t };
-    }
-  }
-
-  const cols = colliders || [];
-  const nCols = cols.length;
-  for (let k = 0; k < nCols; k++) {
-    const c = cols[k];
-    if (c === host) continue;
-    const top = c.top != null ? c.top : Infinity;
-    if (Math.min(ay, by) >= top) continue;           // whole path passes over it
-
-    // slab test: overlap of the segment with the AABB in x and z
-    const invDx = dx !== 0 ? 1 / dx : 0;
-    const invDz = dz !== 0 ? 1 / dz : 0;
-    let t0 = 0, t1 = 1;
-    if (dx !== 0) {
-      let ta = (c.x0 - ax) * invDx, tb = (c.x1 - ax) * invDx;
-      if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; }
-      if (ta > t0) t0 = ta;
-      if (tb < t1) t1 = tb;
-    } else if (ax < c.x0 || ax > c.x1) continue;
-    if (dz !== 0) {
-      let ta = (c.z0 - az) * invDz, tb = (c.z1 - az) * invDz;
-      if (ta > tb) { const tmp = ta; ta = tb; tb = tmp; }
-      if (ta > t0) t0 = ta;
-      if (tb < t1) t1 = tb;
-    } else if (az < c.z0 || az > c.z1) continue;
-    if (t0 >= t1 || t1 <= 0 || t0 >= 1) continue;
-
-    // height along the path inside the overlap: blocked only where the
-    // eye line is below the collider top
-    const h0 = ay + dy3 * t0;
-    const h1 = ay + dy3 * t1;
-    if (h0 >= top && h1 >= top) continue;            // clears it within the overlap
-    return { blocked: true, tEnd: t0 > 0 ? t0 : 0.001 };
-  }
-  return { blocked: false, tEnd: 1 };
-}
+// The LOS test now lives in systems/ai/geom.js so the cover system can use
+// the exact same geometry (2D cover vs 3D sight lines was a real bug).
+// Re-exported here: tools/enemy-los-test.mjs imports it from here.
+export { segmentBlockedByColliders } from '../systems/ai/geom.js';
 
 export class Enemy {
   constructor(scene, mats, colliders, rnd) {
@@ -285,6 +267,19 @@ export class Enemy {
     this.coverPeek = false;
     this.coverNoSightT = 0;
     this.flankT = 0;
+    // ---- closeout (wave convergence) -------------------------------------
+    // A soldier that has not SEEN the player for a few seconds and is still
+    // outside contact range is not "holding a flank" — it is standing in an
+    // empty street. Before this existed a wave could park itself 55-140 m
+    // out (past the 48 m engagement range AND past the 55 m perception cap)
+    // and never touch the player: the wave simply never started. The
+    // closeout push walks the closing vector toward the player's last known
+    // area with a SHRINKING error, so it reads as the squad closing on the
+    // noise rather than as a wallhack.
+    this.noContactT = 0;           // seconds since this soldier last saw the player
+    this.closeoutTarget = null;    // heading of the current push
+    this.closeoutT = 0;            // timer for re-picking that heading
+    this.closeoutAge = 0;          // total seconds spent in this push
     // Phase 2 profile layer: policy (intel rules / patrol / zone anchor /
     // stand-off modifier) set per spawn by main.js; behaviour reads it.
     this.profile = AI_PROFILES.default;
@@ -830,6 +825,12 @@ export class Enemy {
       this.reactionDelay = reactionDelay(B, this.archetype) * 0.5;
     }
     this.wantCover = this.def.useCover && Math.random() < B.cover;
+    // tier-driven regroup: the tougher the tier, the more a wounded soldier
+    // breaks contact instead of dying in place (D1 = 0, D5 = 0.6).
+    const regroup = B.regroup || 0;
+    if (regroup > 0 && this.hp / this.maxHp < 0.55) {
+      this.regroupT = Math.max(this.regroupT || 0, 0.8 + regroup * 2.0);
+    }
     // morale-of-one: a hurt soldier that's still healthy enough to fight
     // does not run. But below ~35 % HP a rifleman becomes flaky — his
     // accuracy wobbles, he is more likely to break for cover on the next
@@ -882,8 +883,8 @@ export class Enemy {
    * `dist` is the planar distance perception already computed: passing it keeps
    * this function allocation-free and lets it bail out on range.
    */
-  canSeeTarget(targetPos, dist) {
-    return this.pathBlocked(targetPos, dist).blocked === false;
+  canSeeTarget(targetPos, dist, eyeY = null) {
+    return this.pathBlocked(targetPos, dist, eyeY).blocked === false;
   }
 
   /**
@@ -893,15 +894,21 @@ export class Enemy {
    * land on either side and the wall disappears. The slab test below is
    * exact for every AABB, so thin cover actually blocks.
    *
+   * `eyeY` is the TARGET's eye height. It matters: the old code always
+   * aimed the ray at the target's FEET (the player position carries the
+   * ground height), which made crouching worthless — a crouched player and
+   * a standing one produced the exact same sight line, and the AI's own
+   * cover test was 2D while this one is 3D.
+   *
    * Returns { blocked, tEnd } — tEnd is the path fraction at the blocking
    * point (1 when clear), so callers can truncate a tracer against the wall
    * instead of drawing it through.
    */
-  pathBlocked(targetPos, dist) {
+  pathBlocked(targetPos, dist, eyeY = null) {
     const p = this.root.position;
     const ax = p.x, az = p.z, ay = EYE_Y + p.y;
     const bx = targetPos.x, bz = targetPos.z;
-    const by = targetPos.y != null ? targetPos.y : CHEST_Y;
+    const by = eyeY != null ? eyeY : (targetPos.y != null ? targetPos.y : CHEST_Y);
     const dx = bx - ax, dz = bz - az;
     const planar = dist != null ? dist : Math.hypot(dx, dz);
     if (planar > 130) return { blocked: true, tEnd: 0 };
@@ -919,8 +926,8 @@ export class Enemy {
   }
 
   /** Back-compat alias — the old name, safe to keep while callers migrate. */
-  canSeePlayer(targetPos, dist) {
-    return this.canSeeTarget(targetPos, dist);
+  canSeePlayer(targetPos, dist, eyeY = null) {
+    return this.canSeeTarget(targetPos, dist, eyeY);
   }
 
   resolveCollision() {
@@ -964,6 +971,7 @@ export class Enemy {
     this.weaponFlashT = Math.max(0, this.weaponFlashT - dt);
     this.weaponFlash.material.opacity = this.weaponFlashT > 0 ? 1 : 0;
     this.coverCd = Math.max(0, this.coverCd - dt);
+    this.regroupT = Math.max(0, (this.regroupT || 0) - dt);
 
     // ---- perception: vision cone, awareness, hearing, suppression decay
     if (ai && ai.perception) {
@@ -986,6 +994,10 @@ export class Enemy {
       }
     }
     if (this.investigate) this.investigateT += dt;
+    // time since this soldier last had the player in sight — the closeout
+    // rule below is driven by it
+    if (this.canSee) this.noContactT = 0;
+    else this.noContactT += dt;
 
     // ---- aim settle: accuracy ramps while tracking, collapses when hit
     const settle = Math.max(0.18, B.settle
@@ -1019,6 +1031,49 @@ export class Enemy {
     const confident = boss || this.awareness > 0.7;
     const role = boss ? 'assault' : (this.aiRole || 'hold');
 
+    // ---- closeout: the wave has to arrive ---------------------------------
+    // Every wave must reach the player. A soldier that has had no visual
+    // contact for a few seconds and is still outside contact range has
+    // stopped being a tactic and become a parking space, so it switches to a
+    // direct push. The push heading carries an error that shrinks with
+    // distance (16 m at 70 m out, 0 m at contact range) and is re-picked
+    // every 2.5 s, so it converges like a squad working a noise rather than
+    // like a tracker with live coordinates.
+    // release the closeout slot this soldier held last frame (this.state
+    // still carries last frame's value here — the state chain runs below)
+    if (this.state === 'closeout') _closeoutActive = Math.max(0, _closeoutActive - 1);
+    // Only HUNTER-type policies push: a profile whose intel is 'stimuli'
+    // (garrison — the troops of an INFIL beat) holds its post by design and
+    // must not walk toward a player it has not perceived, or "don't alert
+    // the garrison" stops being a thing you can do. 'none' profiles (versus
+    // bots) are driven by their faction brain and are left alone as well.
+    const hunterPolicy = !this.profile || this.profile.intel === 'area';
+    const closing = !boss && hunterPolicy && this.state !== 'cover' && !this.canSee
+      && this.baseY <= 0.5              // a rooftop post cannot walk down to the fight
+      && this.noContactT > 3.0 && dist > CLOSE_RANGE
+      && this.closeoutAge < CLOSEOUT_MAX_T
+      && _closeoutActive < CLOSEOUT_CAP;
+    if (closing) {
+      _closeoutActive++;
+      this.closeoutAge += dt;
+      this.closeoutT += dt;
+      if (!this.closeoutTarget || this.closeoutT > 2.5) {
+        this.closeoutT = 0;
+        // The error never collapses to zero: at contact range the old formula
+        // targeted the player's EXACT live position, which is a tracker, not
+        // a squad working a noise. A 4 m floor keeps the wave arriving while
+        // leaving the soldier guessing which side of you you are on.
+        const err = Math.max(4, Math.min(16, (dist - CLOSE_RANGE) * 0.35));
+        const a = Math.random() * Math.PI * 2;
+        const r = err * Math.sqrt(Math.random());
+        this.closeoutTarget = { x: playerPos.x + Math.cos(a) * r, z: playerPos.z + Math.sin(a) * r };
+      }
+    } else {
+      this.closeoutTarget = null;
+      this.closeoutT = 0;
+      this.closeoutAge = 0;
+    }
+
     this.strafeTimer -= dt;
     if (this.strafeTimer <= 0) {
       this.strafeTimer = 0.9 + Math.random() * 1.7;
@@ -1044,7 +1099,10 @@ export class Enemy {
     }
 
     // ---- state selection
-    if (this.state === 'cover') {
+    if (closing) {
+      // the push overrides every other job until contact is made
+      this.state = 'closeout';
+    } else if (this.state === 'cover') {
       this.coverTimer -= dt;
       if (this.coverTimer <= 0) this.leaveCover(ai);
     } else if (this.state === 'search') {
@@ -1087,11 +1145,14 @@ export class Enemy {
     // route even through brief line-of-sight — that commitment is what makes
     // a flank readable instead of a teleport-in. Bail out when the point is
     // reached, the fight is at arm's length, or the soldier lost the job.
-    if (this.state !== 'cover' && this.aiRole === 'flank' && this.flankPoint && !this.flankDone) {
+    // A flank route also expires on a timer: an unreachable waypoint used to
+    // keep a soldier walking it forever, which read as a stuck game.
+    if (this.state !== 'cover' && !closing && this.aiRole === 'flank' && this.flankPoint && !this.flankDone) {
+      this.flankT += dt;
       const fdx = this.flankPoint.x - p.x;
       const fdz = this.flankPoint.z - p.z;
       const fd = Math.hypot(fdx, fdz);
-      if (fd <= 2.6 || dist < 12) this.flankDone = true;
+      if (fd <= 2.6 || dist < 12 || this.flankT > 14) this.flankDone = true;
       else this.state = 'advance';
     }
 
@@ -1148,6 +1209,12 @@ export class Enemy {
       const pd = pp ? Math.hypot(pp.x - p.x, pp.z - p.z) : Infinity;
       if (!pp || pd < 1.1 || this.patrolT <= 0) {
         const cfg = this.profile.patrol;
+        // A hunter that walked 40 m in from its spawn point must patrol
+        // around where it ARRIVED, not walk back to its old post — that
+        // "leaves the fight again" loop is what turned a closeout into a
+        // yo-yo. The garrison keeps its post because it never leaves it.
+        const home = this.patrolHome || p;
+        if (Math.hypot(home.x - p.x, home.z - p.z) > 18) this.patrolHome = { x: p.x, z: p.z };
         const next = pickPatrolPoint({
           home: this.patrolHome || p, radius: cfg.radius, rng: this.rnd, prevDir: this.patrolDir,
         });
@@ -1207,8 +1274,22 @@ export class Enemy {
           }
         }
       } else this.leaveCover(ai);
+    } else if (this.state === 'closeout') {
+      // walk the closing vector. The per-role stand-off table does NOT apply
+      // here — standing off at 8-26 m from a point the player is not at is
+      // exactly what kept the wave outside the fight.
+      const cp = this.closeoutTarget;
+      if (cp) {
+        const cx = cp.x - p.x, cz = cp.z - p.z;
+        const cd = Math.hypot(cx, cz);
+        if (cd > 1.2) {
+          moveX = cx / cd; moveZ = cz / cd;
+          speedTarget = def.advanceSpeed * (this.advanceSpeedMult || 1);
+          faceMove = true;
+        } else speedTarget = 0;
+      } else speedTarget = 0;
     } else if (this.state === 'search') {
-      const ls = this.lastSeen || this.investigate || playerPos;
+      const ls = this.lastSeen || this.investigate || this.searchAnchor(ctx, playerPos, dt);
       const sx = ls.x - p.x, sz = ls.z - p.z;
       const sd = Math.hypot(sx, sz);
       if (sd > 1.4) {
@@ -1262,7 +1343,7 @@ export class Enemy {
         const tgt = this.investigate
           || (this.lastSeen && this.lastSeenT < 6 ? this.lastSeen : null)
           || (this.profile && this.profile.zoneAnchor && this.zoneAnchor)
-          || playerPos;
+          || this.searchAnchor(ctx, playerPos, dt);
         const tx = tgt.x - p.x, tz = tgt.z - p.z;
         const td = Math.hypot(tx, tz) || 1;
         const so = this.profile ? (this.profile.standoffMod || 0) : 0;
@@ -1283,7 +1364,16 @@ export class Enemy {
         }
       }
     } else if (this.state === 'engage') {
-      if (this.archetype === 'rusher') {
+      if ((this.regroupT || 0) > 0) {
+        // A wounded soldier at the higher tiers gives ground for a moment
+        // instead of trading to the death. It is a readable beat (he backs
+        // off, still facing you) and it is what the tier's `regroup` value
+        // was always meant to drive.
+        moveX = -dirX * 0.9 + sideX * this.strafeDir * 0.4;
+        moveZ = -dirZ * 0.9 + sideZ * this.strafeDir * 0.4;
+        speedTarget = def.engageSpeed * 0.95;
+        faceMove = false;
+      } else if (this.archetype === 'rusher') {
         const push = dist > 3.2 ? 1 : 0;
         const circle = dist > 3.2 ? 0.3 : 1.0;
         moveX = dirX * push + sideX * this.strafeDir * circle;
@@ -1399,6 +1489,7 @@ export class Enemy {
     // ---- ground pathfinding: steer around walls when the straight line is blocked
     if (ctx.nav && this.baseY <= 0.5 && !this.pinned && !objectiveHold
         && (this.state === 'advance' || this.state === 'search' || this.state === 'cover'
+            || this.state === 'closeout'
             || (this.aiRole === 'breachSupport' && this.breachDoor))) {
       // breachSupport uses the door position, not the player, as its
       // navigation target — otherwise A* would path them straight at the
@@ -1414,20 +1505,22 @@ export class Enemy {
             z: (this.breachDoor.rect[2] + this.breachDoor.rect[3]) * 0.5 }
         : (this.aiRole === 'flank' && this.flankPoint && !this.flankDone)
         ? this.flankPoint
-        : this.state === 'search' ? (this.lastSeen || this.investigate || playerPos)
+        : this.state === 'closeout' ? this.closeoutTarget
+        : this.state === 'search' ? (this.lastSeen || this.investigate || this.searchAnchor(ctx, playerPos, dt))
         : this.state === 'cover' ? this.coverPoint
           : (this.investigate && this.investigateT < 24 ? this.investigate
             : (this.lastSeen && this.lastSeenT < 6 ? this.lastSeen
               : (this.profile && this.profile.zoneAnchor && this.zoneAnchor)
                 ? this.zoneAnchor
-                : playerPos));
+                : this.searchAnchor(ctx, playerPos, dt)));
       if (tgt) {
         const steer = this.followPath(ctx.nav, tgt, dt, 0);
         if (steer) {
           moveX = steer.x;
           moveZ = steer.z;
           if (!objectiveHold) {
-            speedTarget = Math.max(speedTarget, this.state === 'advance' ? def.advanceSpeed * 0.9 : 2.6);
+            speedTarget = Math.max(speedTarget,
+              (this.state === 'advance' || this.state === 'closeout') ? def.advanceSpeed * 0.9 : 2.6);
           }
         }
       }
@@ -1449,6 +1542,12 @@ export class Enemy {
     }
 
     if (this.pinned) { moveX = 0; moveZ = 0; speedTarget = 0; }
+    // The per-role movement intents combine radial and lateral terms, so
+    // their length can exceed 1 (a flanker's is ~1.27). Left un-normalised
+    // that soldier quietly moves faster than its configured speed — and the
+    // separation step only normalises when a neighbour happens to be close.
+    const mLen = Math.hypot(moveX, moveZ);
+    if (mLen > 1) { moveX /= mLen; moveZ /= mLen; }
     this.speed += (speedTarget - this.speed) * Math.min(1, dt * 6);
     const moving = this.speed > 0.35;
     if (this.speed > 0.02) {
@@ -1468,7 +1567,8 @@ export class Enemy {
     // vertical follow: ramps/roof layers (ground agents only)
     if (ctx.groundAt && !this.bounds) {
       let gy;
-      const navDrive = this.state === 'advance' || this.state === 'search' || this.state === 'reposition';
+      const navDrive = this.state === 'advance' || this.state === 'search'
+        || this.state === 'reposition' || this.state === 'closeout';
       if (navDrive && this.followHeight != null && this.followHeight > 1.0) {
         gy = Math.min(ctx.groundAt(this.root.position.x, this.root.position.z, this.followHeight), this.followHeight);
         if (gy < this.followHeight - 0.6 && this.root.position.y > this.followHeight - 0.9) {
@@ -1500,11 +1600,25 @@ export class Enemy {
 
     // ---- aim / look
     const lookErr = wrapPi(setYaw - this.root.rotation.y);
-    const headTarget = (this.state === 'idle' || this.state === 'patrol')
-      ? Math.sin(this.animT * 0.9) * 0.45
-      : clamp(lookErr * 0.8, -0.95, 0.95);
+    let headTarget;
+    if (this.state === 'idle' || this.state === 'patrol' || this.state === 'closeout') {
+      // an unaware soldier must not visibly track the player: in the
+      // closeout push the head keeps the idle sweep like every other
+      // no-contact state
+      headTarget = Math.sin(this.animT * 0.9) * 0.45;
+    } else if (this.aiRole === 'flank' && this.flankPoint && !this.flankDone) {
+      // A flanker does not watch you while he runs his arc. Looking away is
+      // what makes a flank READABLE ("that one is going around") instead of
+      // "another soldier walking over" — and it also narrows his cone, so
+      // the arc is a real trade instead of a free reposition.
+      const fx = this.flankPoint.x - p.x, fz = this.flankPoint.z - p.z;
+      const want = Math.atan2(-fx, -fz);
+      headTarget = clamp(wrapPi(want - this.root.rotation.y) * 0.8, -0.95, 0.95);
+    } else {
+      headTarget = clamp(lookErr * 0.8, -0.95, 0.95);
+    }
     this.headYawS += (headTarget - this.headYawS) * Math.min(1, dt * 5.5);
-    const playerEye = playerPos.y != null ? playerPos.y : CHEST_Y;
+    const playerEye = aimPointY(ctx, playerPos);
     const pitchTarget = Math.atan2(playerEye - (this.root.position.y + EYE_Y), Math.max(0.8, dist));
     this.aimPitchS += (pitchTarget - this.aimPitchS) * Math.min(1, dt * 5);
     this.aimPitch = this.aimPitchS;
@@ -1518,6 +1632,14 @@ export class Enemy {
       if (this.archetype === 'shield') crouchTarget = def.crouchEngage;
       else if (this.archetype === 'sniper') crouchTarget = this.repositionT > 0 ? 0.12 : def.crouchEngage;
       else if (this.archetype === 'rifleman' && this.hp < 62) crouchTarget = 0.34;
+      // ROLE STANCES — the squad's job has to be legible from the
+      // silhouette alone, because the role itself is invisible to the
+      // player: a suppressor fires from a low braced stance, an assault
+      // soldier comes at you upright and fast, a flanker runs tall.
+      else if (this.aiRole === 'suppress') crouchTarget = 0.28;
+      else if (this.aiRole === 'flank') crouchTarget = 0.0;
+      else if (this.aiRole === 'assault') crouchTarget = 0.05;
+      else if (this.aiRole === 'hold') crouchTarget = 0.2;
     }
     this.crouch += (crouchTarget - this.crouch) * Math.min(1, dt * 5);
 
@@ -1560,6 +1682,34 @@ export class Enemy {
     return true;
   }
 
+  /**
+   * Last-resort search anchor: the player's REGION plus a coarse error —
+   * never the live position.
+   *
+   * Falling back to the live position was the wallhack: a soldier could
+   * become "aware" (from a stray impact or a muffled shot) without ever
+   * holding a belief, and the advance target chain then ended on
+   * `playerPos`. The anchor is cached for a couple of seconds so the
+   * soldier commits to one search area instead of jittering on a new random
+   * point every frame.
+   */
+  searchAnchor(ctx, playerPos, dt) {
+    this._anchorT = (this._anchorT || 0) - (dt || 0);
+    if (!this._anchor || this._anchorT <= 0) {
+      let ax = playerPos.x, az = playerPos.z;
+      const dir = ctx && ctx.ai && ctx.ai.director;
+      if (dir && dir.areaAnchor) {
+        const a = dir.areaAnchor(playerPos);
+        if (a && Number.isFinite(a.x)) { ax = a.x; az = a.z; }
+      }
+      const ang = Math.random() * Math.PI * 2;
+      const r = 10 + Math.random() * 8;
+      this._anchor = { x: ax + Math.cos(ang) * r, z: az + Math.sin(ang) * r };
+      this._anchorT = 2.5;
+    }
+    return this._anchor;
+  }
+
   leaveCover(ai) {
     if (ai && ai.director && ai.director.releaseCover) ai.director.releaseCover(this);
     this.coverPoint = null;
@@ -1588,7 +1738,11 @@ export class Enemy {
         }
         const base = def.burstMin + Math.floor(Math.random() * (def.burstMax - def.burstMin + 1));
         this.burstLeft = Math.max(2, Math.round(base * this.burstMult));
-        this.fireTimer = def.burstPause + Math.random() * 0.3;
+        // the FIRST shot of an engagement is gated by the tier (D1 waits
+        // longest); later bursts keep the archetype's own cadence
+        const firstMul = this._firedEver ? 1 : (this.firstShotMult || 1);
+        this._firedEver = true;
+        this.fireTimer = (def.burstPause + Math.random() * 0.3) * firstMul;
       }
     } else if (this.burstLeft > 0) {
       this.burstLeft = 0;
@@ -1601,7 +1755,7 @@ export class Enemy {
     if (this.fireTimer <= 0) {
       // rushers join the global open-fire budget — six shotguns starting a
       // blast on the same frame was the biggest spike-damage source left
-      if (ctx.tryFire && !ctx.tryFire()) {
+      if (ctx.tryFire && !ctx.tryFire(this)) {
         this.fireTimer = 0.25 + Math.random() * 0.2;
         return;
       }
@@ -1623,7 +1777,7 @@ export class Enemy {
         this.warnActive = false;
         // snipers join the global open-fire budget too; under pressure the
         // laser stays up a beat longer instead of a warned shot vanishing
-        if (ctx.tryFire && !ctx.tryFire()) {
+        if (ctx.tryFire && !ctx.tryFire(this)) {
           this.warnT = 0.35;
           this.warnActive = true;
           return;
@@ -1904,6 +2058,7 @@ export class Enemy {
   /* --------------------------------------------------------------- combat */
   shoot(ctx, dist, playerPos) {
     const def = this.def;
+    const B = behaviorFor(this.diff);
     this.weaponFlashT = 0.05;
     this.weaponFlash.material.opacity = 1;
     this.weaponFlash.material.rotation = Math.random() * 6;
@@ -1918,6 +2073,10 @@ export class Enemy {
     this.weaponMuzzle.getWorldPosition(muzzle);
 
     const playerSpeed = ctx.playerSpeed || 0;
+    // vertical offset from the shared (feet) position up to the aim point —
+    // tracers used to end BELOW the floor, which read as "shooting at the
+    // player's shoes" and hid where the rounds were actually going.
+    const aimDY = aimPointY(ctx, playerPos) - (playerPos.y || 0);
     // Lateral velocity vector (X / Z) feeds the lead correction: a soldier
     // aiming at a sprinting player puts the muzzle where the target is
     // going, not where it is. The component along the firing line is what
@@ -1926,9 +2085,17 @@ export class Enemy {
     const tx0 = playerPos.x - sx, tz0 = playerPos.z - sz;
     const leadX = (ctx.playerDirX || 0) * playerSpeed;
     const leadZ = (ctx.playerDirZ || 0) * playerSpeed;
-    const proj = dist > 0.001
-      ? (leadX * tx0 / dist + leadZ * tz0 / dist) * 0.18
+    // Component of the player's velocity along the firing line, in m/s AWAY
+    // from this soldier. Running away from a shooter is harder to hit — and
+    // how much of that the soldier compensates for is the tier's `lead`
+    // (D1 = 0, D5 = 0.85). The old formula assumed a normalised 0..1 speed,
+    // so with the real m/s it would have made a sprinting player nearly
+    // unhittable.
+    const away = dist > 0.001
+      ? Math.max(0, (leadX * tx0 / dist + leadZ * tz0 / dist))
       : 0;
+    const leadComp = Math.max(0, Math.min(1, B.lead || 0));
+    const movePenalty = Math.min(0.20, Math.max(0, away - 2.0) * 0.045 * (1 - leadComp));
     // Accuracy is no longer a flat dice roll: a soldier that just rounded the
     // corner (or is eating suppressive fire) is measurably less accurate than
     // one that has been tracking you for a second.
@@ -1942,21 +2109,28 @@ export class Enemy {
       def.hitBase * this.accuracyMult * moraleMul * settleMul * suppressMul
         - dist * def.hitFalloff - playerSpeed * def.hitSpeedFalloff
         - Math.min(0.16, this.speed * 0.03)
-        - Math.max(0, proj - 0.04) * 0.55,
+        - movePenalty,
       0.05, 0.95
     );
     // Final authority on every shot: the actual path from muzzle to target.
     // fireReady trusts a 0.13-0.36 s old losCache, so a soldier that peeked
     // and re-covered would otherwise keep hitting through the wall. A blocked
     // path forces the shot to miss and truncates the tracer at the wall.
-    const path = this.pathBlocked(playerPos, dist);
+    const path = this.pathBlocked(playerPos, dist, ctx.playerEyeY);
     let hit = !path.blocked && Math.random() < hitChance;
+    // Smoke is symmetric: it already eats the player's rounds, so it must
+    // eat the AI's too. A cloud that only blinds the AI would be a free
+    // window for the squad to shoot into a player who cannot see them.
+    if (hit && ctx.smokeBlocks
+        && ctx.smokeBlocks(this.root.position.x, this.root.position.z, playerPos.x, playerPos.z)) {
+      hit = false;
+    }
     // late-dodge fairness recheck (Phase 2): when the player broke line of
     // sight within the last ~0.15 s (dived behind a crate mid-burst), a
     // rolled hit gets one fresh geometric re-check. Keeps the dice feel,
     // kills the classic "shot me through the corner I just rounded".
     if (hit && (ctx.playerFastT || 0) > 0 && dist > 8) {
-      hit = this.canSeeTarget(playerPos, dist);
+      hit = this.canSeeTarget(playerPos, dist, ctx.playerEyeY);
     }
     const truncateTo = path.blocked ? path.tEnd : 1;
     const pOwn = this.root.position;
@@ -1978,7 +2152,7 @@ export class Enemy {
                 ay + (playerPos.y - ay) * truncateTo,
                 az + (playerPos.z - az) * truncateTo);
       } else if (hit) {
-        end.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.3 + lrX, -0.12, (Math.random() - 0.5) * 0.3 + lrZ));
+        end.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.3 + lrX, aimDY, (Math.random() - 0.5) * 0.3 + lrZ));
       } else {
         end.copy(playerPos).add(_shotSpread.set(
           (Math.random() - 0.5) * (0.5 + dist * 0.06) + lrX,
@@ -1992,7 +2166,7 @@ export class Enemy {
       }
       ctx.fx.muzzleFlash(muzzle);
       if (hit) {
-        ctx.damagePlayer(dmg, this.root.position);
+        ctx.damagePlayer(dmg, this.root.position, undefined, this);
       }
       ctx.audio.enemyShot(pan, dist);
       this.weaponLevel = 1;
@@ -2006,21 +2180,23 @@ export class Enemy {
       // sniper lead is strongest: the rifleman-archetype tunings are very
       // precise and the in-game telemetry showed snipers missing perpendicular
       // movers because there was no lead at all.
-      const lsX = leadX * 0.32;
-      const lsZ = leadZ * 0.32;
+      // a higher tier visibly leads a moving target harder
+      const lsMul = 0.32 * (0.4 + leadComp);
+      const lsX = leadX * lsMul;
+      const lsZ = leadZ * lsMul;
       const end = _shotEnd;
       if (path.blocked) {
         end.set(ax + (playerPos.x - ax) * truncateTo,
                 ay + (playerPos.y - ay) * truncateTo,
                 az + (playerPos.z - az) * truncateTo);
       } else if (hit) {
-        end.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.12 + lsX, -0.1, (Math.random() - 0.5) * 0.12 + lsZ));
+        end.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.12 + lsX, aimDY, (Math.random() - 0.5) * 0.12 + lsZ));
       } else {
-        end.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.5 + lsX, -0.2, (Math.random() - 0.5) * 0.5 + lsZ));
+        end.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.5 + lsX, aimDY, (Math.random() - 0.5) * 0.5 + lsZ));
       }
       ctx.fx.tracer(muzzle, end, { color: 0xffe0b8, width: 0.036, life: 0.07 });
       ctx.fx.muzzleFlash(muzzle);
-      if (hit) ctx.damagePlayer(dmg, this.root.position);
+      if (hit) ctx.damagePlayer(dmg, this.root.position, undefined, this);
       ctx.audio.enemyShot(pan, dist);
       this.weaponLevel = 1;
       if (!hit && dist < 40 && Math.random() > 0.3) ctx.audio.whiz(pan);
@@ -2036,8 +2212,9 @@ export class Enemy {
     // ahead of the player's current position along the firing line).
     const dirXn = dist > 0.001 ? tx0 / dist : 0;
     const dirZn = dist > 0.001 ? tz0 / dist : 0;
-    const leadOffsetX = leadX * 0.16;
-    const leadOffsetZ = leadZ * 0.16;
+    const leadMul = 0.16 * (0.4 + leadComp);
+    const leadOffsetX = leadX * leadMul;
+    const leadOffsetZ = leadZ * leadMul;
     const spread = _shotSpread.set(
       (Math.random() - 0.5) * baseErr + (Math.random() - 0.5) * 0.18 + leadOffsetX,
       (Math.random() - 0.5) * baseErr * 0.7,
@@ -2050,7 +2227,7 @@ export class Enemy {
         ay + (playerPos.y - ay) * truncateTo,
         az + (playerPos.z - az) * truncateTo);
     } else if (hit) {
-      endpoint = _shotPellet.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.25, -0.15, (Math.random() - 0.5) * 0.25));
+      endpoint = _shotPellet.copy(playerPos).add(_shotSpread.set((Math.random() - 0.5) * 0.25, aimDY, (Math.random() - 0.5) * 0.25));
     } else {
       endpoint = target;
     }
@@ -2058,7 +2235,7 @@ export class Enemy {
     ctx.fx.muzzleFlash(muzzle);
     if (hit) {
       const dmg = (def.shotDamage[0] + Math.random() * (def.shotDamage[1] - def.shotDamage[0])) * this.damageMult;
-      ctx.damagePlayer(dmg, this.root.position);
+      ctx.damagePlayer(dmg, this.root.position, undefined, this);
     }
     ctx.audio.enemyShot(pan, dist);
     this.weaponLevel = 1;

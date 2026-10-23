@@ -27,9 +27,9 @@ const SPIN = 0.9, FLOAT_AMP = 0.05, FLOAT_HZ = 1.9;   // yaw rad/s, +/- 5 cm bob
  * grenades or a gear tier. `ring` is the floor halo, `hover` the float height. */
 const KINDS = {
   ammo: { color: 0xffab4d, amount: 90, radius: 1.6, hover: 0.34, ring: [0.15, 0.225] },
-  armor: { color: 0x6ea9d4, amount: 25, radius: 1.6, hover: 0.42, ring: [0.14, 0.21] },
+  armor: { color: 0x6ea9d4, amount: 40, radius: 1.6, hover: 0.42, ring: [0.14, 0.21] },
   grenade: { color: 0x8fbc84, amount: 1, radius: 1.6, hover: 0.30, ring: [0.11, 0.17] },
-  supply: { color: 0xd8d2c4, amount: { ammo: 60, armor: 20 }, radius: 2.2, hover: 0.42, ring: [0.22, 0.32] },
+  supply: { color: 0xd8d2c4, amount: { ammo: 60, armor: 35 }, radius: 2.2, hover: 0.42, ring: [0.22, 0.32] },
   // ---- battle-royale gear: wearable, level-exclusive (the caller decides
   // via its onCollect verdict whether this pickup may be taken at all) ----
   armor1: { color: 0x7fa8c9, amount: { level: 1 }, radius: 1.7, hover: 0.44, ring: [0.14, 0.21] },

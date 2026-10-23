@@ -19,21 +19,27 @@
  * ========================================================================= */
 
 import { behaviorFor } from './tuning.js';
-import { createCoverSystem } from './cover.js';
+import { createCoverSystem, coverKey } from './cover.js';
 import { pickFlankPoint, decideIntel, AI_PROFILES } from './profiles.js';
 
 const TICK = 0.3;
 
-function budgets(B, n, morale = 1) {
+export function budgets(B, n, morale = 1) {
   if (n <= 0) return { assault: 0, flank: 0, suppress: 0, hold: 0 };
+  // A squad with no base of fire is a mob: everyone either rushes you or
+  // drifts sideways, and nothing ever holds a lane. The old order
+  // (assault -> flank -> suppress -> whatever is left) left `hold` at 0 for
+  // every realistic wave size at D3+, so keep one soldier back whenever the
+  // squad can spare one.
+  const reserve = n >= 3 ? 1 : 0;
   // when morale is high (>=1) use tier defaults as-is. When it drops, swap
   // one flank slot for an extra hold — the squad falls back to base-of-fire
   // rather than committing to fresh angles while bleeding.
   const flankBudget = morale >= 0.95 ? B.flank : Math.max(0, B.flank - 1);
-  const suppressBudget = morale >= 0.95 ? B.suppress : B.suppress;
-  const assault = n <= 2 ? n : Math.min(n, Math.max(1, B.assault));
-  const flank = Math.min(n - assault, flankBudget);
-  const suppress = Math.min(n - assault - flank, suppressBudget);
+  const suppressBudget = B.suppress;
+  const assault = n <= 2 ? n : Math.min(n - reserve, Math.max(1, B.assault));
+  const flank = Math.min(n - assault - reserve, flankBudget);
+  const suppress = Math.min(n - assault - flank - reserve, suppressBudget);
   const hold = Math.max(0, n - assault - flank - suppress);
   return { assault, flank, suppress, hold };
 }
@@ -52,7 +58,7 @@ export class AIDirector {
     this.lastRoles = { assault: 0, flank: 0, suppress: 0, hold: 0, breach: 0, breachSupport: 0 };
   }
 
-  tick(dt, enemies, playerPos, tier) {
+  tick(dt, enemies, playerPos, tier, facing = null) {
     this.acc += dt;
     if (this.acc < TICK) return;
     const step = this.acc;
@@ -82,9 +88,21 @@ export class AIDirector {
     let casualties = 0;
     for (const e of live) if ((e.comradeLostT || 0) > 0) casualties++;
     this.squadCasualties = casualties;
-    // ratio 0..1; clamp at 6 casualties out of 6 to leave headroom
+    // Morale counts ACTUAL DEATHS. The old model counted witnesses
+    // (soldiers with comradeLostT set), so one death seen by two soldiers
+    // read as two casualties, and one death nobody witnessed read as none.
+    const seen = this._seenAlive || (this._seenAlive = new WeakSet());
+    let newDeaths = 0;
+    for (const e of enemies) {
+      if (e.alive) seen.add(e);
+      else if (seen.has(e)) { seen.delete(e); newDeaths++; }
+    }
+    this.squadDeaths = (this.squadDeaths || 0) + newDeaths;
     const liveN = Math.max(1, ground.length);
-    const moraleDrop = Math.min(1, casualties / Math.min(6, liveN));
+    if (!ground.length) { this.squadDeaths = 0; this.squadPeak = 0; }
+    this.squadPeak = Math.max(this.squadPeak || 0, liveN);
+    // ratio 0..1; clamp at 6 casualties out of 6 to leave headroom
+    const moraleDrop = Math.min(1, this.squadDeaths / Math.min(6, Math.max(1, this.squadPeak)));
     // reverse mapping: more dead friends → lower morale → less accuracy
     // multiplier the squad applies to itself, and a small bias toward
     // hold / suppress instead of pushing on flanks.
@@ -128,7 +146,14 @@ export class AIDirector {
     };
 
     while (counts.assault < want.assault) {
-      const e = take((x) => -distTo(x) - 30 * (x.suppression || 0));
+      const e = take((x) => {
+        let s = -distTo(x) - 30 * (x.suppression || 0);
+        // Two assault soldiers must not come down the same lane. Penalise a
+        // candidate that already sits inside the player's frontal cone, so
+        // the second one swings wide instead of forming a conga line.
+        if (facing) s += 2.4 * facingAlign(x, playerPos, facing);
+        return s;
+      });
       if (!e) break;
       e.aiRole = 'assault'; e.roleT = 4 + Math.random() * 4; counts.assault++;
     }
@@ -142,10 +167,18 @@ export class AIDirector {
       const takenSides = { 1: 0, '-1': 0 };
       for (const f of flankers) takenSides[String(f.aiSide)]++;
       const e = take((x) => {
+        // A flank needs a BELIEF: you cannot circle someone you have not
+        // found. The old fallback (the squad's area anchor — the region
+        // centroid of the player's LIVE position) handed every soldier a
+        // free regional radar, and put the arc point up to ~60 m from the
+        // player, so the "flank" landed in front of the player half the
+        // time. Only a soldier who SAW the player or HEARD something may
+        // take the job; the rest converge first and flank later.
+        if (!flankBelief(x)) return -Infinity;
         const base = (x.canSee ? -6 : 6) - Math.abs(distTo(x) - 24) * 0.2;
         // prefer soldiers whose current bearing already leans to the side
         // we need next; pick the side with fewer flankers so far
-        const candidateSide = signSide(x, playerPos);
+        const candidateSide = signSide(x, playerPos, facing);
         const sideCount = takenSides[String(candidateSide)] || 0;
         const otherCount = flankers.length - sideCount;
         // soft penalty for the side that's already busy
@@ -155,27 +188,61 @@ export class AIDirector {
       if (!e) break;
       // alternate sides; if the candidate's natural side is on the busy
       // side, send them the other way
-      const candidateSide = signSide(e, playerPos);
+      const candidateSide = signSide(e, playerPos, facing);
       const busy = (takenSides[String(candidateSide)] || 0) > takenSides[String(-candidateSide)];
       this.flankSide = busy ? -candidateSide : candidateSide;
       e.aiRole = 'flank';
       e.aiSide = this.flankSide;
       e.roleT = 5 + Math.random() * 4;
-      // real flank (Phase 2): a side/rear waypoint computed from what THIS
-      // soldier knows (last seen point, a stimulus, or the neighbourhood
-      // anchor) and validated against nav. The enemy walks the route with
-      // A* instead of strafing sideways into the player's gun.
-      const threat = e.lastSeen
-        || (this.hooks.perception ? this.stimulusFor(e) : null)
-        || this.areaAnchor(playerPos);
-      const fp = pickFlankPoint({
-        from: e.root.position, threat, side: e.aiSide, rng: Math.random,
+      // The anchor is THIS soldier's own belief:
+      //   lastSeen  — where he actually saw the player (exact, stale)
+      //   investigate — where he heard the fight (a noise, a bullet impact,
+      //                or the squad's radio report: the neighbourhood hint
+      //                that arrives on the intel clock with a 12-20 m error)
+      // Both are legitimate: they are what a real soldier would act on.
+      // The neighbourhood anchor of the player's LIVE position is NOT — it
+      // is a squad-level radar that lands the arc wherever the region
+      // centroid happens to be.
+      const threat = e.lastSeen || e.investigate;
+      const walkable = (x, z) => !this.nav || this.nav.isWalkableAt(x, z, 0);
+      const reachable = (fp) => !!fp && (!this.nav || (this.nav.isWalkableAt(fp.x, fp.z, 0)
+        && (!this.nav.findPath
+            || this.nav.findPath(e.root.position.x, e.root.position.z, 0, fp.x, fp.z, 0))));
+      // The arc is measured from the SQUAD's centroid, not from the
+      // flanker itself: measured from the flanker it degenerates into a
+      // perpendicular sidestep (the arc point sits next to the player
+      // instead of around him). Measured from the squad's mass, the flanker
+      // lands on the far side of the belief from everyone else — a pincer.
+      // This is squad-level knowledge (where my own squad is), not a
+      // wallhack (the belief is still the soldier's own).
+      // ...measured from the MAIN BODY only: including the flanker in the
+      // centroid puts the reference on top of him, and the arc degenerates
+      // back into a sidestep.
+      const mainBody = ground.filter((x) => x.aiRole !== 'flank' && x !== e);
+      const ref = squadCentroid(mainBody.length ? mainBody : ground);
+      let fp = pickFlankPoint({
+        from: e.root.position, threat, ref, side: e.aiSide, rng: Math.random, walkable,
+        // 130-180 deg off the main body's bearing: the squad presses from
+        // where the player is looking, the flanker arrives from behind it
+        minAngle: 130, maxAngle: 180,
       });
-      if (fp && this.nav && this.nav.isWalkableAt(fp.x, fp.z, 0)
-          && (!this.nav.findPath
-              || this.nav.findPath(e.root.position.x, e.root.position.z, 0, fp.x, fp.z, 0))) {
+      if (!reachable(fp)) {
+        // No usable arc on this side: try the mirrored side before giving up.
+        // A flanker with no plan degrades into a permanent lateral strafe,
+        // which reads as "random shuffling", not as a flanking arc.
+        const fp2 = pickFlankPoint({
+          from: e.root.position, threat, ref, side: -e.aiSide, rng: Math.random, walkable,
+          minAngle: 130, maxAngle: 180,
+        });
+        if (reachable(fp2)) { fp = fp2; e.aiSide = -e.aiSide; }
+      }
+      if (reachable(fp)) {
         e.flankPoint = { x: fp.x, z: fp.z };
         e.flankDone = false;
+        e.flankT = 0;            // route timer restarts with the new waypoint
+      } else {
+        e.flankPoint = null;
+        e.flankDone = true;
       }
       counts.flank++;
       if (this.hooks.barks) this.hooks.barks.say('flank', e.root.position);
@@ -210,7 +277,13 @@ export class AIDirector {
     //      patrol, or are driven by the versus faction brain.
     for (const e of ground) {
       if (e.team != null) continue;                       // brain owns versus intel
-      if (e.canSee || (e.awareness || 0) >= 0.6) { e.intelT = 0; continue; }
+      // A soldier who can SEE the player needs no report. A soldier who is
+      // merely ALERT but holds no belief does: `lastSeen` is cleared when a
+      // search times out, and an alert soldier used to be skipped here, so
+      // he stayed beliefless forever — no flank, no search target, one
+      // fewer body in the squad.
+      if (e.canSee) { e.intelT = 0; continue; }
+      if ((e.awareness || 0) >= 0.6 && flankBelief(e)) { e.intelT = 0; continue; }
       if (e.investigate && e.investigateT < 6) continue;  // already on a fresh job
       const prof = e.profile || AI_PROFILES.default;
       const intelEvery = B.intel * (0.55 + Math.random() * 0.5);
@@ -429,13 +502,20 @@ export class AIDirector {
         e.coverKey = null;
       }
     }
-    const pt = this.cover.find(e, playerPos, { maxFromEnemy: 14, reserved: this.coverReserve });
-    if (!pt) return null;
     // Versus: one reservation table, but keys are namespaced per faction so
     // the two teams do not fight over the same cover spots (the reserve map
     // itself stays shared — a spot freed by either side is reusable by both,
     // it just cannot be double-booked).
-    const key = `t${e.team == null ? 0 : e.team}:${pt.x.toFixed(1)},${pt.z.toFixed(1)}`;
+    //
+    // The key MUST be built by coverKey(): the writer and the reader used
+    // different formats, so the reservation never matched and two soldiers
+    // happily claimed the same crate.
+    const team = e.team == null ? 0 : e.team;
+    const pt = this.cover.find(e, playerPos, {
+      maxFromEnemy: 14, reserved: this.coverReserve, team,
+    });
+    if (!pt) return null;
+    const key = coverKey(pt.x, pt.z, team);
     this.coverReserve.set(key, e);
     this.coverPointByKey.set(key, pt);
     e.coverKey = key;
@@ -454,8 +534,57 @@ export class AIDirector {
   }
 }
 
-function signSide(e, playerPos) {
-  // which side of the player's current facing is this soldier on?
+/**
+ * May this soldier take a flank job?
+ *
+ * A flank is an arc AROUND a known position, so it needs a position to
+ * arc around. `lastSeen` is where the soldier saw the player;
+ * `investigate` is where he heard the fight (noise, bullet impact, or the
+ * squad's radio report). Without either, the soldier has no idea where the
+ * player is and must converge first — which is also the readable order of
+ * a real fight: find him, then swing wide.
+ */
+/** Centroid of a set of soldiers — the squad's mass, in the XZ plane. */
+function squadCentroid(list) {
+  if (!list || !list.length) return null;
+  let x = 0, z = 0, n = 0;
+  for (const e of list) {
+    const p = e.root && e.root.position;
+    if (!p) continue;
+    x += p.x; z += p.z; n++;
+  }
+  return n ? { x: x / n, z: z / n } : null;
+}
+
+export function flankBelief(e) {
+  if (!e) return null;
+  if (e.lastSeen) return e.lastSeen;
+  if (e.investigate && (e.investigateT == null || e.investigateT < 24)) return e.investigate;
+  return null;
+}
+
+function signSide(e, playerPos, facing = null) {
+  // Which side of the PLAYER is this soldier on? The old version used the
+  // world X axis, so "left flank" and "right flank" were fixed to the map,
+  // not to the player — turning to face a flank did not work because the
+  // flank was never relative to you. With a facing vector the side is the
+  // player's left/right.
   const p = e.root.position;
-  return Math.sign(p.x - playerPos.x) || 1;
+  const rx = p.x - playerPos.x, rz = p.z - playerPos.z;
+  if (facing) {
+    // cross product of (player forward) x (player -> soldier): positive =
+    // the soldier is on the player's left
+    const cross = facing.x * rz - facing.z * rx;
+    return cross >= 0 ? 1 : -1;
+  }
+  return Math.sign(rx) || 1;
+}
+
+/** 1 when the soldier is dead ahead of the player, 0 when off to the side. */
+function facingAlign(e, playerPos, facing) {
+  const p = e.root.position;
+  const rx = p.x - playerPos.x, rz = p.z - playerPos.z;
+  const l = Math.hypot(rx, rz) || 1;
+  const dot = (rx / l) * facing.x + (rz / l) * facing.z;
+  return Math.max(0, dot);
 }

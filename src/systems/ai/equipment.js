@@ -22,8 +22,18 @@
 import * as THREE from 'three';
 
 const GRAVITY = 16;
-const MAX_ACTIVE_LETHAL = 1;
-const MAX_ACTIVE_TACTICAL = 1;
+/**
+ * ONE utility in the air at a time, squad-wide.
+ *
+ * The old rule was "one lethal + one tactical", which meant a frag and a
+ * flash could be in the air together — and a breach was a third, fully
+ * independent channel. Stacked, that is white screen + grenade + door +
+ * two shooters: no reaction window at all. A single slot keeps every
+ * utility event a readable, answerable beat.
+ */
+const MAX_ACTIVE_UTILITY = 1;
+/** How long the player must hold still before the squad answers with a util. */
+const CAMP_SPEED = 1.15;   // m/s — "essentially not moving"
 
 // cooldown ranges in seconds; D1 (training) throws nothing
 const TIER_UTILITY = {
@@ -64,6 +74,8 @@ export function createEnemyEquipment(opts) {
   let campT = 0;
   let beepT = 0;
   let warnT = 0;
+  let throwLock = 0;
+  let attemptT = 0;
   let booted = false;
 
   function reset() {
@@ -77,6 +89,8 @@ export function createEnemyEquipment(opts) {
     campT = 0;
     beepT = 0;
     warnT = 0;
+    throwLock = 0;
+    attemptT = 0;
     if (hud && hud.setGrenadeWarning) hud.setGrenadeWarning(0, false);
   }
 
@@ -98,11 +112,11 @@ export function createEnemyEquipment(opts) {
 
   function activeCount(type) {
     let n = 0;
-    for (const p of projectiles) if (p.type === type) n++;
+    for (const p of projectiles) if (!type || p.type === type) n++;
     return n;
   }
-  function activeTactical() { return activeCount('flash') + activeCount('smoke'); }
-  function activeLethal() { return activeCount('frag'); }
+  /** Utilities of any kind currently in the air. */
+  function activeUtility() { return activeCount(null); }
 
   function findThrower(live, px, pz, type) {
     let best = null, bestScore = -Infinity;
@@ -136,9 +150,11 @@ export function createEnemyEquipment(opts) {
   }
 
   function chooseType(cfg, live, losCount, px, pz) {
-    if (cfg.frag && cds.frag <= 0 && activeLethal() < MAX_ACTIVE_LETHAL && campT > 2.8) return 'frag';
-    if (cfg.flash && cds.flash <= 0 && activeTactical() < MAX_ACTIVE_TACTICAL && campT > 4.2) return 'flash';
-    if (cfg.smoke && cds.smoke <= 0 && activeTactical() < MAX_ACTIVE_TACTICAL
+    // one utility at a time, squad-wide — see MAX_ACTIVE_UTILITY
+    if (activeUtility() >= MAX_ACTIVE_UTILITY) return null;
+    if (cfg.frag && cds.frag <= 0 && campT > 2.8) return 'frag';
+    if (cfg.flash && cds.flash <= 0 && campT > 4.2) return 'flash';
+    if (cfg.smoke && cds.smoke <= 0
         && campT > 3.6 && losCount >= 2 && live.length >= 2) return 'smoke';
     return null;
   }
@@ -209,6 +225,11 @@ export function createEnemyEquipment(opts) {
   }
 
   function tryThrow(dt, ctx) {
+    // one attempt every 0.4 s: the throw decision is a squad decision, not
+    // a per-frame one, and the old cadence made "denied" count frames
+    attemptT -= dt;
+    if (attemptT > 0) return;
+    attemptT = 0.4;
     const tier = ctx.tier;
     const cfg = tier && TIER_UTILITY[tier.id];
     if (!cfg) return;
@@ -225,8 +246,16 @@ export function createEnemyEquipment(opts) {
     const thrower = findThrower(live, pp.x, pp.z, type);
     if (!thrower) return;
     const target = targetFor(type, live, pp, thrower);
+    // Friendly check: only a soldier who would actually be caught in the
+    // blast blocks the throw. The old rule (ANY friendly within 5 m of the
+    // LANDING POINT) meant that any soldier standing next to the player
+    // blocked it — and since the squad's job is to be next to the player,
+    // the frag was denied on every single frame (measured: 139 denials in
+    // 16 s, 0 frags thrown). The blast does 25 damage at 3 m and 12 at 5 m,
+    // so the guard radius has to match the damage, not the squad size.
+    const blastGuard = type === 'frag' ? 3.0 : 2.2;
     if ((type === 'frag' || type === 'flash')
-        && friendlyNear(live, target.x, target.z, type === 'frag' ? 5.0 : 3.2)) {
+        && friendlyNear(live, target.x, target.z, blastGuard)) {
       stats.denied++;
       return;
     }
@@ -277,7 +306,12 @@ export function createEnemyEquipment(opts) {
       if (dist < 6) {
         const falloff = Math.pow(1 - dist / 6, 1.25);
         const dmg = 60 * falloff * coverMultiplier(pos);
-        if (dmg > 1) damagePlayer(dmg, pos);
+        if (dmg > 1) {
+          // the thrower is the source, so a grenade death is attributable
+          damagePlayer(dmg, pos, undefined, {
+            archetype: p.owner && p.owner.archetype, role: p.owner && p.owner.aiRole, utility: true,
+          });
+        }
       }
     } else if (p.type === 'flash') {
       audio.flashbang(pan, dist);
@@ -418,24 +452,32 @@ export function createEnemyEquipment(opts) {
     cds.flash = Math.max(0, cds.flash - dt);
     cds.smoke = Math.max(0, cds.smoke - dt);
 
+    // ctx.playerSpeed is metres per second (controller.state.speedMs) — the
+    // old 0..1 reading made this comparison always true, so the squad threw
+    // at a sprinting player exactly as often as at a camper.
     const speed = ctx.playerSpeed || 0;
-    if (speed < 1.15) campT += dt;
+    if (speed < CAMP_SPEED) campT += dt;
     else campT = Math.max(0, campT - dt * 2.4);
 
     updateProjectiles(dt);
     updateClouds(dt);
     updateWarning(dt, ctx.playerPos);
+    // a breach owns the fight for a moment: no utility on top of the door
+    if (throwLock > 0) { throwLock = Math.max(0, throwLock - dt); return; }
     tryThrow(dt, ctx);
   }
 
   return {
     update, reset,
+    /** Hold fire for `ms` — used when a breach takes the squad's attention. */
+    suppressThrows(ms = 3000) { throwLock = Math.max(throwLock, ms / 1000); },
     stats() {
       return {
         ...stats,
         active: projectiles.length,
         campT: +campT.toFixed(1),
         clouds: clouds.length,
+        locked: +throwLock.toFixed(2),
       };
     },
     get projectiles() { return projectiles; },
