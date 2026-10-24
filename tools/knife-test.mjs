@@ -12,6 +12,10 @@
  *   6. the swing has a cooldown (no spam)
  *   7. a backstab kill is silent: the squad is not alerted
  *
+ * IMPORTANT: the wave director keeps recycling enemy instances, so a target
+ * reference held across a frame can point at a soldier that has already been
+ * replaced. Every step re-acquires the live target instead of caching it.
+ *
  * Run: node tools/knife-test.mjs [page-url]
  */
 
@@ -81,91 +85,101 @@ const evaluate = async (expression) => {
   return r.result?.result?.value;
 };
 
+/* shared page-side helpers: always work on the CURRENT live soldier */
+const HELPERS = `
+  const g = window.__game;
+  const live = () => { const l = g.enemies.filter(e => e && e.alive && e.root); return l[0] || null; };
+  const snap = () => g.enemies.map(e => ({ hp: +e.hp.toFixed(1), alive: e.alive }));
+  const stand = (e, dz, facing) => {
+    const p = e.root.position;
+    g.player.revive(p.x, p.z + dz);
+    g.player.setLook(0, 0);
+    e.root.rotation.y = facing;
+  };
+  const ready = async () => {
+    // the game rejects a swing while fireCooldown > 0, so wait for <= 0
+    // exactly — a 0.02 slack lets a 0.003 cooldown swallow the swing
+    for (let i = 0; i < 400; i++) {
+      if (g.state.fireCooldown <= 0 && g.state.switchT <= 0) return true;
+      await new Promise(r => setTimeout(r, 40));
+    }
+    return false;
+  };
+`;
+
 const out = {};
 
-/* the shot "enemy" pose spawns one frozen soldier a few metres ahead */
 out.draw = await evaluate(`(() => {
-  const g = window.__game;
-  if (!g) return { error: 'no game' };
-  if (!g.enemies || !g.enemies.length) return { error: 'no enemies in the shot pose', count: g.enemies ? g.enemies.length : -1, state: g.state && g.state.state };
-  const e = g.enemies[0];
+  ${HELPERS}
+  const e = live();
+  if (!e) return { error: 'no live soldier in the shot pose' };
   const p = e.root.position;
-  // stand the player 1.6 m from the soldier, looking straight at him
   g.player.revive(p.x, p.z + 1.6);
   g.player.setLook(0, 0);
-  e.root.rotation.y = Math.PI;             // facing +z → the player is in FRONT of him
+  e.root.rotation.y = Math.PI;              // facing +z -> the player is in FRONT
   return { hp: e.hp, ex: p.x, ez: p.z };
 })()`);
 
 out.switch = await evaluate(`(async () => {
-  const g = window.__game;
+  ${HELPERS}
   g.switchWeapon(3);
-  // wait for the swap to apply AND the post-swap cooldown to expire
-  for (let i = 0; i < 200; i++) {
-    if (g.state.weaponIndex === 3 && g.state.fireCooldown <= 0.02 && g.state.switchT <= 0) break;
-    await new Promise((r) => setTimeout(r, 100));
-  }
+  await ready();
   return { index: g.state.weaponIndex, name: document.getElementById('weapon-name').textContent,
            mode: document.getElementById('fire-mode').textContent,
-           ammo: document.getElementById('ammo-mag').textContent,
-           slot: document.querySelectorAll('.wslot')[3] ? document.querySelectorAll('.wslot')[3].textContent : '' };
+           ammo: document.getElementById('ammo-mag').textContent };
 })()`);
 
-out.hit = await evaluate(`(() => {
-  const g = window.__game;
-  const e = g.enemies[0];
+out.hit = await evaluate(`(async () => {
+  ${HELPERS}
+  await ready();
+  // acquire the soldier, stand and swing in ONE synchronous block: the wave
+  // director recycles enemy instances, so an await in the middle could swap
+  // the target out from under the swing
+  const e = live();
+  if (!e) return { error: 'no soldier' };
+  stand(e, 1.6, Math.PI);                 // face to face: 58 damage
   const before = e.hp;
   g.melee();
-  return { before, after: e.hp, dmg: before - e.hp };
+  return { before, after: e.hp, dmg: before - e.hp, snap: snap() };
 })()`);
 
-out.cooldown = await evaluate(`(() => {
-  const g = window.__game;
-  const e = g.enemies[0];
+out.cooldown = await evaluate(`(async () => {
+  ${HELPERS}
+  const e = live();
+  if (!e) return { error: 'no soldier' };
   const before = e.hp;
-  g.melee();                      // straight after the first swing: must be blocked
-  return { after: e.hp, blocked: e.hp === before };
+  g.melee();                              // straight after: must be blocked
+  return { after: e.hp, blocked: e.hp === before, snap: snap() };
 })()`);
 
 out.far = await evaluate(`(async () => {
-  const g = window.__game;
-  const e = g.enemies[0];
-  const p = e.root.position;
-  g.player.revive(p.x, p.z + 4.0);   // out of the 2.4 m reach
-  g.player.setLook(0, 0);
-  for (let i = 0; i < 200 && g.state.fireCooldown > 0.02; i++) await new Promise((r) => setTimeout(r, 100));
+  ${HELPERS}
+  await ready();
+  const e = live();
+  if (!e) return { error: 'no soldier' };
+  stand(e, 4.0, Math.PI);                 // out of the 2.4 m reach
   const before = e.hp;
   g.melee();
-  return { before, after: e.hp, missed: e.hp === before };
+  return { before, after: e.hp, missed: e.hp === before, snap: snap() };
 })()`);
 
 out.backstab = await evaluate(`(async () => {
-  const g = window.__game;
-  const e = g.enemies[0];
-  const p = e.root.position;
-  g.player.revive(p.x, p.z + 1.6);
-  g.player.setLook(0, 0);
-  // the soldier faces away (-z); the player stands at +z → behind him
-  e.root.rotation.y = 0;
-  for (let i = 0; i < 200 && g.state.fireCooldown > 0.02; i++) await new Promise((r) => setTimeout(r, 100));
+  ${HELPERS}
+  await ready();
+  const e = live();
+  if (!e) return { error: 'no soldier' };
+  stand(e, 1.6, 0);                       // he faces -z, the player is behind him
   const before = e.hp;
-  const diag = (() => {
-    const pp = g.player.pos, ep = e.root.position;
-    const dx = ep.x - pp.x, dz = ep.z - pp.z;
-    return { dist: +Math.hypot(dx, dz).toFixed(2), py: +pp.y.toFixed(2), ey: +ep.y.toFixed(2),
-             ex: +ep.x.toFixed(2), ez: +ep.z.toFixed(2), px: +pp.x.toFixed(2), pz: +pp.z.toFixed(2),
-             rot: +e.root.rotation.y.toFixed(2), cd: +g.state.fireCooldown.toFixed(2) };
-  })();
   g.melee();
-  return { before, after: e.hp, dmg: before - e.hp, diag };
+  return { before, after: e.hp, dmg: before - e.hp, snap: snap() };
 })()`);
 
-out.wall = await evaluate(`(() => {
-  const g = window.__game;
-  const e = g.enemies[0];
-  const p = e.root.position;
-  // stand on the far side of a collider: the blade must not reach through
-  const c = g.level.colliders.find((k) => Math.abs(k.x0) < 60 && Math.abs(k.z0) < 60 && (k.x1 - k.x0) > 3);
+out.wall = await evaluate(`(async () => {
+  ${HELPERS}
+  await ready();
+  const e = live();
+  if (!e) return { error: 'no soldier' };
+  const c = g.level.colliders.find(k => Math.abs(k.x0) < 60 && Math.abs(k.z0) < 60 && (k.x1 - k.x0) > 3);
   if (!c) return { skipped: true };
   g.player.revive((c.x0 + c.x1) / 2, (c.z0 + c.z1) / 2);
   g.player.setLook(0, 0);
@@ -173,6 +187,19 @@ out.wall = await evaluate(`(() => {
   const dist = Math.hypot(e.root.position.x - (c.x0 + c.x1) / 2, e.root.position.z - (c.z0 + c.z1) / 2);
   g.melee();
   return { dist, before, after: e.hp };
+})()`);
+
+out.silent = await evaluate(`(async () => {
+  ${HELPERS}
+  await ready();
+  const e = live();
+  if (!e) return { error: 'no soldier' };
+  stand(e, 1.6, 0);
+  const before = e.hp;
+  g.melee();
+  // a backstab kill must not broadcast a casualty: the squad stays deaf
+  const noise = g.ai && g.ai.perception ? g.ai.perception.noises.length : -1;
+  return { before, after: e.hp, killed: e.hp <= 0, noise };
 })()`);
 
 console.log(JSON.stringify(out, null, 1));
