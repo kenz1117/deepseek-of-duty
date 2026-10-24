@@ -296,7 +296,9 @@ function asphaltSet(seed) {
   const fin = ctx.getImageData(0, 0, size, size).data;
   for (let i = 0; i < size * size; i++) {
     h[i] = fin[i * 4] * 0.55 + fin[i * 4 + 1] * 0.45;
-    rough[i] = Math.max(238, rough[i]);
+    // Preserve the oil / repair roughness painted above. The old 238 floor
+    // flattened every texel back to near-matte and erased the material story.
+    rough[i] = Math.max(118, Math.min(250, rough[i]));
   }
 
   return {
@@ -1366,7 +1368,7 @@ export function buildMaterials(maxAniso = 8) {
     // ---- surfaces
     concrete: mk(concrete, { roughness: 0.97, metalness: 0.0, envMapIntensity: 0.32 }),
     concreteDark: mk(concreteDark, { roughness: 0.98, metalness: 0.0, envMapIntensity: 0.28 }),
-    asphalt: mk(asphalt, { roughness: 1.0, metalness: 0.0, envMapIntensity: 0.05 }),
+    asphalt: mk(asphalt, { roughness: 1.0, metalness: 0.0, envMapIntensity: 0.30 }),
     brick: mk(brick, { roughness: 0.95, metalness: 0.0, envMapIntensity: 0.45 }),
     plasterA: mk(plasterA, { roughness: 0.92, metalness: 0.0, envMapIntensity: 0.5 }),
     plasterB: mk(plasterB, { roughness: 0.94, metalness: 0.0, envMapIntensity: 0.45 }),

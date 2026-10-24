@@ -82,13 +82,13 @@ const frag = /* glsl */`
       float cover = smoothstep(0.37, 0.64, base * 1.05 - 0.12 + detail * 0.28);
       cover *= smoothstep(0.008, 0.16, h) * uCloudCover;
       float lit = smoothstep(0.15, 0.9, (base * 0.7 + detail * 0.3) + sunDot * 0.35);
-      vec3 cloudShadow = mix(vec3(0.20, 0.20, 0.22), uHorizon * 0.8, 0.45);
-      vec3 cloudLit = mix(uSunColor * 0.82, vec3(0.86, 0.82, 0.78), 0.35);
+      vec3 cloudShadow = mix(vec3(0.16, 0.19, 0.24), uHorizon * 0.8, 0.35);
+      vec3 cloudLit = mix(uSunColor * 0.88, vec3(0.82, 0.84, 0.86), 0.45);
       vec3 cc = mix(cloudShadow, cloudLit, lit);
-      cc += uSunColor * pow(sunDot, 9.0) * 0.55 * cover;
+      cc += uSunColor * pow(sunDot, 9.0) * 0.45 * cover;
       // silver lining toward the sun
       cc += uSunColor * pow(sunDot, 3.0) * 0.07 * cover;
-      col = mix(col, cc, cover * 0.92);
+      col = mix(col, cc, cover * 0.88);
     }
 
     // ---- subtle vertical dust motes / aerial perspective in sky

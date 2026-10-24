@@ -981,11 +981,18 @@ export function createHUD() {
     if (el.lanModal) {
       el.lanModal.addEventListener('click', (e) => { if (e.target === el.lanModal) closeLanModal(); });
     }
-    const coop = $('lan-coop-open');
-    if (coop) coop.addEventListener('click', () => {
-      closeLanModal();
-      if (bigModeCallbacks.onLan) bigModeCallbacks.onLan();
-    });
+    // Both LAN cards must dismiss the NETWORK OPERATIONS popup. The versus
+    // card used to leave it on screen: the lobby opened on top of it and,
+    // once the host started the match, the popup was the only thing left —
+    // it had to be closed by hand before the HUD was usable.
+    for (const cardId of ['lan-coop-open', 'lan-versus-open']) {
+      const card = $(cardId);
+      if (!card) continue;
+      card.addEventListener('click', () => {
+        closeLanModal();
+        if (bigModeCallbacks.onLan) bigModeCallbacks.onLan();
+      });
+    }
 
     // LAN START: capture before main's bubble listener; main owns solo start.
     if (el.deploy) {

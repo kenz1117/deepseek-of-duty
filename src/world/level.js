@@ -2137,15 +2137,35 @@ export function createLevel(engine) {
       const a = (i / 8) * Math.PI * 2;
       B(S, 0.22, 0.5, 0.22, mats.plasterC, minX + Math.cos(a) * 1.7, 17.7, minZ + Math.sin(a) * 1.7, 0, { uv: 0.6, cast: false });
     }
-    // fountain
-    C(S, 2.6, 2.8, 0.7, 14, mats.concrete, -95, 0.35, 52.5);
-    C(S, 2.1, 2.1, 0.08, 14, mats.water, -95, 0.55, 52.5, { cast: false });
-    C(S, 0.4, 0.55, 1.5, 8, mats.plasterC, -95, 1.1, 52.5);
-    // the jet: a column of water and the ring of spray where it falls back
-    C(S, 0.07, 0.11, 1.05, 8, mats.water, -95, 2.05, 52.5, { cast: false });
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2 + 0.4;
-      C(S, 0.14, 0.14, 0.02, 6, mats.water, -95 + Math.cos(a) * 1.5, 0.6, 52.5 + Math.sin(a) * 1.5, { cast: false });
+    // Fountain: a continuous stone section with a real hollow bowl, rolled
+    // coping and a smaller upper basin. The silhouette stays readable even
+    // when the animated reflection is viewed against the bright sky.
+    C(S, 2.95, 3.05, 0.16, 32, mats.concreteDark, -95, 0.08, 52.5);
+    const basinProfile = [
+      [2.68, 0.12], [2.78, 0.20], [2.60, 0.58], [2.78, 0.70],
+      [2.80, 0.82], [2.58, 0.86], [2.43, 0.72], [2.30, 0.32], [0, 0.32],
+    ].map(([r, y]) => new THREE.Vector2(r, y));
+    const basin = new THREE.Mesh(new THREE.LatheGeometry(basinProfile, 40), mats.concrete);
+    basin.position.set(-95, 0, 52.5); basin.castShadow = true; basin.receiveShadow = true; S.add(basin);
+    C(S, 2.36, 2.36, 0.035, 40, mats.water, -95, 0.65, 52.5, { cast: false });
+    const pedestalProfile = [
+      [0, 0], [0.52, 0], [0.48, 0.16], [0.30, 0.30], [0.25, 0.86],
+      [0.52, 0.96], [0.64, 1.08], [0.61, 1.17], [0.46, 1.19], [0.30, 1.08], [0, 1.08],
+    ].map(([r, y]) => new THREE.Vector2(r, y));
+    const pedestal = new THREE.Mesh(new THREE.LatheGeometry(pedestalProfile, 28), mats.plasterC);
+    pedestal.position.set(-95, 0.58, 52.5); pedestal.castShadow = true; pedestal.receiveShadow = true; S.add(pedestal);
+    C(S, 0.43, 0.43, 0.025, 28, mats.water, -95, 1.69, 52.5, { cast: false });
+    C(S, 0.045, 0.07, 0.62, 8, mats.water, -95, 2.02, 52.5, { cast: false });
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + 0.22;
+      const dir = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+      const start = new THREE.Vector3(-95, 1.70, 52.5).addScaledVector(dir, 0.44);
+      const end = new THREE.Vector3(-95, 0.68, 52.5).addScaledVector(dir, 1.65);
+      const mid = start.clone().lerp(end, 0.5); mid.y += 0.32;
+      const jet = new THREE.Mesh(new THREE.TubeGeometry(new THREE.QuadraticBezierCurve3(start, mid, end), 10, 0.018, 4, false), mats.water);
+      jet.castShadow = false; S.add(jet);
+      const ripple = new THREE.Mesh(new THREE.TorusGeometry(0.20, 0.014, 4, 20), mats.water);
+      ripple.position.copy(end); ripple.rotation.x = Math.PI / 2; ripple.castShadow = false; S.add(ripple);
     }
     addCollider(-95, 52.5, 5.0, 5.0, 0.1);
     // arcade along the courtyard's east side
@@ -2154,15 +2174,34 @@ export function createLevel(engine) {
       B(S, 0.7, 4.2, 0.7, mats.plasterB, -88, 2.1, zz, 0, { uv: 1.2, collide: true });
       B(S, 0.5, 0.9, 3.4, mats.plasterC, -88, 4.4, zz + 1.7, 0, { uv: 1.2 });
     }
-    // palms
+    // Palms use bent, tapered fronds instead of intersecting rectangular cards.
     function soukPalm(g, x, z, s = 1) {
-      C(g, 0.14 * s, 0.2 * s, 4.6 * s, 6, mats.wood, x, 2.3 * s, z);
-      for (let i = 0; i < 7; i++) {
-        const a = (i / 7) * Math.PI * 2 + 0.3;
-        const fr = new THREE.Mesh(new THREE.PlaneGeometry(0.55 * s, 2.6 * s), mats.frond);
-        fr.position.set(x + Math.cos(a) * 0.7 * s, 4.5 * s, z + Math.sin(a) * 0.7 * s);
-        fr.rotation.set(-0.5, a, 0.25);
-        fr.castShadow = true; g.add(fr);
+      const h = 4.6 * s;
+      C(g, 0.13 * s, 0.22 * s, h, 9, mats.bark, x, h / 2, z);
+      for (let j = 1; j < 10; j++) {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry((0.22 - j * 0.009) * s, 0.025 * s, 4, 10), mats.bark);
+        ring.position.set(x, h * j / 10, z); ring.rotation.x = Math.PI / 2; ring.castShadow = false; g.add(ring);
+      }
+      for (let i = 0; i < 11; i++) {
+        const a = (i / 11) * Math.PI * 2 + 0.3;
+        const length = (2.35 + (i % 3) * 0.20) * s;
+        const geo = new THREE.PlaneGeometry(length, 0.72 * s, 8, 1);
+        geo.translate(length / 2, 0, 0);
+        const pos = geo.attributes.position;
+        for (let v = 0; v < pos.count; v++) {
+          const t = Math.max(0, Math.min(1, pos.getX(v) / length));
+          const taper = Math.pow(Math.max(0, Math.sin(Math.PI * t)), 0.65);
+          pos.setY(v, pos.getY(v) * taper + (0.22 * taper - 0.72 * t * t) * s);
+          pos.setZ(v, taper * 0.08 * s);
+        }
+        geo.computeVertexNormals();
+        const fr = new THREE.Mesh(geo, mats.frond);
+        fr.position.set(x, h - 0.10 * s, z); fr.rotation.y = -a;
+        fr.castShadow = false; g.add(fr);
+      }
+      for (let i = 0; i < 3; i++) {
+        const nut = new THREE.Mesh(new THREE.IcosahedronGeometry(0.14 * s, 0), mats.bark);
+        nut.position.set(x + Math.cos(i * 2.1) * 0.18 * s, h - 0.28 * s, z + Math.sin(i * 2.1) * 0.18 * s); g.add(nut);
       }
     }
     soukPalm(S, -101, 44, 1.05);
@@ -2262,19 +2301,27 @@ export function createLevel(engine) {
       B(R, 0.4, 1.4, 3.6, mats.concreteDark, -37, 0.7, tz, 0, { uv: 1.2, collide: true });
       B(R, 0.3, 1.0, 1.0, mats.rust, -36.6, 0.9, tz, 0, { uv: 0.6 });
     }
-    // elevated platform y=4.2
+    // elevated platform y=4.2: edge paint, column shoes and knee braces make
+    // the underside read as a supported structure rather than a floating slab.
     B(R, 60, 0.26, 8, mats.concrete, 0, 4.07, -148, 0, { uv: 3.0 });
     B(R, 60, 0.12, 8, mats.metal, 0, 3.92, -148, 0, { uv: 2.0, cast: false });
+    for (const z of [-151.72, -144.28]) B(R, 58.5, 0.018, 0.18, mats.metalTan, 0, 4.211, z, 0, { cast: false });
+    for (const z of [-151, -145]) B(R, 59, 0.24, 0.24, mats.rust, 0, 3.72, z, 0, { cast: false });
     for (let x = -28; x <= 28; x += 8) {
       for (const z of [-151, -145]) {
         B(R, 0.5, 4.0, 0.5, mats.concreteDark, x, 2.0, z, 0, { uv: 1.0, collide: true });
+        B(R, 0.76, 0.18, 0.76, mats.concrete, x, 0.09, z, 0, { cast: false });
+        B(R, 0.68, 0.20, 0.68, mats.rust, x, 3.74, z, 0, { cast: false });
+        for (const side of [-1, 1]) B(R, 0.12, 1.30, 0.16, mats.rust, x + side * 0.43, 3.35, z, 0, { rz: side * 0.74, cast: false });
       }
     }
     // canopy over the platform
     for (let x = -28; x <= 28; x += 8) for (const z of [-151, -145]) {
       B(R, 0.18, 3.2, 0.18, mats.metal, x, 5.8, z, 0, { uv: 0.8, cast: false });
+      B(R, 0.12, 1.1, 0.14, mats.rust, x + 0.34, 6.82, z, 0, { rz: -0.72, cast: false });
     }
     B(R, 58, 0.22, 8, mats.metal, 0, 7.5, -148, 0, { uv: 2.6, cast: false });
+    for (const z of [-151.7, -144.3]) B(R, 58, 0.18, 0.18, mats.rust, 0, 7.28, z, 0, { cast: false });
     for (let x = -27; x <= 27; x += 6) B(R, 0.1, 0.1, 7.6, mats.rust, x, 7.3, -148, 0, { uv: 0.6, cast: false });
     // platform furniture
     for (const x of [-22, -4, 14, 26]) {
@@ -2388,18 +2435,35 @@ export function createLevel(engine) {
     const PORT_PAL = [mats.metal, mats.metalTan, mats.rust, mats.shop, mats.polymerTan];
     function portBox(x, z, stack, rot = 0) {
       const ci = Math.abs(Math.round(x * 0.17 + z * 0.11));
+      const cs = Math.cos(rot), sn = Math.sin(rot);
       for (let i = 0; i < stack; i++) {
         const m = PORT_PAL[(ci + i) % PORT_PAL.length];
-        B(P, 12.0, 2.6, 2.6, m, x, 1.32 + i * 2.65, z, rot, { uv: 1.8, collide: true });
-        // corrugated long faces
-        for (let k = 0; k < 8; k++) {
-          const off = -5.2 + k * 1.48;
-          B(P, 0.08, 2.32, 0.06, mats.rust, x + (rot ? 1.32 : off), 1.32 + i * 2.65, z + (rot ? off : 1.32), 0, { uv: 0.4, cast: false });
-          B(P, 0.08, 2.32, 0.06, mats.rust, x + (rot ? -1.32 : off), 1.32 + i * 2.65, z + (rot ? off : -1.32), 0, { uv: 0.4, cast: false });
+        const cy = 1.32 + i * 2.65;
+        B(P, 12.0, 2.6, 2.6, m, x, cy, z, rot, { uv: 1.8, collide: true });
+        const part = (lx, ly, lz, w, h, d, mat) => B(P, w, h, d, mat,
+          x + lx * cs + lz * sn, cy + ly, z - lx * sn + lz * cs, rot, { uv: 0.5, cast: false });
+        // Corrugated panels sit inside a separate load-bearing frame.
+        for (let k = 0; k < 10; k++) {
+          const off = -5.35 + k * 1.19;
+          part(off, 0, 1.315, 0.075, 2.24, 0.07, mats.rust);
+          part(off, 0, -1.315, 0.075, 2.24, 0.07, mats.rust);
         }
-        // door end: four locking bars + corner castings
-        for (let k = 0; k < 4; k++) B(P, 0.06, 2.2, 0.05, mats.rust, x + (rot ? 0 : 5.98), 1.3 + i * 2.65, z + (rot ? 5.98 : -0.9 + k * 0.6), 0, { uv: 0.4, cast: false });
-        for (const dx of [-5.9, 5.9]) for (const dz of [-1.2, 1.2]) B(P, 0.16, 0.16, 0.16, mats.metalTan, x + dx, 0.16 + i * 2.65, z + dz, 0, { cast: false });
+        for (const side of [-1, 1]) {
+          part(0, -1.23, side * 1.28, 12.12, 0.13, 0.13, mats.rust);
+          part(0, 1.23, side * 1.28, 12.12, 0.13, 0.13, mats.rust);
+          for (const end of [-1, 1]) part(end * 5.94, 0, side * 1.23, 0.14, 2.48, 0.14, mats.rust);
+        }
+        // Door locking bars, hinges and eight corner castings.
+        for (let k = 0; k < 4; k++) {
+          part(6.035, 0, -0.90 + k * 0.60, 0.065, 2.18, 0.065, mats.metalTan);
+          for (const yy of [-0.78, 0.78]) part(6.07, yy, -0.90 + k * 0.60, 0.08, 0.10, 0.22, mats.rust);
+        }
+        for (const dx of [-5.91, 5.91]) for (const dz of [-1.21, 1.21]) for (const dy of [-1.22, 1.22]) {
+          part(dx, dy, dz, 0.20, 0.18, 0.20, mats.metalTan);
+        }
+        // Small faded owner plate: a scale cue, not another large color block.
+        part(-3.9, 0.62, -1.36, 1.35, 0.34, 0.025, mats.concrete);
+        part(-3.9, 0.62, -1.38, 0.92, 0.055, 0.015, mats.metal);
       }
     }
     const rows = [-70, -56, -42, -28, -14];
@@ -2416,16 +2480,27 @@ export function createLevel(engine) {
     for (const [x, z] of [[64, -84], [92, -84], [54, -20], [110, 2], [62, 18]]) {
       B(P, 6.1, 2.4, 2.4, mats.metal, x, 1.2, z, 0, { uv: 1.6, collide: true });
     }
-    // gantry crane
+    // Gantry crane: braced portal frames, safety-painted feet and a maintenance
+    // catwalk turn the silhouette into a piece of working port machinery.
     for (const x of [92, 108]) for (const z of [-60, -36]) {
       B(P, 1.1, 21, 1.1, mats.metal, x, 10.5, z, 0, { uv: 2.0, collide: true });
+      B(P, 1.16, 2.8, 1.16, mats.metalTan, x, 1.6, z, 0, { uv: 1.0, cast: false });
       B(P, 2.2, 0.4, 2.2, mats.concreteDark, x, 0.2, z, 0, { uv: 1.2, cast: false });
     }
-    B(P, 18, 1.1, 1.1, mats.metal, 100, 21, -60, 0, { uv: 1.6, cast: false });
-    B(P, 18, 1.1, 1.1, mats.metal, 100, 21, -36, 0, { uv: 1.6, cast: false });
+    for (const z of [-60, -36]) {
+      B(P, 18, 1.1, 1.1, mats.metal, 100, 21, z, 0, { uv: 1.6, cast: false });
+      for (const [xa, xb, ya, yb] of [[92, 108, 3.2, 11.4], [108, 92, 11.4, 19.4]]) {
+        const len = Math.hypot(xb - xa, yb - ya);
+        B(P, 0.26, len, 0.30, mats.rust, (xa + xb) / 2, (ya + yb) / 2, z, 0, { rz: -Math.atan2(xb - xa, yb - ya), cast: false });
+      }
+      B(P, 18, 0.10, 1.4, mats.metalTan, 100, 21.72, z, 0, { cast: false });
+      B(P, 18, 0.07, 0.07, mats.rust, 100, 22.65, z - 0.62, 0, { cast: false });
+      for (let x = 92; x <= 108; x += 2) B(P, 0.06, 0.9, 0.06, mats.rust, x, 22.18, z - 0.62, 0, { cast: false });
+    }
     B(P, 1.0, 1.0, 25, mats.rust, 100, 21.9, -48, 0, { uv: 2.0, cast: false });
     B(P, 2.4, 1.8, 3.2, mats.metalTan, 100, 20.3, -48, 0, { uv: 1.0 });
-    for (let i = 0; i < 5; i++) B(P, 0.08, 4.5, 0.08, mats.rust, 99.4 + i * 0.3, 18.5, -48, 0, { cast: false });
+    B(P, 2.0, 0.85, 0.06, mats.windowGlass, 100, 20.45, -46.37, 0, { cast: false });
+    for (const x of [99.55, 100.45]) B(P, 0.055, 5.2, 0.055, mats.metal, x, 17.65, -48, 0, { cast: false });
     B(P, 6.1, 2.6, 2.6, mats.metal, 100, 15.4, -48, 0, { uv: 1.4 });
     // warehouse 24 x 20, two south doors
     const px0 = 60, px1 = 84, pz0 = 8, pz1 = 28, ph = 9;
@@ -6115,8 +6190,8 @@ export function createLevel(engine) {
   }
 
   function distantCity() {
-    const m1 = new THREE.MeshStandardMaterial({ color: 0x585449, roughness: 1, metalness: 0 });
-    const m2 = new THREE.MeshStandardMaterial({ color: 0x423f38, roughness: 1, metalness: 0 });
+    const m1 = new THREE.MeshStandardMaterial({ color: 0x596068, roughness: 0.96, metalness: 0 });
+    const m2 = new THREE.MeshStandardMaterial({ color: 0x414950, roughness: 0.98, metalness: 0 });
     const blocks = [];
     for (let i = 0; i < 34; i++) {
       let x = 0, z = 0, tries = 0;
@@ -6134,7 +6209,22 @@ export function createLevel(engine) {
       const b = new THREE.Mesh(geo, rnd() > 0.5 ? m1 : m2);
       b.position.set(x, h / 2, z);
       blocks.push(b);
-      // rooftop silhouette: setback / antenna
+      // Cornices and rooftop equipment break the procedural box silhouette.
+      // Deterministic placement avoids consuming the gameplay decoration RNG.
+      const roofY = h + 0.28;
+      for (const side of [-1, 1]) {
+        const long = new THREE.Mesh(new THREE.BoxGeometry(w + 0.3, 0.56, 0.26), b.material);
+        long.position.set(x, roofY, z + side * d / 2); blocks.push(long);
+        const short = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.56, d), b.material);
+        short.position.set(x + side * w / 2, roofY, z); blocks.push(short);
+      }
+      const plant = new THREE.Mesh(new THREE.BoxGeometry(w * 0.22, 1.1 + (i % 3) * 0.35, d * 0.20), b.material);
+      plant.position.set(x + w * 0.18, h + 0.65, z - d * 0.16); blocks.push(plant);
+      if (i % 3 === 0) {
+        const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.10, 4.5, 5), b.material);
+        mast.position.set(x - w * 0.2, h + 2.25, z + d * 0.15); blocks.push(mast);
+      }
+      // rooftop setback
       if (rnd() < 0.5) {
         const g2 = new THREE.BoxGeometry(w * 0.45, 3 + rnd() * 6, d * 0.45);
         const b2 = new THREE.Mesh(g2, b.material);

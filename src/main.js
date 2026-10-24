@@ -7028,6 +7028,7 @@ function startLanHostGame(opts = {}) {
   net.selfId = lanSession.id;
   net.started = true;
   if (lanLobby) lanLobby.close();
+  if (hud && hud.closeLanModal) hud.closeLanModal();
   campaignActive = false;
   G.settings.runMode = 'survival';
   G.operation = null;
@@ -7139,6 +7140,7 @@ function startLanClientGame(siteId = 'street', startMsg = null) {
   net.selfId = lanSession ? lanSession.id : net.selfId;
   net.started = true;
   if (lanLobby) lanLobby.close();
+  if (hud && hud.closeLanModal) hud.closeLanModal();
   campaignActive = false;
   G.settings.runMode = 'survival';
   G.operation = null;

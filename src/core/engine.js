@@ -56,10 +56,10 @@ export const ATMOSPHERES = {
   dusk: {
     label: 'DUSK',
     sunDir: [0.12, 0.185, -0.975],
-    sunColor: 0xffc79a, sunIntensity: 2.75, fill: 0.85, hemi: 0.95, env: 1.35,
-    fog: [0x77685a, 0.0082], exposure: 1.08, bloom: 0.40,
-    sky: { horizon: [0.56, 0.395, 0.225], zenith: [0.038, 0.072, 0.14], sunColor: [1.0, 0.78, 0.55], sunIntensity: 1.0, cloud: 1.0 },
-    grade: { contrast: 1.10, saturation: 0.90, lift: [0.017, 0.021, 0.030], gain: [1.06, 1.0, 0.935], vignette: 0.45, grain: 0.028 },
+    sunColor: 0xffd0a6, sunIntensity: 2.60, fill: 1.18, hemi: 1.15, env: 1.45,
+    fog: [0x66717a, 0.0064], exposure: 1.10, bloom: 0.34,
+    sky: { horizon: [0.48, 0.40, 0.30], zenith: [0.055, 0.10, 0.18], sunColor: [1.0, 0.82, 0.64], sunIntensity: 1.0, cloud: 0.92 },
+    grade: { contrast: 1.06, saturation: 0.96, lift: [0.018, 0.024, 0.034], gain: [1.03, 1.01, 0.99], vignette: 0.32, grain: 0.018 },
   },
   noon: {
     label: 'NOON',
