@@ -218,14 +218,20 @@ export function makeInput(input) {
     pitch: toFiniteNumber(source.pitch, 0),
     hp: toFiniteNumber(source.hp, 100),
     alive: source.alive !== false,
+    speed: Math.max(0, toFiniteNumber(source.speed, 0)),
+    crouch: Math.min(1, Math.max(0, toFiniteNumber(source.crouch, 0))),
+    ads: Math.min(1, Math.max(0, toFiniteNumber(source.ads, 0))),
+    weapon: typeof source.weapon === 'string' ? source.weapon.slice(0, 32) : 'unknown',
+    moveEpoch: Math.max(0, toInteger(source.moveEpoch, 0)),
   };
 }
 
 export function makeFire(fire) {
   const source = isPlainObject(fire) ? fire : {};
-  // dmg = the shooter's own damage-upgrade multiplier (LAN trust: upgrades
-  // are per-player, the host cannot see them). Clamped to sane bounds.
+  // Upgrade multipliers remain client-reported in the LAN trust model, but
+  // bounded values let the host enforce a plausible firing cadence.
   const dmg = toFiniteNumber(source.dmg, 1);
+  const fireRate = toFiniteNumber(source.fireRate, 1);
   return {
     t: 'fire',
     seq: toInteger(source.seq, 0),
@@ -237,6 +243,7 @@ export function makeFire(fire) {
     dz: toFiniteNumber(source.dz, 0),
     weapon: typeof source.weapon === 'string' ? source.weapon.slice(0, 32) : 'unknown',
     dmg: Math.min(3, Math.max(0.5, dmg)),
+    fireRate: Math.min(3, Math.max(1, fireRate)),
   };
 }
 

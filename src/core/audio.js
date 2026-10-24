@@ -214,6 +214,14 @@ export function createAudio() {
     if (surface === 'metal') noise({ dur: 0.04, type: 'bandpass', f0: 2800, f1: 1800, Q: 3, gain: 0.04 * intensity, send: 0.15 });
   }
 
+  /** the Ka-Bar: a short airy whoosh, no gunshot, no boom */
+  function knifeSwing(power = 1) {
+    if (!ctx) return;
+    noise({ dur: 0.19, type: 'bandpass', f0: 2600 * power, f1: 700, Q: 1.1, gain: 0.10 * power, pan: rand(-0.15, 0.15), send: 0.16 });
+    noise({ dur: 0.07, type: 'highpass', f0: 5200, f1: 2400, gain: 0.035 * power, pan: rand(-0.1, 0.1), send: 0.08, delay: 0.05 });
+    tone({ type: 'sine', f0: 420, f1: 180, dur: 0.09, gain: 0.03 * power, send: 0.06, delay: 0.03 });
+  }
+
   function hitmarker(headshot = false) {
     if (!ctx) return;
     tone({ type: 'square', f0: headshot ? 1900 : 1300, f1: headshot ? 1500 : 1000, dur: 0.035, gain: 0.055, send: 0.02 });
@@ -471,7 +479,7 @@ export function createAudio() {
 
   return {
     init, resume, gunshot, enemyShot, whiz, reload, shell, impact, ricochet,
-    explosion, footstep, hitmarker, ui, uiConfirm, death, hurt, killConfirm,
+    explosion, footstep, hitmarker, knifeSwing, ui, uiConfirm, death, hurt, killConfirm,
     ambient, stopAmbient, setLowHealth, setMasterVolume,
     enemyBark, ringing, grenadeBeep, doorBreach, flashbang, smokePop,
     loadBuffer, playBuffer,

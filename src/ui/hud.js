@@ -52,6 +52,7 @@ export function createHUD() {
     weaponName: $('weapon-name'), weaponTag: $('weapon-tag'), ammoMag: $('ammo-mag'), ammoReserve: $('ammo-reserve'),
     weaponSlots: $('weapon-slots'),
     fireMode: $('fire-mode'), grenades: $('grenade-count'), magPips: $('mag-pips'),
+    ammoTail: $('ammo-tail'),
     reload: $('reload-prompt'), hint: $('hint'),
     compass: $('compass'),
     // extras (optional, guarded)
@@ -101,6 +102,7 @@ export function createHUD() {
   };
 
   let magPips = [];
+  let meleeShown = '';
   let areaKey = '';
   let areaHold = 0;
   let chDpr = 0;
@@ -124,7 +126,8 @@ export function createHUD() {
 
   const DEFAULT_SETTINGS = {
     sensitivity: 1, adsSens: 0.75, fov: 90, invertY: false,
-    master: 0.8, reduceMotion: false, quality: 'high', fpsCap: 60,
+    master: 0.8, reduceMotion: false, lensEffects: true, highContrast: false,
+    quality: 'high', fpsCap: 60,
   };
   let settings = { ...DEFAULT_SETTINGS };
   let settingsOnChange = null;
@@ -256,6 +259,24 @@ export function createHUD() {
   }
 
   function setAmmo(mag, reserve, name, mode = 'AUTO') {
+    // the Ka-Bar has no magazine: show an infinity sign instead of a count
+    if (mode === 'MELEE') {
+      state.mag = 0;
+      state.reserve = 0;
+      if (meleeShown !== name) {
+        meleeShown = name;
+        el.ammoMag.textContent = '\u221e';
+        el.ammoMag.classList.remove('low');
+        el.ammoReserve.textContent = '';
+        if (el.ammoTail) el.ammoTail.classList.add('is-melee');
+        if (magPips.length) { el.magPips.innerHTML = ''; magPips = []; }
+        if (name && el.weaponName.textContent !== name) el.weaponName.textContent = name;
+        if (el.fireMode.textContent !== mode) el.fireMode.textContent = mode;
+      }
+      return;
+    }
+    meleeShown = '';
+    if (el.ammoTail) el.ammoTail.classList.remove('is-melee');
     state.mag = Math.max(0, mag | 0);
     state.reserve = Math.max(0, reserve | 0);
     if (magPips.length !== state.magSize) buildMagPips(state.magSize);
@@ -283,7 +304,7 @@ export function createHUD() {
       const n = row.querySelector('.wslot-n');
       const a = row.querySelector('.wslot-a');
       if (n) n.textContent = d.name;
-      if (a) a.textContent = d.locked ? 'LOCKED' : `${d.mag}/${d.reserve}`;
+      if (a) a.textContent = d.locked ? 'LOCKED' : (d.melee ? 'MELEE' : `${d.mag}/${d.reserve}`);
       row.classList.toggle('is-active', !!d.active);
       row.classList.toggle('is-empty', !d.locked && d.mag === 0);
       row.classList.toggle('is-locked', !!d.locked);
@@ -1049,11 +1070,14 @@ export function createHUD() {
     setRangeValue('set-master', 'out-master', settings.master, fmtPct);
     setSwitch('set-invertY', !!settings.invertY);
     setSwitch('set-reduceMotion', !!settings.reduceMotion);
+    setSwitch('set-lensEffects', settings.lensEffects !== false);
+    setSwitch('set-highContrast', !!settings.highContrast);
     setSwitch('set-wayfinder', settings.wayfinder !== false);
     setSwitch('set-voice', settings.voice !== false);
     setQualityState(settings.quality);
     setFpsState(settings.fpsCap != null ? settings.fpsCap : 60);
     document.documentElement.classList.toggle('reduce-motion', !!settings.reduceMotion);
+    document.documentElement.classList.toggle('high-contrast', !!settings.highContrast);
   }
   // main.js contract: onChange(key, value)
   function emitSetting(key, value) {
@@ -1090,11 +1114,14 @@ export function createHUD() {
         settings[key] = v;
         setSwitch(id, v);
         if (key === 'reduceMotion') document.documentElement.classList.toggle('reduce-motion', v);
+        if (key === 'highContrast') document.documentElement.classList.toggle('high-contrast', v);
         emitSetting(key, v);
       });
     };
     bindSwitch('set-invertY', 'invertY');
     bindSwitch('set-reduceMotion', 'reduceMotion');
+    bindSwitch('set-lensEffects', 'lensEffects');
+    bindSwitch('set-highContrast', 'highContrast');
     bindSwitch('set-wayfinder', 'wayfinder');
     bindSwitch('set-voice', 'voice');
 
@@ -1185,6 +1212,8 @@ export function createHUD() {
         invertY: !!next.invertY,
         master: clampNum(next.master, 0, 1, DEFAULT_SETTINGS.master),
         reduceMotion: !!next.reduceMotion,
+        lensEffects: next.lensEffects !== false,
+        highContrast: !!next.highContrast,
         wayfinder: next.wayfinder !== false,
         quality: String(next.quality || DEFAULT_SETTINGS.quality),
         fpsCap: [0, 30, 60, 120].includes(Number(next.fpsCap)) ? Number(next.fpsCap) : DEFAULT_SETTINGS.fpsCap,

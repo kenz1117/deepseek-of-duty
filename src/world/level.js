@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { projectBoxUV, mergeStatic } from '../core/geo.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mulberry32 } from '../core/materials.js';
 import { buildBoundsTreeFor } from '../core/bvh.js';
@@ -1372,15 +1373,25 @@ export function createLevel(engine) {
      =================================================================== */
   function buildFoothills() {
     const frnd = mulberry32(90210);
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+    const e = new THREE.Euler();
     // unlit vertex-coloured grass/dirt floor (readable from every direction)
     const gg = new THREE.PlaneGeometry(117, 240, 24, 40);
     gg.rotateX(-Math.PI / 2);
     const gp = gg.attributes.position, gcols = [];
     const cG1 = new THREE.Color(0x5a6a44), cG2 = new THREE.Color(0x495838), cDirt = new THREE.Color(0x7a684a);
+    const cDry = new THREE.Color(0x7d7448), cScrub = new THREE.Color(0x4a4a2e);
     for (let i = 0; i < gp.count; i++) {
       const lx = gp.getX(i), lz = gp.getZ(i);
       const isPath = Math.abs(lz) < 3.2 || Math.abs(lx + 1.5) < 3.6;
-      const c = (isPath ? cDirt : cG1.clone().lerp(cG2, 0.5 + 0.5 * Math.sin(lx * 0.21 + lz * 0.17))).clone();
+      let c = (isPath ? cDirt : cG1.clone().lerp(cG2, 0.5 + 0.5 * Math.sin(lx * 0.21 + lz * 0.17))).clone();
+      if (!isPath) {
+        // dry patches + scrub: a flat green field reads as a putting green
+        const dry = 0.5 + 0.5 * Math.sin(lx * 0.08 + lz * 0.05) * Math.sin(lx * 0.031 - lz * 0.043);
+        c.lerp(cDry, Math.max(0, dry - 0.35) * 1.1);
+        const scrub = 0.5 + 0.5 * Math.sin(lx * 0.043 + 2.1) * Math.cos(lz * 0.037 - 0.7);
+        c.lerp(cScrub, Math.max(0, scrub - 0.62) * 0.9);
+      }
       const n = 0.94 + frnd() * 0.12; c.multiplyScalar(n);
       gcols.push(c.r, c.g, c.b);
     }
@@ -1502,43 +1513,131 @@ export function createLevel(engine) {
     fence(-118, 56, -118, 118);
     fence(-196, 118, -196, 108);
 
-    // instanced trees (24) + grass/flowers, no shadow cost
-    const trees = [
+    /* ---- the hillside forest -------------------------------------------
+       The old hills were 24 bare cones plus 380 flat green rectangles. That
+       read as a parking lot with props. The fringe now gets real trees
+       (pine / cypress / olive), alpha-cut grass tufts, scrub, wildflowers,
+       dry-stone terraces and boulder fields. Trees are merged statics, so
+       the whole forest costs a handful of draw calls. */
+    const TREE_SPOTS = [
       [-225, -100, 1.1], [-220, -70, 1.0], [-228, 80, 1.2], [-215, 60, 0.9], [-205, -30, 1.1],
       [-195, -100, 1.2], [-190, 80, 1.0], [-180, 100, 1.1], [-175, 70, 0.9], [-165, 30, 1.0],
       [-160, 100, 1.2], [-155, 60, 1.0], [-145, -30, 1.1], [-140, -60, 0.9], [-135, 40, 1.1],
       [-130, 90, 1.0], [-230, 40, 1.2], [-225, 110, 1.0], [-220, -110, 1.1], [-210, -90, 0.9],
       [-200, 100, 1.1], [-185, -40, 1.0], [-170, 10, 0.9], [-160, -100, 1.1],
     ];
-    const foliage = new THREE.InstancedMesh(new THREE.ConeGeometry(1.7, 5.2, 6), new THREE.MeshBasicMaterial({ color: 0x30412a }), trees.length);
-    const trunks = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.28, 2.2, 5), new THREE.MeshBasicMaterial({ color: 0x34291f }), trees.length);
-    foliage.castShadow = false; foliage.receiveShadow = false; trunks.castShadow = false; trunks.receiveShadow = false;
-    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
-    trees.forEach(([x, z, s], i) => {
-      m4.compose(new THREE.Vector3(x, 4.4 * s, z), q, sc.set(s, s, s)); foliage.setMatrixAt(i, m4);
-      m4.compose(new THREE.Vector3(x, 1.1 * s, z), q, sc.set(s, s, s)); trunks.setMatrixAt(i, m4);
+    const SPECIES = ['pine', 'pine', 'olive', 'cypress', 'pine', 'olive'];
+    TREE_SPOTS.forEach(([x, z, s], i) => {
+      const kind = SPECIES[(i * 5 + (i % 3)) % SPECIES.length];
+      if (kind === 'pine') kit.pine(statics, x, z, { h: 6.5 + s * 3.4, spread: 1.7 + s * 0.7, tiers: 5, deep: i % 4 === 0 });
+      else if (kind === 'cypress') kit.cypress(statics, x, z, { h: 6.0 + s * 3.0, r: 0.8 + s * 0.25 });
+      else kit.olive(statics, x, z, { h: 3.6 + s * 1.6 });
       addCollider(x, z, 0.8 * s, 0.8 * s, 0.04);
       if (i % 3 === 0) coverPoints.push({ x: x + 1.0, z: z + 0.7, h: false });
     });
-    root.add(foliage, trunks);
-    const grassGeo = new THREE.PlaneGeometry(0.13, 0.46);
-    const grass = new THREE.InstancedMesh(grassGeo, new THREE.MeshBasicMaterial({ color: 0x5b6a3d, side: THREE.DoubleSide }), 380);
+
+    // a pine grove around the watchtower, and a cypress line along the path
+    for (const [x, z, h] of [
+      [-218, 22, 8.5], [-214, 30, 7.8], [-205, 26, 9.2], [-198, 18, 7.4], [-224, 12, 8.0],
+      [-190, -6, 8.6], [-182, -14, 7.2], [-196, 34, 9.0], [-170, 44, 7.6], [-160, 52, 8.2],
+    ]) {
+      kit.pine(statics, x + jitter(2.4), z + jitter(2.4), { h: h + jitter(1.4), spread: 2.0 + rnd() * 0.7, tiers: 6 });
+    }
+    for (let i = 0; i < 9; i++) {
+      kit.cypress(statics, -180 + i * 7.4 + jitter(1.2), -2.2 + jitter(1.4), { h: 6.4 + rnd() * 2.2, r: 0.85 });
+    }
+    for (const [x, z] of [[-172, -26], [-196, 52], [-150, 24], [-212, -46], [-138, 62], [-224, 66]]) {
+      kit.olive(statics, x, z, { h: 3.8 + rnd() * 1.6 });
+    }
+
+    // ground cover: alpha-cut grass tufts, scrub, thistles, wildflowers
+    const tuftA = new THREE.PlaneGeometry(0.36, 0.54);
+    tuftA.translate(0, 0.27, 0);
+    const tuftB = tuftA.clone();
+    tuftB.rotateY(Math.PI / 2);
+    const grassGeo = mergeGeometries([tuftA, tuftB], false);
+    const GRASS_N = 900;
+    const grass = new THREE.InstancedMesh(grassGeo, mats.grassTuft, GRASS_N);
     grass.castShadow = false; grass.receiveShadow = false;
-    const e = new THREE.Euler();
-    for (let i = 0; i < 380; i++) {
-      const x = -232 + frnd() * 112, z = -116 + frnd() * 232;
+    const gc = new THREE.Color();
+    for (let i = 0; i < GRASS_N; i++) {
+      const x = -232 + frnd() * 112;
+      const z = -116 + frnd() * 232;
+      // keep the dirt path readable: no tufts on the track itself
+      if (Math.abs(z) < 2.6 || Math.abs(x + 178) < 3.0) { grass.setMatrixAt(i, new THREE.Matrix4().makeScale(0, 0, 0)); continue; }
       q.setFromEuler(e.set(0, frnd() * 6.28, 0));
-      m4.compose(new THREE.Vector3(x, 0.23, z), q, sc.set(1, 1, 1)); grass.setMatrixAt(i, m4);
+      m4.compose(new THREE.Vector3(x, 0, z), q, sc.set(0.8 + frnd() * 0.9, 0.7 + frnd() * 1.1, 1));
+      grass.setMatrixAt(i, m4);
+      const t = frnd();
+      gc.setHex(t < 0.45 ? 0xd8d0b0 : t < 0.8 ? 0xc6cc9a : 0xe4dcbc);
+      grass.setColorAt(i, gc);
     }
+    grass.instanceColor.needsUpdate = true;
     root.add(grass);
-    const flowers = new THREE.InstancedMesh(new THREE.CircleGeometry(0.06, 5), new THREE.MeshBasicMaterial({ color: 0xc9a15e }), 110);
+
+    // wildflowers: three colours, clustered instead of evenly sprinkled
+    const flowerGeo = new THREE.CircleGeometry(0.07, 5);
+    const FLOWERS = 300;
+    const flowers = new THREE.InstancedMesh(flowerGeo, mats.blossomB, FLOWERS);
     flowers.castShadow = false; flowers.receiveShadow = false;
-    for (let i = 0; i < 110; i++) {
-      const x = -232 + frnd() * 112, z = -116 + frnd() * 232;
-      q.setFromEuler(e.set(-Math.PI / 2, 0, 0));
-      m4.compose(new THREE.Vector3(x, 0.18, z), q, sc.set(1, 1, 1)); flowers.setMatrixAt(i, m4);
+    for (let i = 0; i < FLOWERS; i++) {
+      const cluster = Math.floor(i / 9);
+      const cx = -230 + frnd() * 108;
+      const cz = -114 + frnd() * 228;
+      const x = cx + jitter(1.7);
+      const z = cz + jitter(1.7);
+      q.setFromEuler(e.set(-Math.PI / 2, 0, frnd() * 6.28));
+      m4.compose(new THREE.Vector3(x, 0.16 + frnd() * 0.1, z), q, sc.set(1, 1, 1));
+      flowers.setMatrixAt(i, m4);
+      const t = frnd();
+      gc.setHex(t < 0.4 ? 0xffe9a8 : t < 0.75 ? 0xffc0cc : 0xd8c4ff);
+      flowers.setColorAt(i, gc);
     }
+    flowers.instanceColor.needsUpdate = true;
     root.add(flowers);
+
+    // scrub + thistles: low bushes breaking up the open grass
+    for (let i = 0; i < 130; i++) {
+      const x = -231 + frnd() * 110;
+      const z = -115 + frnd() * 230;
+      if (Math.abs(z) < 2.2) continue;
+      kit.bush(statics, x, z, 0.7 + frnd() * 0.9);
+    }
+    for (let i = 0; i < 90; i++) {
+      const x = -231 + frnd() * 110;
+      const z = -115 + frnd() * 230;
+      if (Math.abs(z) < 2.4) continue;
+      kit.flowerBed(statics, x, z, 0.6 + frnd() * 0.6);
+    }
+
+    // dry-stone terraces: the olive terraces on the slope + field walls
+    for (const [x0, z0, x1, z1, h] of [
+      [-206, 34, -176, 30, 0.85], [-200, 26, -168, 24, 0.7],
+      [-232, 8, -204, 4, 1.0], [-214, -22, -186, -26, 0.8],
+      [-166, 58, -140, 54, 0.9], [-196, 66, -170, 70, 0.75],
+      [-224, -46, -198, -52, 0.95],
+    ]) kit.stoneWall(statics, x0, z0, x1, z1, { h, thickness: 0.62 });
+
+    // boulder fields on the rocky side
+    for (const [x, z, s] of [
+      [-222, 66, 1.7], [-218, 72, 1.2], [-228, 58, 1.4], [-210, -58, 1.5],
+      [-202, -64, 1.1], [-232, -84, 1.6], [-166, -92, 1.3], [-150, 84, 1.5],
+      [-234, 96, 1.8], [-178, 92, 1.2],
+    ]) kit.boulder(statics, x, z, { s });
+
+    // loose stones along the track, so the path reads as a used trail
+    for (let i = 0; i < 70; i++) {
+      const along = frnd();
+      const x = along < 0.55 ? -234 + frnd() * 116 : -180 + jitter(3.0);
+      const z = along < 0.55 ? jitter(2.6) : -118 + frnd() * 236;
+      const st = new THREE.Mesh(new THREE.IcosahedronGeometry(0.1 + frnd() * 0.16, 0), mats.concrete);
+      st.position.set(x, 0.04, z);
+      st.scale.set(1, 0.55, 1);
+      st.rotation.set(0, frnd() * 3, 0);
+      st.castShadow = false;
+      st.receiveShadow = true;
+      statics.add(st);
+    }
 
     // trail sign + dirt path from the city gate
     meshBox(0.12, 2.2, 0.12, mats.wood, -120.5, 1.1, 45.5, 0, { cast: false });
@@ -6110,14 +6209,9 @@ export function createLevel(engine) {
     const P = EXPANSION_GROUPS.port;
 
     /* ---------------------------------------------------------- the street */
-    // street trees along both sidewalks (the sidewalk band is x 6.9..9.85)
-    for (const side of [-1, 1]) {
-      for (let z = -58; z <= 50; z += 9) {
-        if (rnd() < 0.18) continue;              // a few gaps, not a metronome
-        const x = side * (8.55 + jitter(0.22));
-        kit.tree(statics, x, z + jitter(0.6), { kind: 'street', h: 4.6 + rnd() * 1.4, yaw: rnd() * 6.28 });
-      }
-    }
+    // No street trees: this is a war zone, not a boulevard. The greenery
+    // belongs to the hills and the souk, so the street keeps its weeds,
+    // flower boxes and vines but stays open for sight lines.
     // grass + flowers at the wall bases
     for (const side of [-1, 1]) {
       for (let z = -60; z <= 52; z += 2.6) {

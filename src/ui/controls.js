@@ -28,6 +28,7 @@ export const CONTROL_GROUPS = [
       [{ keys: ['1', '2', '3'], label: '切换武器', en: 'SWAP' }, { keys: ['Q'], label: '上一把', en: 'LAST' }],
       [{ keys: ['4'], label: '绷带', en: 'BANDAGE' }, { keys: ['5'], label: '急救包', en: 'MEDKIT' }, { keys: ['6'], label: '能量饮料', en: 'DRINK' }],
       [{ keys: ['F'], label: '检视武器', en: 'INSPECT' }],
+      [{ keys: ['V'], label: '短刀（近战/背刺）', en: 'KA-BAR / MELEE' }],
     ],
   },
   {
@@ -49,6 +50,7 @@ const KEY_INFO = {
   '5':   { fn: '急救包', group: 'combat', hero: true },
   '6':   { fn: '饮料', group: 'combat', hero: true },
   Q:     { fn: '上一把', group: 'combat', hero: true },
+  V:     { fn: '短刀', group: 'combat', hero: true },
   W:     { fn: '前进', group: 'move', hero: true },
   E:     { fn: '交互', group: 'systems', hero: true },
   R:     { fn: '换弹', group: 'combat', hero: true },
@@ -245,7 +247,7 @@ export function renderKeymap(root, { listRoot = null } = {}) {
   stage.appendChild(legend);
 
   root.appendChild(stage);
-  root.appendChild(el('p', 'kbd-note', '1–3 切枪 · 4/5/6 绷带/急救/饮料 · Q 上一把 · E 交互 · M 地图 · ESC/P 暂停'));
+  root.appendChild(el('p', 'kbd-note', '1–3 切枪 · V 短刀 · 4/5/6 绷带/急救/饮料 · Q 上一把 · E 交互 · M 地图 · ESC/P 暂停'));
 
   wireKeyLinks(root, listRoot);
 }

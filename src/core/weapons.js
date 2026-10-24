@@ -30,6 +30,19 @@ export const WEAPONS = [
     pellets: 8, shell: true,
     falloff: (d) => (d <= 4 ? 1 : Math.max(0.42, 1 - (d - 4) * 0.05)),
   },
+  {
+    /* The Ka-Bar. Slot 4 (V). It trades the reach of a gun for damage you
+       can reach with a lunge:
+         · 2.4 m reach, 126° arc — you have to be inside their arms
+         · 58 damage a slash, 2.4x from behind (a backstab kills silently)
+         · 0.62 s between swings, and the swing itself cannot be cancelled
+       The trade is deliberate: it is the "no ammo, no noise, no distance"
+       option, and the cost is that you have to close. */
+    id: 'knife', name: 'KA-BAR', tag: 'MELEE <i></i> BLADE', magSize: 0, reserve: 0,
+    dmg: 58, rpm: 97, auto: false, spread: 0, recoil: 0, variant: 'knife', mode: 'MELEE',
+    melee: true, meleeRange: 2.4, meleeArc: 2.2, meleeCooldown: 0.62,
+    backstabMult: 2.4, backstabSilent: true, lunge: 4.2, swingTime: 0.42,
+  },
 ];
 
 /** Raw damage of one shotgun shell at `d` metres (8 pellets × per-pellet). */

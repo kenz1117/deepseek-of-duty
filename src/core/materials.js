@@ -1541,6 +1541,19 @@ export function buildMaterials(maxAniso = 8) {
       m.userData.noShadow = true; m.userData.noBullet = true;
       return m;
     })(),
+    /* Hillside grass: a vertical blade plane points away from a low sun,
+       so a plain standard material turns the tufts black at dusk. The
+       emissive lift keeps them readable without washing them out. */
+    grassTuft: (() => {
+      const m = new THREE.MeshStandardMaterial({
+        map: weed.map, alphaTest: 0.45, roughness: 0.97, metalness: 0.0,
+        side: THREE.DoubleSide, envMapIntensity: 0.3, color: 0xa9a47c,
+        emissive: 0x3b3a24, emissiveIntensity: 1.0,
+      });
+      m.map.anisotropy = maxAniso;
+      m.userData.noShadow = true; m.userData.noBullet = true;
+      return m;
+    })(),
     graffiti: (() => {
       const m = new THREE.MeshStandardMaterial({
         map: graffiti.map, transparent: true, depthWrite: false, roughness: 0.85, metalness: 0.0,

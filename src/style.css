@@ -444,6 +444,18 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:19px
   letter-spacing:.01em;text-shadow:0 2px 10px rgba(0,0,0,.8);}
 .score-div{width:1px;height:20px;background:linear-gradient(180deg,transparent,var(--line),transparent);}
 
+/* Optional combat readability: stronger separation without changing the HUD layout. */
+html.high-contrast #hud{--ui-dim:rgba(255,255,255,.88);--ui-faint:rgba(255,255,255,.72);--ui-ghost:rgba(255,255,255,.5);}
+html.high-contrast .hud-topleft,html.high-contrast .hud-bottomleft,html.high-contrast .hud-bottomright{
+  filter:drop-shadow(0 2px 5px rgba(0,0,0,.95));}
+html.high-contrast .objective,html.high-contrast .hp-num,html.high-contrast .ammo-mag,
+html.high-contrast .score-val,html.high-contrast .weapon-name{text-shadow:0 1px 3px #000,0 2px 10px #000;}
+html.high-contrast .score-block,html.high-contrast .kf-row{background-color:rgba(3,5,7,.88);}
+html.high-contrast .hp-bar,html.high-contrast .wave-bar{background-color:rgba(0,0,0,.72);outline:1px solid rgba(255,255,255,.28);}
+html.high-contrast .ammo-reserve,html.high-contrast .ammo-meta,html.high-contrast .weapon-tag,
+html.high-contrast .wslot{color:rgba(255,255,255,.88);}
+html.high-contrast #hitmarker i{box-shadow:0 0 2px #000,0 0 8px #fff;}
+
 /* ---------------- center / crosshair ---------------- */
 #crosshair-wrap{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;}
 #crosshair{display:block;width:220px;height:220px;}
@@ -541,6 +553,10 @@ kbd{display:inline-flex;align-items:center;justify-content:center;min-width:19px
 .ammo-mag.low{color:#e35a4b;animation:ammoPulse 1s ease-in-out infinite;}
 @keyframes ammoPulse{0%,100%{opacity:1;}50%{opacity:.66;}}
 .ammo-tail{display:inline-flex;align-items:baseline;gap:4px;padding-bottom:2px;}
+/* the Ka-Bar has no magazine: one infinity sign, no reserve count */
+.ammo-tail.is-melee{gap:0;}
+.ammo-tail.is-melee .ammo-slash,.ammo-tail.is-melee .ammo-reserve{display:none;}
+.ammo-tail.is-melee + .ammo-meta,.ammo-mag.is-melee{letter-spacing:0;}
 .ammo-slash{font-family:var(--mono);font-size:17px;color:var(--ui-ghost);}
 .ammo-reserve{font-family:var(--mono);font-size:15px;color:var(--ui-dim);letter-spacing:-.01em;}
 .ammo-meta{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:7px;

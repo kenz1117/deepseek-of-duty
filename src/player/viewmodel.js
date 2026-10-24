@@ -37,6 +37,11 @@ const STOCK_TIP = new THREE.Vector3(0, -0.012, 0.303);
 
 const LEFT_REST = new THREE.Vector3(-0.041, -0.014, -0.357);
 
+/* the Ka-Bar: held low and to the right, blade angled across the body */
+const KNIFE_POS = new THREE.Vector3(0.140, -0.130, -0.46);
+const KNIFE_ROT = new THREE.Euler(-0.26, 0.30, 0.34, 'YXZ');
+const SLASH_DUR = 0.42;
+
 /* ------------------------------------------------------------------ helpers */
 const geoCache = new Map();
 function rbox(w, h, d, r = 0.004, seg = 2) {
@@ -452,6 +457,72 @@ export function createViewmodel(engineMats, envTexture) {
   mergedBody.name = 'rifle';
   gun.add(mergedBody);
 
+  /* ------------------------------------------------------------------ KNIFE
+     Slot 4 (V). A fighting knife: clip-point blade with a hollow grind, a
+     guard, a grooved handle and a finger ring, plus the right hand that
+     holds it. Authored at 1:1 in metres like the guns. */
+  function buildKnife() {
+    const body = new THREE.Group();
+    const steel = M.wornSteel, dark = M.blackSteel, wood = M.furnitureFor('tan');
+
+    // handle: two scales + a spine, with three grip grooves
+    part(body, rbox(0.020, 0.030, 0.108, 0.010), wood, 0, 0, 0.026, 0, 0, 0);
+    part(body, rbox(0.010, 0.034, 0.100, 0.004), dark, 0, 0.001, 0.024);
+    for (let i = 0; i < 3; i++) {
+      part(body, rbox(0.023, 0.006, 0.008, 0.002), dark, 0, 0, 0.006 + i * 0.024);
+    }
+    // lanyard ring at the pommel
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.011, 0.0032, 5, 10), steel);
+    ring.position.set(0, 0, 0.086);
+    ring.rotation.y = Math.PI / 2;
+    body.add(ring);
+
+    // guard
+    part(body, rbox(0.052, 0.014, 0.018, 0.005), dark, 0, 0.001, -0.030);
+
+    // blade: a tapering clip point with a bevel, plus a false edge
+    const blade = new THREE.Group();
+    part(blade, rbox(0.011, 0.028, 0.176, 0.003), steel, 0, 0, -0.126);
+    // the point tapers to nothing
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.0088, 0.062, 4), steel);
+    tip.position.set(0, 0, -0.238);
+    tip.rotation.x = -Math.PI / 2;
+    tip.rotation.z = Math.PI / 4;
+    tip.scale.set(1, 1, 0.55);
+    blade.add(tip);
+    // spine + fuller (blood groove) so the blade reads as a blade, not a bar
+    part(blade, rbox(0.013, 0.006, 0.170, 0.002), dark, 0, 0.012, -0.122);
+    part(blade, rbox(0.005, 0.005, 0.110, 0.001), dark, 0, 0.005, -0.110);
+    body.add(blade);
+
+    // the hand: a fist around the grip
+    const hand = new THREE.Group();
+    const G = M.glove, GD = M.gloveDark, P = M.glovePad, C = M.cuff, S = M.sleeve;
+    part(hand, rbox(0.036, 0.070, 0.082, 0.016), G, 0.004, -0.004, 0.030, 0.06, 0.04, 0.22);
+    part(hand, rbox(0.016, 0.054, 0.056, 0.010), P, 0.006, 0.026, 0.004, 0.06, 0.04, 0.22);
+    for (const [dz, ang] of [[0.006, 0.05], [-0.026, 0.02], [-0.056, -0.02]]) {
+      bone(hand, G, pv(0.014, 0.018, dz + 0.014), pv(0.012, 0.040, dz), 0.019, 0.021, 0.008);
+      bone(hand, GD, pv(0.012, 0.040, dz), pv(-0.004, 0.030, dz - 0.006), 0.017, 0.019, 0.008);
+    }
+    // thumb wrapped over the blade side
+    bone(hand, G, pv(0.016, -0.006, 0.052), pv(-0.002, 0.026, 0.020), 0.016, 0.016, 0.007);
+    bone(hand, GD, pv(-0.002, 0.026, 0.020), pv(-0.012, 0.030, -0.008), 0.015, 0.015, 0.006);
+    // wrist + cuff + sleeve exiting the bottom right
+    limb(hand, G, pv(0.004, -0.030, 0.058), pv(0.010, -0.076, 0.092), 0.023, 0.026, 9);
+    limb(hand, C, pv(0.010, -0.072, 0.090), pv(0.014, -0.104, 0.114), 0.030, 0.033, 10);
+    limb(hand, S, pv(0.014, -0.100, 0.112), pv(0.036, -0.270, 0.190), 0.017, 0.026, 12);
+    body.add(hand);
+
+    body.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
+    return body;
+  }
+  const knifeGroup = new THREE.Group();
+  knifeGroup.name = 'knife';
+  const knifeBody = buildKnife();
+  knifeGroup.add(knifeBody);
+  knifeGroup.visible = false;
+  gun.add(knifeGroup);
+
   /* ------------------------------------------------------------------ M870
      A separate silhouette so 3 can be a real shotgun: long barrel + tube
      magazine, walnut stock/forend, sliding pump, bead sight. */
@@ -571,6 +642,8 @@ export function createViewmodel(engineMats, envTexture) {
     .sub(OPTIC.clone().multiplyScalar(GUN_SCALE).applyEuler(ADS_ROT));
 
   const state = {
+    knife: false,
+    slashT: 0,
     time: 0,
     ads: 0, adsTarget: 0,
     sprint: 0, sprintTarget: 0,
@@ -642,15 +715,27 @@ export function createViewmodel(engineMats, envTexture) {
   }
 
   function setWeapon(variant) {
-    const F = M.furnitureFor(variant);
-    for (const m of furnitureHosts) m.material = F;
+    const knife = variant === 'knife';
+    if (!knife) {
+      const F = M.furnitureFor(variant);
+      for (const m of furnitureHosts) m.material = F;
+    }
     const shot = variant === 'wood';
     state.shotgun = shot;
-    state.noOptic = shot;
-    mergedBody.visible = !shot;
-    if (stockGroup) stockGroup.visible = !shot && state.ads < 0.65;
-    magGroup.visible = !shot;
+    state.knife = knife;
+    state.noOptic = shot || knife;
+    mergedBody.visible = !shot && !knife;
+    if (stockGroup) stockGroup.visible = !shot && !knife && state.ads < 0.65;
+    magGroup.visible = !shot && !knife;
     shotgunGroup.visible = shot;
+    knifeGroup.visible = knife;
+    if (knife) state.adsTarget = 0;
+  }
+
+  /** the Ka-Bar swing: wind-up → strike → recover */
+  function slash() {
+    if (!state.knife || state.dead) return;
+    state.slashT = SLASH_DUR;
   }
 
   /** 0 = weapon up, 1 = lowered (used by the swap transition) */
@@ -686,6 +771,7 @@ export function createViewmodel(engineMats, envTexture) {
       }
     }
     if (state.inspectT > 0) state.inspectT = Math.max(0, state.inspectT - dt);
+    if (state.slashT > 0) state.slashT = Math.max(0, state.slashT - dt);
 
     // smooth blends
     state.ads += (state.adsTarget - state.ads) * (1 - Math.pow(0.000035, dt));
@@ -810,29 +896,66 @@ export function createViewmodel(engineMats, envTexture) {
       integrateSpring(state.recoilRot, state.recoilRotVel, 150, 16, sdt);
     }
 
-    // ---- final transform: lerp hip → ads, then add secondary channels
-    _p.copy(HIP_POS).lerp(ADS_POS, poseAds);
-    _p.x += bobX + breathX + swayX + spPosX + rlPosX;
-    _p.y += bobY + breathY + swayY + spPosY + rlPosY + insY * 0.4 - dead * 0.22;
-    _p.z += spPosZ + rlPosZ + dead * 0.05;
-    // swap: drop the weapon out of frame, then bring the new one up
-    _p.y -= 0.30 * state.swap;
-    _p.z += 0.08 * state.swap;
-    _p.x += state.recoilPos.x;
-    _p.y += state.recoilPos.y;
-    _p.z += state.recoilPos.z;
+    // ---- the knife: its own rest pose and its own swing curve
+    if (state.knife) {
+      let kx = 0, ky = 0, kz = 0, krx = 0, kry = 0, krz = 0;
+      if (state.slashT > 0) {
+        const u = 1 - state.slashT / SLASH_DUR;     // 0 → 1 over the swing
+        if (u < 0.32) {
+          // wind-up: the blade pulls back over the shoulder
+          const k = u / 0.32;
+          kx = 0.145 * k; ky = 0.125 * k; kz = 0.07 * k;
+          krz = -0.95 * k; krx = 0.55 * k; kry = 0.30 * k;
+        } else if (u < 0.50) {
+          // the strike: a fast diagonal sweep down across the body
+          const k = (u - 0.32) / 0.18;
+          const e = k * k * (3 - 2 * k);
+          kx = 0.145 - 0.56 * e; ky = 0.125 - 0.40 * e; kz = 0.07 + 0.14 * e;
+          krz = -0.95 + 3.10 * e; krx = 0.55 - 1.55 * e; kry = 0.30 + 0.35 * e;
+        } else {
+          // recover back to the guard position
+          const k = (u - 0.50) / 0.50;
+          const e = 1 - Math.pow(1 - k, 2);
+          kx = -0.415 * (1 - e); ky = -0.275 * (1 - e); kz = 0.21 * (1 - e);
+          krz = 2.15 * (1 - e); krx = -1.00 * (1 - e); kry = 0.65 * (1 - e);
+        }
+      }
+      _p.copy(KNIFE_POS);
+      _p.x += bobX * 0.7 + breathX + swayX * 0.6 + kx;
+      _p.y += bobY * 0.7 + breathY + swayY * 0.6 + ky - dead * 0.3;
+      _p.z += kz + dead * 0.05;
+      _p.y -= 0.30 * state.swap;
+      _r.set(
+        KNIFE_ROT.x + krx + swayY * 1.2 + dead * 0.4 + state.swap * 0.8,
+        KNIFE_ROT.y + kry + swayX * 1.2 + state.swap * 0.4,
+        KNIFE_ROT.z + krz + state.swap * 0.5
+      );
+    } else {
+      // ---- final transform: lerp hip → ads, then add secondary channels
+      _p.copy(HIP_POS).lerp(ADS_POS, poseAds);
+      _p.x += bobX + breathX + swayX + spPosX + rlPosX;
+      _p.y += bobY + breathY + swayY + spPosY + rlPosY + insY * 0.4 - dead * 0.22;
+      _p.z += spPosZ + rlPosZ + dead * 0.05;
+      // swap: drop the weapon out of frame, then bring the new one up
+      _p.y -= 0.30 * state.swap;
+      _p.z += 0.08 * state.swap;
+      _p.x += state.recoilPos.x;
+      _p.y += state.recoilPos.y;
+      _p.z += state.recoilPos.z;
 
-    _r.set(
-      THREE.MathUtils.lerp(HIP_ROT.x, ADS_ROT.x, poseAds) + swayY * 1.5 + spRotX + rlRotX + insRotX + state.recoilRot.x - dead * 0.5 + state.swap * 0.9,
-      THREE.MathUtils.lerp(HIP_ROT.y, ADS_ROT.y, poseAds) + swayX * 1.5 + spRotY + rlRotY + insRotY + state.recoilRot.y,
-      THREE.MathUtils.lerp(HIP_ROT.z, ADS_ROT.z, poseAds) + spRotZ + rlRotZ + insRotZ + state.recoilRot.z + dead * 0.35
-    );
+      _r.set(
+        THREE.MathUtils.lerp(HIP_ROT.x, ADS_ROT.x, poseAds) + swayY * 1.5 + spRotX + rlRotX + insRotX + state.recoilRot.x - dead * 0.5 + state.swap * 0.9,
+        THREE.MathUtils.lerp(HIP_ROT.y, ADS_ROT.y, poseAds) + swayX * 1.5 + spRotY + rlRotY + insRotY + state.recoilRot.y,
+        THREE.MathUtils.lerp(HIP_ROT.z, ADS_ROT.z, poseAds) + spRotZ + rlRotZ + insRotZ + state.recoilRot.z + dead * 0.35
+      );
+    }
 
     gun.position.copy(_p);
     gun.rotation.copy(_r);
 
     // slight ADS magnification on the viewmodel camera only
-    const fov = THREE.MathUtils.lerp(BASE_FOV, ADS_FOV, poseAds);
+    // (a blade never zooms — the reticle would lie about the range)
+    const fov = state.knife ? BASE_FOV : THREE.MathUtils.lerp(BASE_FOV, ADS_FOV, poseAds);
     if (Math.abs(fov - camera.fov) > 0.01) {
       camera.fov = fov;
       camera.updateProjectionMatrix();
@@ -943,7 +1066,7 @@ export function createViewmodel(engineMats, envTexture) {
 
   return {
     scene, camera, root, gun,
-    update, fire, startReload, inspect, setWeapon, setSwap, setAspect,
+    update, fire, startReload, inspect, setWeapon, setSwap, setAspect, slash,
     state,
     get reloading() { return state.reloading; },
     get adsAmount() { return state.ads; },

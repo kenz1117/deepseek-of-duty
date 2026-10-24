@@ -14,8 +14,9 @@
 import * as THREE from 'three';
 import { buildSoldier, applyPose } from './soldierParts.js';
 
-function makeNameSprite(name) {
+function makeNameSprite(name, team = null) {
   const text = String(name || 'OPERATOR').slice(0, 12).toUpperCase();
+  const teamColor = team === 0 ? '#78baff' : team === 1 ? '#ff8b7d' : '#e2b45c';
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 64;
@@ -26,8 +27,8 @@ function makeNameSprite(name) {
   ctx.textBaseline = 'middle';
   ctx.fillStyle = 'rgba(4,8,10,0.62)';
   ctx.fillRect(24, 12, 208, 40);
-  ctx.strokeStyle = 'rgba(226,180,92,0.85)';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = teamColor;
+  ctx.lineWidth = 3;
   ctx.strokeRect(24, 12, 208, 40);
   ctx.fillStyle = 'rgba(240,232,218,0.95)';
   ctx.fillText(text, 128, 33);
@@ -40,11 +41,11 @@ function makeNameSprite(name) {
   return sprite;
 }
 
-export function createNetAvatar({ scene, mats, name, variant = 0, officer = true }) {
+export function createNetAvatar({ scene, mats, name, variant = 0, officer = true, team = null }) {
   const rig = buildSoldier(mats, variant % 3, 'rifleman');
   const group = new THREE.Group();
   group.add(rig.root);
-  const label = makeNameSprite(officer ? `★ ${name}` : name);
+  const label = makeNameSprite(officer ? `★ ${name}` : name, team);
   group.add(label);
   scene.add(group);
 
@@ -82,40 +83,82 @@ export function createNetAvatar({ scene, mats, name, variant = 0, officer = true
     add(new THREE.BoxGeometry(0.075, 0.085, 0.018), goldMat, 0.16, 1.36, 0.155, 0, -0.1, 0);
   }
 
+  // Team recognition must survive distance, shadow and nameplate occlusion.
+  // Keep the emissive contribution subtle so these read as uniform panels,
+  // not glowing targets.
+  if (team === 0 || team === 1) {
+    const color = team === 0 ? 0x3b83c4 : 0xc54f43;
+    const teamMat = new THREE.MeshStandardMaterial({
+      color, emissive: color, emissiveIntensity: 0.22, roughness: 0.68, metalness: 0.08,
+    });
+    const addTeamPanel = (x, y, z, sx, sy, sz) => {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), teamMat);
+      mesh.position.set(x, y, z);
+      mesh.castShadow = true;
+      rig.root.add(mesh);
+      officerBits.push(mesh);
+    };
+    addTeamPanel(-0.245, 1.455, 0.015, 0.075, 0.055, 0.21);
+    addTeamPanel(0.245, 1.455, 0.015, 0.075, 0.055, 0.21);
+    addTeamPanel(0, 1.36, 0.164, 0.19, 0.055, 0.018);
+  }
+
   let walkT = 0;
   let walkAmp = 0;
   let alive = true;
-  let target = { x: 0, z: 0, yaw: 0 };
+  let deathT = 0;
   let first = true;
+
+  function setAlive(next) {
+    if (next === alive) return;
+    alive = next;
+    deathT = 0;
+    group.visible = true;
+    label.visible = alive;
+    if (alive) group.rotation.z = 0;
+  }
 
   function apply(state, dt) {
     if (!state) return;
-    const moving = Math.hypot((state.x || 0) - group.position.x, (state.z || 0) - group.position.z);
+    const step = Math.max(0.001, Math.min(0.1, Number(dt) || 0.016));
+    const dx = (state.x || 0) - group.position.x;
+    const dz = (state.z || 0) - group.position.z;
+    const fallbackSpeed = Math.hypot(dx, dz) / step;
+    const reportedSpeed = Number(state.speed);
+    const speed = Number.isFinite(reportedSpeed) ? Math.max(0, reportedSpeed) : fallbackSpeed;
     if (first) {
       group.position.set(state.x || 0, state.y || 0, state.z || 0);
       group.rotation.y = state.yaw || 0;
       first = false;
     } else {
-      const a = Math.min(1, dt * 12);
-      group.position.x += ((state.x || 0) - group.position.x) * a;
+      const a = Math.min(1, step * 12);
+      group.position.x += dx * a;
       group.position.y += ((state.y || 0) - group.position.y) * a;
-      group.position.z += ((state.z || 0) - group.position.z) * a;
+      group.position.z += dz * a;
       let dy = (state.yaw || 0) - group.rotation.y;
       while (dy > Math.PI) dy -= Math.PI * 2;
       while (dy < -Math.PI) dy += Math.PI * 2;
-      group.rotation.y += dy * Math.min(1, dt * 12);
+      group.rotation.y += dy * Math.min(1, step * 12);
     }
-    alive = state.alive !== false;
-    group.visible = alive;
-    if (!alive) return;
-    walkAmp += ((moving > 0.02 ? 0.75 : 0) - walkAmp) * Math.min(1, dt * 8);
-    walkT += dt * (moving > 0.02 ? 7 : 1.2);
+    setAlive(state.alive !== false);
+    group.visible = true;
+    if (!alive) {
+      deathT = Math.min(1, deathT + step * 3.8);
+      const fall = 1 - (1 - deathT) * (1 - deathT);
+      group.rotation.z = -Math.PI * 0.47 * fall;
+      return;
+    }
+    group.rotation.z = 0;
+    label.visible = true;
+    const moveAmount = THREE.MathUtils.clamp(speed / 4.5, 0, 1);
+    walkAmp += (moveAmount * 0.85 - walkAmp) * Math.min(1, step * 9);
+    walkT += step * (speed > 0.15 ? 5.2 + Math.min(speed, 8) * 0.45 : 1.2);
     applyPose(rig, {
       time: walkT,
-      crouch: state.crouch || 0,
+      crouch: THREE.MathUtils.clamp(Number(state.crouch) || 0, 0, 1),
       walkAmp,
       walkPhase: walkT,
-      aim: state.aim != null ? state.aim : 0.65,
+      aim: THREE.MathUtils.clamp(state.aim == null ? 0.65 : Number(state.aim) || 0, 0, 1),
       weaponLevel: 0,
       aimPitch: state.pitch || 0,
       lookYaw: 0,
@@ -146,7 +189,7 @@ export function createNetAvatar({ scene, mats, name, variant = 0, officer = true
   return {
     group, label, apply, dispose,
     get alive() { return alive; },
-    set alive(v) { alive = !!v; group.visible = alive; },
+    set alive(v) { setAlive(!!v); },
     get position() { return group.position; },
   };
 }

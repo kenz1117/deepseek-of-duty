@@ -195,13 +195,18 @@ export function createPost(renderer, scene, camera, quality = 'high') {
   finalPass.renderToScreen = true;
   composer.addPass(finalPass);
 
-  const state = { quality, q };
+  const state = { quality, q, lensEffects: true, grain: q.grain, ca: q.ca };
 
   function resize(w, h, pr) {
     composer.setPixelRatio(pr);
     composer.setSize(w, h);
     bloom.setSize(w * pr, h * pr);
     finalPass.uniforms.uResolution.value.set(w * pr, h * pr);
+  }
+  function syncLensEffects() {
+    finalPass.uniforms.uGrain.value = state.lensEffects ? state.grain : 0;
+    finalPass.uniforms.uCA.value = state.lensEffects ? state.ca : 0;
+    if (!state.lensEffects) finalPass.uniforms.uSprint.value = 0;
   }
   resize(window.innerWidth, window.innerHeight, renderer.getPixelRatio());
 
@@ -216,6 +221,10 @@ export function createPost(renderer, scene, camera, quality = 'high') {
       finalPass.uniforms.uTime.value += dt;
       composer.render(dt);
     },
+    setLensEffects(enabled) {
+      state.lensEffects = enabled !== false;
+      syncLensEffects();
+    },
     setGrade(g) {
       if (!g) return;
       const u = finalPass.uniforms;
@@ -224,17 +233,18 @@ export function createPost(renderer, scene, camera, quality = 'high') {
       if (g.lift) u.uLift.value.setRGB(g.lift[0], g.lift[1], g.lift[2]);
       if (g.gain) u.uGain.value.setRGB(g.gain[0], g.gain[1], g.gain[2]);
       if (g.vignette !== undefined) u.uVignette.value = g.vignette;
-      if (g.grain !== undefined) u.uGrain.value = g.grain;
+      if (g.grain !== undefined) state.grain = g.grain;
       if (g.bloom !== undefined) bloom.strength = g.bloom;
+      syncLensEffects();
     },
     applyQuality(next) {
       const nq = presets(next);
       state.quality = next; state.q = nq;
+      state.grain = nq.grain; state.ca = nq.ca;
       bloom.enabled = nq.bloom;
       bloom.strength = nq.bloomStrength;
-      finalPass.uniforms.uGrain.value = nq.grain;
       finalPass.uniforms.uGodrays.value = nq.godrays;
-      finalPass.uniforms.uCA.value = nq.ca;
+      syncLensEffects();
       composer.setPixelRatio(renderer.getPixelRatio());
       composer.setSize(window.innerWidth, window.innerHeight);
       bloom.setSize(window.innerWidth * renderer.getPixelRatio(), window.innerHeight * renderer.getPixelRatio());

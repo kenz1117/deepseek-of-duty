@@ -9,7 +9,7 @@
     "preview": "vite preview --port 4173",
     "lan": "node server/lan.mjs",
     "dev:lan": "vite --port 5173 --host 0.0.0.0",
-    "test": "node tools/enemy-los-test.mjs && node tools/zone-test.mjs && node tools/spawn-test.mjs && node tools/spawn-audit-probe.mjs && node tools/coop-rally-test.mjs && node tools/ai-profile-test.mjs && node tools/diff-tier-test.mjs && node tools/beats-test.mjs && node tools/campaign-test.mjs && node tools/medical-test.mjs && node tools/milestones-test.mjs && node tools/milestones-integration-test.mjs && node tools/teambrain-test.mjs && node tools/versus-guard-test.mjs && node tools/inventory-test.mjs && node tools/minimap-render-test.mjs && node tools/lan-smoke.mjs",
+    "test": "node tools/enemy-los-test.mjs && node tools/zone-test.mjs && node tools/spawn-test.mjs && node tools/spawn-audit-probe.mjs && node tools/coop-rally-test.mjs && node tools/ai-profile-test.mjs && node tools/diff-tier-test.mjs && node tools/beats-test.mjs && node tools/campaign-test.mjs && node tools/medical-test.mjs && node tools/milestones-test.mjs && node tools/milestones-integration-test.mjs && node tools/teambrain-test.mjs && node tools/versus-guard-test.mjs && node tools/inventory-test.mjs && node tools/minimap-render-test.mjs && node tools/knife-test.mjs && node tools/net-guard-test.mjs && node tools/p1-feedback-test.mjs && node tools/lan-smoke.mjs",
     "test:spawn": "node tools/spawn-test.mjs && node tools/spawn-audit-probe.mjs && node tools/coop-rally-test.mjs",
     "test:ai": "node tools/ai-profile-test.mjs",
     "test:tiers": "node tools/diff-tier-test.mjs",
@@ -20,6 +20,7 @@
     "test:brain": "node tools/teambrain-test.mjs",
     "test:los": "node tools/enemy-los-test.mjs",
     "test:minimap": "node tools/minimap-render-test.mjs && node tools/minimap-live-test.mjs",
+    "test:knife": "node tools/knife-test.mjs",
     "shot:minimap": "node tools/minimap-shot.mjs lab shots/minimap-lab.png && node tools/minimap-shot.mjs hud shots/minimap-hud.png && node tools/minimap-shot.mjs live shots/minimap-live.png",
     "shot:world": "node tools/world-shot.mjs shots/world",
     "shot:world:top": "TOP=1 node tools/world-shot.mjs shots/world-top"

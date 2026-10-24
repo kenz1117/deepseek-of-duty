@@ -22,6 +22,7 @@ import {
 import { profileFor } from './systems/ai/profiles.js';
 import { DIFF_TIERS, diffForWave, MAX_FIRING_CEILING } from './systems/ai/tiers.js';
 import { WEAPONS } from './core/weapons.js';
+import { segmentBlockedByColliders } from './systems/ai/geom.js';
 import { createTeamBrain } from './systems/ai/teamBrain.js';
 import { createInventory, ITEMS } from './systems/inventory.js';
 import { createArtillery } from './systems/artillery.js';
@@ -62,6 +63,8 @@ import {
 import {
   createConquest, botRubberBand, pickRespawnPoint, CONQUEST,
 } from './systems/conquest.js';
+import { createFixedStepper } from './core/timing.js';
+import { isNewerSnapshot, validFirePacket, validMovementPacket } from './net/guards.js';
 
 /* =========================================================================
    DEEPSEEK OF DUTY — browser vertical slice.
@@ -135,7 +138,7 @@ const G = {
   spawnQueue: [], spawnTimer: 0, waveClearTimer: 0,
   time: 0, sinceDamage: 99,
   weaponIndex: 0, mag: 30, reserve: 180,
-  weaponAmmo: [{ mag: 30, reserve: 180 }, { mag: 25, reserve: 150 }, { mag: 6, reserve: 30 }],
+  weaponAmmo: [{ mag: 30, reserve: 180 }, { mag: 25, reserve: 150 }, { mag: 6, reserve: 30 }, { mag: 0, reserve: 0 }],
   lastWeapon: 1, switchT: 0, switchTo: 0, switchApplied: false, unlockedShotgun: false,
   fps: 60,
   reloadTimer: -1, reloadTransferred: false, reloadShells: 0,
@@ -193,8 +196,10 @@ const net = {
   role: null, selfId: null, name: 'OPERATOR', hostId: null,
   team: undefined,               // 0 | 1 in versus; undefined in co-op
   remote: new Map(), enemies: new Map(),
-  inputT: 0, snapT: 0, tick: 0, seq: 0, started: false, respawnT: 0, lastError: null,
+  inputT: 0, snapT: 0, tick: 0, seq: 0, moveEpoch: 0,
+  started: false, respawnT: 0, lastError: null, lastSnapshotTick: -1,
 };
+const fixedStepper = createFixedStepper();
 /** Downed/revive state (LAN co-op only): bleed-out clock for the local
     player; the registry + per-ally revive prompts live on module scope. */
 let coopDowned = null;
@@ -459,6 +464,7 @@ const nextFrame = () => new Promise((r) => requestAnimationFrame(() => requestAn
 const ATM_ORDER = ['dusk', 'noon', 'storm', 'bluehour', 'night'];
 
 function magCap(w) {
+  if (w && w.melee) return 0;
   return Math.max(1, Math.round(w.magSize * G.upgrades.mag));
 }
 
@@ -556,6 +562,8 @@ function applySettings(initial = false) {
   if (audio && audio.ctx && audio.setMasterVolume) audio.setMasterVolume(G.settings.master);
   if (engine && engine.setFrameBudget) engine.setFrameBudget(G.settings.fpsCap);
   if (initial && engine) engine.setQuality(G.settings.quality);
+  if (engine && engine.post && engine.post.setLensEffects) engine.post.setLensEffects(G.settings.lensEffects);
+  document.documentElement.classList.toggle('high-contrast', !!G.settings.highContrast);
   if (cinema) cinema.setVoice(G.settings.voice !== false);
   if (voice) { voice.setEnabled(G.settings.voice !== false); if (voice.setVolume) voice.setVolume(G.settings.master); }
   syncQualityPills();
@@ -671,7 +679,7 @@ const TUTORIAL_STEPS = [
   { key: 'RMB', text: '鼠标右键瞄准（按住）', test: () => controller && controller.adsAmount > 0.6 },
   { key: 'R', text: 'R 换弹', test: () => G.tut.reloads > 0 },
   { key: 'G', text: 'G 投掷手雷', test: () => G.tut.grenades > 0 },
-  { key: '1-3', text: '1 / 2 / 3 切换武器 · Q 切回', test: () => G.tut.swaps > 0 },
+  { key: '1-3', text: '1 / 2 / 3 切枪 · Q 切回 · V 短刀', test: () => G.tut.swaps > 0 },
   { key: 'M', text: 'M 开关小地图', test: () => G.tut.minimap > 0 },
   { key: 'E', text: 'E 交互：破门 / 收集情报', test: () => G.tut.interacts > 0, timeout: 8 },
 ];
@@ -3287,13 +3295,18 @@ async function boot() {
       }
       if (G.state !== 'playing') return;
       if (code === 'KeyR') reload();
-      if (code === 'KeyF') viewmodel.inspect();
+      if (code === 'KeyF' && !(currentWeapon() && currentWeapon().melee)) viewmodel.inspect();
       if (code === 'KeyG') throwGrenade();
       if (code === 'KeyE' && interact) interact.press();
       if (code === 'Digit1') switchWeapon(0);
       if (code === 'Digit2') switchWeapon(1);
       if (code === 'Digit3') switchWeapon(2);
       if (code === 'KeyQ') switchWeapon(G.lastWeapon);
+      // V draws / stows the Ka-Bar: it is a sidearm, not a fourth rifle
+      if (code === 'KeyV') {
+        const ki = WEAPONS.findIndex((x) => x.melee);
+        if (ki >= 0) switchWeapon(G.weaponIndex === ki ? G.lastWeapon : ki);
+      }
       // consumables: press to channel, press again to cancel
       if (code === 'Digit4' && inventory) startUseItem('bandage');
       if (code === 'Digit5' && inventory) startUseItem('medkit');
@@ -4241,6 +4254,8 @@ function updateWaves(dt) {
 
 /* ------------------------------------------------------------------ combat */
 const _dir = new THREE.Vector3();
+const _meleePoint = new THREE.Vector3();
+const _meleeNormal = new THREE.Vector3();
 const _muzzle = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _up = new THREE.Vector3();
@@ -4254,7 +4269,12 @@ function syncSlots() {
   if (!hud || !hud.setSlots) return;
   hud.setSlots(WEAPONS.map((w, idx) => {
     const a = idx === G.weaponIndex ? { mag: G.mag, reserve: G.reserve } : (G.weaponAmmo[idx] || { mag: 0, reserve: 0 });
-    return { name: w.name, mag: a.mag, reserve: a.reserve, active: idx === G.weaponIndex, locked: idx === 2 && !G.unlockedShotgun };
+    return {
+      name: w.name, mag: a.mag, reserve: a.reserve,
+      active: idx === G.weaponIndex,
+      locked: idx === 2 && !G.unlockedShotgun,
+      melee: !!w.melee,
+    };
   }));
 }
 
@@ -4360,6 +4380,7 @@ function fireShot() {
         dx: +_dir.x.toFixed(4), dy: +_dir.y.toFixed(4), dz: +_dir.z.toFixed(4),
         weapon: w.id,
         dmg: G.upgrades.damage,
+        fireRate: G.upgrades.fireRate,
       });
     }
     _end.copy(o).addScaledVector(_dir, 120);
@@ -4499,6 +4520,110 @@ function fireShot() {
   if (G.mag === 0 && G.reserve > 0) setTimeout(() => { if (G.state === 'playing') reload(); }, 160);
 }
 
+/* ------------------------------------------------------------------ melee */
+/**
+ * The Ka-Bar swing.
+ *
+ * Reach is 2.4 m in a 126° arc in front of the player, so this is a "you are
+ * already inside their arms" weapon, not a cheaper rifle. Three things make
+ * it worth drawing:
+ *   · the swing LUNGES — closing the last half metre is the whole point
+ *   · a hit from behind (the enemy is facing more than 100° away from you)
+ *     does 2.4x the damage
+ *   · a backstab that KILLS is silent: no gunshot, no casualty call-out,
+ *     so the squad never learns where you are
+ * The costs are the point: 0.62 s between swings, a 2.4 m cone you cannot
+ * reach through a wall, and no reach at all if they step back.
+ */
+function knifeSlash() {
+  const w = currentWeapon();
+  if (!w || !w.melee) return false;
+  if (G.fireCooldown > 0 || G.switchT > 0 || G.reloadTimer >= 0) return false;
+  G.fireCooldown = w.meleeCooldown;
+  G.shotFired = true;
+  viewmodel.slash();
+  audio.knifeSwing();
+
+  engine.camera.getWorldDirection(_dir);
+  const px = controller.pos.x, pz = controller.pos.z;
+  const eye = controller.pos.y + 1.5;
+  controller.push(_dir.x, _dir.z, w.lunge);          // the lunge
+
+  // LAN: the host owns the damage, exactly like bullets. The client only
+  // reports the swing; a second local pass would double the damage.
+  if (net.role === 'client') {
+    if (lanSession) {
+      lanSession.sendFire({
+        seq: ++net.seq,
+        ox: +px.toFixed(2), oy: +controller.pos.y.toFixed(2), oz: +pz.toFixed(2),
+        dx: +_dir.x.toFixed(4), dy: 0, dz: +_dir.z.toFixed(4),
+        weapon: w.id,
+        dmg: G.upgrades.damage,
+        fireRate: G.upgrades.fireRate,
+      });
+    }
+    return true;
+  }
+
+  const cosLimit = Math.cos(w.meleeArc / 2);
+  let target = null, bestD = Infinity;
+  for (const e of enemies) {
+    if (!e || !e.alive || !e.root) continue;
+    const ep = e.root.position;
+    const dx = ep.x - px, dz = ep.z - pz;
+    const d = Math.hypot(dx, dz);
+    if (d > w.meleeRange || d < 1e-4) continue;
+    if ((dx * _dir.x + dz * _dir.z) / d < cosLimit) continue;      // outside the arc
+    if (Math.abs(ep.y - controller.pos.y) > 2.2) continue;          // another floor
+    // no stabbing through walls: the raw collider test, not the inflated
+    // navigation one (an agent-sized inflation would eat the last 30 cm)
+    if (level && level.colliders.length &&
+      segmentBlockedByColliders(px, eye, pz, ep.x, ep.y + 1.2, ep.z, level.colliders).blocked) continue;
+    if (d < bestD) { bestD = d; target = e; }
+  }
+
+  if (!target) {
+    // an empty swing still makes a little noise
+    if (perception) perception.noise(px, pz, 9, 0.16, 0.3);
+    return true;
+  }
+
+  const ep = target.root.position;
+  // backstab: the enemy is facing away from the player
+  const eFx = -Math.sin(target.root.rotation.y);
+  const eFz = -Math.cos(target.root.rotation.y);
+  let bx = px - ep.x, bz = pz - ep.z;
+  const bl = Math.hypot(bx, bz) || 1;
+  bx /= bl; bz /= bl;
+  const backstab = (bx * eFx + bz * eFz) < -0.34;   // ~100 degrees
+  const dmg = w.dmg * (backstab ? w.backstabMult : 1) * G.upgrades.damage;
+
+  _meleePoint.set(ep.x + bx * 0.25, ep.y + 1.25, ep.z + bz * 0.25);
+  _meleeNormal.set(-bx, 0.25, -bz).normalize();
+  const myTeam = net.team != null ? net.team
+    : (target.team != null ? (target.team === 0 ? 1 : 0) : undefined);
+  const wasAlive = target.alive;
+  const killed = target.takeDamage(dmg, _meleePoint, _meleeNormal, 'torso', myTeam);
+
+  fx.blood(_meleePoint, _meleeNormal, _dir);
+  audio.impact('flesh');
+  controller.addShake(0.05);
+  if (G.stats) G.stats.hits++;
+  hud.hit(false, killed);
+  if (killed) {
+    onEnemyKilled(target, false, 'melee', undefined, backstab && w.backstabSilent);
+    if (backstab && w.backstabSilent) hud.toast('背刺 · 无声', 1200);
+  } else if (wasAlive) {
+    // a soldier who survives a stab knows exactly where you are
+    target.flinch = Math.min(1, (target.flinch || 0) + 0.8);
+  }
+  // a struggle is noisy — except a silent backstab kill
+  if (perception && !(killed && backstab && w.backstabSilent)) {
+    perception.noise(px, pz, 13, 0.35, 0.4);
+  }
+  return true;
+}
+
 function tryFire(dt) {
   const w = currentWeapon();
   G.fireCooldown -= dt;
@@ -4507,6 +4632,7 @@ function tryFire(dt) {
   G.firing = wantFire;
   const trigger = w.auto ? wantFire : (input.mouse.leftPressed && input.locked);
   if (!trigger || G.fireCooldown > 0 || G.reloadTimer >= 0) return;
+  if (w.melee) { knifeSlash(); return; }
   if (G.mag <= 0) {
     if (G.reserve > 0) reload();
     return;
@@ -4777,7 +4903,7 @@ function bossDeathLine(op) {
   return { shown: '指挥官', speaker: 'VEGA', text: '指挥官倒了。车队失去指挥，正在撤离。', voice: 'cmd_down' };
 }
 
-function onEnemyKilled(enemy, headshot, cause = 'bullet', killerTeam) {
+function onEnemyKilled(enemy, headshot, cause = 'bullet', killerTeam, silent = false) {
   // killerTeam resolution: callers pass the SHOOTER's faction (a remote
   // client's, a grenade thrower's); `null` means teamless (zone/artillery);
   // undefined falls back to the local player's team.
@@ -4796,13 +4922,15 @@ function onEnemyKilled(enemy, headshot, cause = 'bullet', killerTeam) {
   G.waveRemaining = Math.max(0, G.waveRemaining - 1);
   addScore(headshot ? 150 : 100);
   hud.setScore(G.score, G.kills);
-  hud.addKillFeed(headshot ? 'HOSTILE' : 'INSURGENT', headshot, currentWeapon().name);
+  hud.addKillFeed(cause === 'melee' ? '刺杀' : (headshot ? 'HOSTILE' : 'INSURGENT'), headshot, currentWeapon().name);
   G.hitStop = 0.055;
   audio.killConfirm();
   // squad-casualty broadcast: nearby soldiers see / hear their friend die
   // and lift awareness faster than a generic noise event. This is what
   // makes a kill feel like it cost the squad something.
-  if (perception && enemy && enemy.root) {
+  // a silent backstab must not call the squad: no casualty broadcast, so
+  // the soldiers nearby never learn where the player is
+  if (perception && enemy && enemy.root && !silent) {
     perception.casualty(enemy.root.position.x, enemy.root.position.z, 22);
   }
   if (G.stats) {
@@ -4863,6 +4991,7 @@ function onEnemyKilled(enemy, headshot, cause = 'bullet', killerTeam) {
 
 function reload() {
   const w = currentWeapon();
+  if (w.melee) return;
   if (G.reloadTimer >= 0 || G.mag >= magCap(w) || G.reserve <= 0) return;
   if (G.switchT > 0) return;
   G.reloadTimer = 0;
@@ -5927,7 +6056,7 @@ function loop(now) {
   const cap = G.settings && G.settings.fpsCap != null ? G.settings.fpsCap : 60;
   if (cap > 0 && now - lastFrameAt < 1000 / cap - 0.25) return;
   lastFrameAt = now;
-  const rawDt = Math.min(0.05, (now - lastTime) / 1000 || 0.016);
+  const rawDt = Math.min(0.25, (now - lastTime) / 1000 || 0.016);
   lastTime = now;
   let dt = rawDt;
   if (rawDt > 0.0001) G.fps = G.fps * 0.94 + (1 / rawDt) * 0.06;
@@ -5936,11 +6065,21 @@ function loop(now) {
     dt = rawDt * 0.22;
   }
 
-  if (G.state === 'playing' || G.state === 'dead') {
-    updateGame(dt);
+  const netBackground = net.started && (G.state === 'paused' || G.state === 'upgrade');
+  const simulate = G.state === 'playing' || G.state === 'dead' || G.state === 'downed' || netBackground;
+  if (simulate) {
+    // Local LAN menus never pause the authoritative room. A bounded 60 Hz
+    // catch-up keeps gameplay speed stable without an unbounded spiral.
+    fixedStepper.advance(dt, updateGame);
+    if (G.state === 'upgrade') {
+      G.upgradeT = (G.upgradeT || 0) + dt;
+      if (G.upgradeT > 32 && G.upgradeCards.length) pickUpgrade(0);
+    }
   } else if (G.state === 'menu') {
+    fixedStepper.reset();
     updateMenuCamera(dt);
   } else if (G.state === 'upgrade') {
+    fixedStepper.reset();
     G.upgradeT = (G.upgradeT || 0) + dt;
     if (G.upgradeT > 32 && G.upgradeCards.length) pickUpgrade(0);
     engine.update(dt, controller.pos);
@@ -5951,9 +6090,9 @@ function loop(now) {
     if (slotT <= 0) { slotT = 0.2; syncSlots(); }
     if (input.endFrame) input.endFrame();
   } else if (G.state === 'paused') {
+    fixedStepper.reset();
     engine.update(dt, controller.pos);
-    // the pause menu covers the game: keep the backdrop alive at ~12 fps
-    // instead of burning full-rate frames nobody is looking at
+    // Solo pause still freezes gameplay and renders the backdrop at ~12 fps.
     pauseRenderT -= dt;
     if (pauseRenderT > 0) return;
     pauseRenderT = 0.085;
@@ -6037,7 +6176,9 @@ function leaveLanSession() {
     lanDisposeActors();
   }
   net.role = null; net.selfId = null; net.hostId = null;
-  net.tick = 0; net.seq = 0; net.respawnT = 0;
+  net.tick = 0; net.seq = 0; net.moveEpoch = 0; net.respawnT = 0;
+  net.lastSnapshotTick = -1;
+  fixedStepper.reset();
 }
 
 function leaveLanLobby() {
@@ -6152,6 +6293,10 @@ function onLanEvent(msg) {
     return;
   }
   if (msg.kind === 'host_change') {
+    // A new authority restarts its tick sequence, so ordering is per-host.
+    const nextHost = String(msg.host || '');
+    if (nextHost !== String(net.hostId || '')) net.lastSnapshotTick = -1;
+    net.hostId = nextHost;
     // Server picked us as the new host mid-game: take over authority and
     // rebuild the world from the resume snapshot (last host snapshot).
     if (String(msg.host) === String(net.selfId) && net.started && net.role === 'client') {
@@ -6319,9 +6464,13 @@ function syncLanAvatars(players) {
       r = {
         id, name: p.name || 'OPERATOR', hp: 100, alive: true,
         x: spawn.x, z: spawn.z, y: spawn.y, yaw: 0, pitch: 0, speed: 0,
-        team: p.team,
-        respawnAt: 0,
-        avatar: createNetAvatar({ scene: engine.scene, mats: engine.mats, name: p.name || 'OPERATOR', variant: slot % 3 }),
+        crouch: 0, ads: 0, weapon: 'm4', team: p.team,
+        respawnAt: 0, moveEpoch: 0, lastInputSeq: -1, lastFireSeq: -1,
+        lastInputAt: 0, lastFireAt: -1e9,
+        avatar: createNetAvatar({
+          scene: engine.scene, mats: engine.mats, name: p.name || 'OPERATOR', variant: slot % 3,
+          team: G.versusMode ? (p.team ?? 0) : null,
+        }),
       };
       // Versus: mark every avatar mesh so raycasts can hit players.
       if (r.avatar && r.avatar.group) {
@@ -6345,17 +6494,21 @@ function syncLanAvatars(players) {
 function applyLanInput(msg) {
   const r = net.remote.get(String(msg.id));
   if (!r) return;
-  const x = Number(msg.x), z = Number(msg.z);
-  if (!Number.isFinite(x) || !Number.isFinite(z)) return;
-  // generous LAN validation: reject teleports and non-walkable positions
-  const step = Math.hypot(x - r.x, z - r.z);
-  if (step > 12 && !nav.isWalkableAt(x, z, msg.y || 0)) return;
-  if (!nav.isWalkableAt(x, z, msg.y || 0) && r.alive) return;
-  r.x = x; r.z = z; r.y = Number(msg.y) || 0;
-  r.yaw = Number(msg.yaw) || 0; r.pitch = Number(msg.pitch) || 0;
-  r.hp = Number(msg.hp) || 0;
+  const now = performance.now() / 1000;
+  if (!validMovementPacket(msg, r, now)) return;
+  const x = Number(msg.x), y = Number(msg.y), z = Number(msg.z);
+  if (!nav.isWalkableAt(x, z, y) && r.alive) return;
+  r.moveEpoch = Number.isSafeInteger(msg.moveEpoch) ? msg.moveEpoch : 0;
+  r.lastInputSeq = msg.seq;
+  r.lastInputAt = now;
+  r.x = x; r.z = z; r.y = y;
+  r.yaw = Number(msg.yaw); r.pitch = Number(msg.pitch);
+  r.hp = Math.max(0, Math.min(1000, Number(msg.hp) || 0));
   r.alive = msg.alive !== false && r.hp > 0;
-  r.speed = 0;
+  r.speed = Math.max(0, Number(msg.speed) || 0);
+  r.crouch = Math.min(1, Math.max(0, Number(msg.crouch) || 0));
+  r.ads = Math.min(1, Math.max(0, Number(msg.ads) || 0));
+  r.weapon = typeof msg.weapon === 'string' ? msg.weapon : 'unknown';
   r.avatar.alive = r.alive;
 }
 
@@ -6368,6 +6521,10 @@ function onLanSnapshotApplyPlayers(players) {
     r.yaw = Number(p.yaw) || 0; r.pitch = Number(p.pitch) || 0;
     r.hp = Number(p.hp) || 0;
     r.alive = p.alive !== false && r.hp > 0;
+    r.speed = Math.max(0, Number(p.speed) || 0);
+    r.crouch = Math.min(1, Math.max(0, Number(p.crouch) || 0));
+    r.ads = Math.min(1, Math.max(0, Number(p.ads) || 0));
+    r.weapon = typeof p.weapon === 'string' ? p.weapon : 'unknown';
     r.avatar.alive = r.alive;
   }
 }
@@ -6455,7 +6612,8 @@ function applyLanMilestones(data) {
 }
 
 function applyLanSnapshot(snap) {
-  if (!snap || net.role !== 'client') return;
+  if (!snap || net.role !== 'client' || !isNewerSnapshot(snap.tick, net.lastSnapshotTick)) return;
+  net.lastSnapshotTick = snap.tick;
   G.wave = Number(snap.wave) || G.wave;
   G.kills = Number(snap.kills) || 0;
   G.score = Number(snap.score) || G.kills * 100;
@@ -6603,11 +6761,65 @@ function raySphereT(o, d, cx, cy, cz, r) {
   return t >= 0 ? t : null;
 }
 
+/**
+ * Host-authoritative melee for a LAN client. The client sends the swing
+ * origin + direction; the host runs exactly the same cone test the local
+ * player uses, so a client cannot stab through a wall or further away than
+ * the blade reaches.
+ */
+function applyLanMelee(msg, w) {
+  const ox = Number(msg.ox), oz = Number(msg.oz);
+  const dx = Number(msg.dx), dz = Number(msg.dz);
+  if (!Number.isFinite(ox) || !Number.isFinite(oz) || !Number.isFinite(dx) || !Number.isFinite(dz)) return;
+  const len = Math.hypot(dx, dz);
+  if (len < 1e-4) return;
+  const fx = dx / len, fz = dz / len;
+  const cosLimit = Math.cos(w.meleeArc / 2);
+  const shooter = net.remote.get(String(msg.id));
+  const shooterTeam = (net.teamAssignments && net.teamAssignments[String(msg.id)] !== undefined)
+    ? net.teamAssignments[String(msg.id)]
+    : (shooter ? shooter.team : undefined);
+  const shooterDmg = Math.min(3, Math.max(0.5, Number(msg.dmg) || 1));
+
+  let target = null, bestD = Infinity;
+  for (const e of enemies) {
+    if (!e || !e.alive || !e.root) continue;
+    const ep = e.root.position;
+    const ex = ep.x - ox, ez = ep.z - oz;
+    const d = Math.hypot(ex, ez);
+    if (d > w.meleeRange || d < 1e-4) continue;
+    if ((ex * fx + ez * fz) / d < cosLimit) continue;
+    if (d < bestD) { bestD = d; target = e; }
+  }
+  if (!target) return;
+
+  const ep = target.root.position;
+  const eFx = -Math.sin(target.root.rotation.y);
+  const eFz = -Math.cos(target.root.rotation.y);
+  let bx = ox - ep.x, bz = oz - ep.z;
+  const bl = Math.hypot(bx, bz) || 1;
+  bx /= bl; bz /= bl;
+  const backstab = (bx * eFx + bz * eFz) < -0.34;
+  const dmg = w.dmg * (backstab ? w.backstabMult : 1) * shooterDmg;
+  _meleePoint.set(ep.x + bx * 0.25, ep.y + 1.25, ep.z + bz * 0.25);
+  _meleeNormal.set(-bx, 0.25, -bz).normalize();
+  const killed = target.takeDamage(dmg, _meleePoint, _meleeNormal, 'torso', shooterTeam);
+  fx.blood(_meleePoint, _meleeNormal, _dir.set(fx, 0, fz));
+  audio.impact('flesh');
+  hud.hit(false, killed);
+  if (killed) onEnemyKilled(target, false, 'melee', shooterTeam, backstab && w.backstabSilent);
+}
+
 function applyLanFire(msg) {
   if (!lanSession || net.role !== 'host') return;
-  const w = WEAPONS.find((x) => x.id === msg.weapon) || WEAPONS[0];
+  const w = WEAPONS.find((x) => x.id === msg.weapon);
+  const shooter = net.remote.get(String(msg.id));
+  if (!w || !shooter || !validFirePacket(msg, shooter, performance.now() / 1000, w)) return;
+  shooter.lastFireSeq = msg.seq;
+  shooter.lastFireAt = performance.now() / 1000;
+  // a blade is not a bullet: the host runs the melee test for the client
+  if (w.melee) { applyLanMelee(msg, w); return; }
   const ox = Number(msg.ox), oy = Number(msg.oy), oz = Number(msg.oz);
-  if (![ox, oy, oz].every(Number.isFinite)) return;
   const dir = new THREE.Vector3(Number(msg.dx), Number(msg.dy), Number(msg.dz));
   if (dir.lengthSq() < 1e-6) return;
   dir.normalize();
@@ -6615,12 +6827,10 @@ function applyLanFire(msg) {
   // card picks, so the client sends its multiplier (makeFire clamps 0.5-3).
   // Applies to ENEMY damage only — PvP stays base-weapon fair.
   const shooterDmg = Math.min(3, Math.max(0.5, Number(msg.dmg) || 1));
-  // The shooter is the remote client this fire event came from, not the local
-  // player — friendly-fire and kill credit must use THEIR team.
-  const shooter = net.remote.get(String(msg.id));
+  // Friendly-fire and kill credit use the actual shooter, never the host.
   const shooterTeam = (net.teamAssignments && net.teamAssignments[String(msg.id)] !== undefined)
     ? net.teamAssignments[String(msg.id)]
-    : (shooter ? shooter.team : undefined);
+    : shooter.team;
   const targets = level.bulletTargets.slice();
   for (const e of enemies) if (e.alive) targets.push(...e.hitboxes);
   // Versus: a client's crosshair can be on a PLAYER. Remote avatars (minus the
@@ -6729,7 +6939,9 @@ function sendLanSnapshot() {
     id: net.selfId, name: net.name, team: net.team,
     x: +controller.pos.x.toFixed(2), y: +controller.pos.y.toFixed(2), z: +controller.pos.z.toFixed(2),
     yaw: +controller.yaw.toFixed(3), pitch: +controller.pitch.toFixed(3),
-    hp: Math.round(G.hp), alive: G.hp > 0, speed: +controller.state.speed.toFixed(2),
+    hp: Math.round(G.hp), alive: G.hp > 0, speed: +controller.state.speedMs.toFixed(2),
+    crouch: controller.state.crouching ? 1 : 0, ads: +controller.adsAmount.toFixed(2),
+    weapon: currentWeapon().id,
   }];
   for (const r of net.remote.values()) {
     players.push({
@@ -6737,6 +6949,7 @@ function sendLanSnapshot() {
       x: +r.x.toFixed(2), y: +(r.y || 0).toFixed(2), z: +r.z.toFixed(2),
       yaw: +r.yaw.toFixed(3), pitch: +r.pitch.toFixed(3),
       hp: Math.round(r.hp), alive: r.alive, speed: r.speed || 0,
+      crouch: r.crouch || 0, ads: r.ads || 0, weapon: r.weapon || 'unknown',
     });
   }
   const es = [];
@@ -7012,6 +7225,7 @@ function respawnLanLocal() {
   G.armor = G.maxArmor;
   G.reserve = Math.max(G.reserve, 240);
   G.state = 'playing';
+  net.moveEpoch += 1; // authorizes one explicit redeployment on the host
   // Versus: respawn on YOUR faction slot, same as the host's registry says —
   // the site centre is a co-op convention and double-writing the two spawns
   // snapped the camera across the map on the next input packet.
@@ -7251,7 +7465,10 @@ function netTick(dt) {
       const prev = r.lastSpeedSample;
       r.speed = prev ? Math.hypot(r.x - prev.x, r.z - prev.z) / Math.max(0.05, now - prev.t) : 0;
       r.lastSpeedSample = { x: r.x, z: r.z, t: now };
-      r.avatar.apply({ x: r.x, y: r.y, z: r.z, yaw: r.yaw, pitch: r.pitch, alive: r.alive, aim: 0.6 }, dt);
+      r.avatar.apply({
+        x: r.x, y: r.y, z: r.z, yaw: r.yaw, pitch: r.pitch, alive: r.alive,
+        speed: r.speed, crouch: r.crouch, aim: r.ads == null ? 0.6 : r.ads,
+      }, dt);
       if (r.avatar.alive) r.avatar.group.visible = Math.hypot(r.x - controller.pos.x, r.z - controller.pos.z) > 0.85;
     }
   } else if (net.role === 'client') {
@@ -7263,11 +7480,18 @@ function netTick(dt) {
         x: +controller.pos.x.toFixed(2), y: +controller.pos.y.toFixed(2), z: +controller.pos.z.toFixed(2),
         yaw: controller.yaw, pitch: controller.pitch,
         hp: Math.round(G.hp), alive: G.hp > 0 && G.state !== 'dead',
+        speed: controller.state.speedMs,
+        crouch: controller.state.crouching ? 1 : 0,
+        ads: controller.adsAmount,
         weapon: currentWeapon().id,
+        moveEpoch: net.moveEpoch,
       });
     }
     for (const r of net.remote.values()) {
-      r.avatar.apply({ x: r.x, y: r.y, z: r.z, yaw: r.yaw, pitch: r.pitch, alive: r.alive, aim: 0.6 }, dt);
+      r.avatar.apply({
+        x: r.x, y: r.y, z: r.z, yaw: r.yaw, pitch: r.pitch, alive: r.alive,
+        speed: r.speed, crouch: r.crouch, aim: r.ads == null ? 0.6 : r.ads,
+      }, dt);
       if (r.avatar.alive) r.avatar.group.visible = Math.hypot(r.x - controller.pos.x, r.z - controller.pos.z) > 0.85;
     }
     for (const e of net.enemies.values()) {
@@ -7354,19 +7578,23 @@ function minimapFeed(dt) {
 function updateGame(dt) {
   G.time += dt;
   const playing = G.state === 'playing';
+  // In LAN, a local pause/upgrade overlay only suppresses input. The room,
+  // objective clocks and network replication continue in the background.
+  const simPlaying = playing || (net.started && (G.state === 'paused' || G.state === 'upgrade'));
   const lookDX = playing ? input.mouse.dx : 0;
   const lookDY = playing ? input.mouse.dy : 0;
 
   const jumpNow = playing && input.pressedOnce('Space');
+  const meleeOut = !!(currentWeapon() && currentWeapon().melee);
   controller.update(dt, playing ? input : null, {
-    ads: playing && input.mouse.right,
+    ads: playing && input.mouse.right && !meleeOut,
     sprinting: playing && input.down('ShiftLeft'),
     crouching: playing && (input.down('ControlLeft') || input.down('KeyC')),
     jump: jumpNow,
   });
   if (jumpNow) G.tut.jumps++;
 
-  if (G.versusMode && G.state === 'playing' && G.versusGraceT > 0) {
+  if (G.versusMode && simPlaying && G.versusGraceT > 0) {
     G.versusGraceT = Math.max(0, G.versusGraceT - dt);
     if (G.versusGraceT === 0 && !G.versusGraceNotified) {
       G.versusGraceNotified = true;
@@ -7405,7 +7633,7 @@ function updateGame(dt) {
     }
   }
 
-  if (playing) {
+  if (simPlaying) {
     updateWeaponSwap(dt);
     tryFire(dt);
     updateReload(dt);
@@ -7667,7 +7895,7 @@ function updateGame(dt) {
   viewmodel.update(dt, {
     speed: controller.state.speed,
     sprinting: controller.state.sprinting,
-    ads: playing && input.mouse.right,
+    ads: playing && input.mouse.right && !meleeOut,
     lookDX, lookDY,
     dead: G.state === 'dead',
   });
@@ -7731,6 +7959,7 @@ window.__game = {
   get engine() { return engine; }, get level() { return level; }, get player() { return controller; },
   get nav() { return nav; }, get hotDrop() { return hotDrop; },
   switchWeapon: (i) => switchWeapon(i), fireWeapon: () => fireShot(),
+  melee: () => knifeSlash(),
   get weaponIndex() { return G.weaponIndex; },
   // debug: what does a shot ray hit first (blockers included)
   debugRay: (ox, oy, oz, dx, dy, dz, max = 120) => {

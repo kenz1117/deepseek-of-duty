@@ -64,6 +64,128 @@ export function createKit(ctx) {
   /* ================================================================ FLORA */
 
   /**
+   * Conifer: a tapered trunk with stacked skirts of needles. This is the
+   * silhouette the hills were missing — the old backdrop used bare cones.
+   */
+  function pine(g, x, z, { h = 8, spread = 2.3, tiers = 5, deep = false } = {}) {
+    const grp = new THREE.Group();
+    grp.position.set(x, 0, z);
+    grp.rotation.y = rnd() * 6.28;
+    const trunkH = h * 0.28;
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.24, trunkH, 6), mats.bark);
+    trunk.position.y = trunkH / 2;
+    grp.add(trunk);
+    const mat = deep ? mats.leafDeep : mats.leaf;
+    for (let i = 0; i < tiers; i++) {
+      const t = i / (tiers - 1);
+      const r = spread * (1 - t * 0.7) * (0.92 + rnd() * 0.16);
+      const cy = trunkH * 0.55 + t * (h - trunkH) * 0.92;
+      const ch = ((h - trunkH) / tiers) * 2.15;
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(r, ch, 7), mat);
+      cone.position.y = cy;
+      cone.rotation.y = rnd() * 3;
+      cone.castShadow = false;
+      grp.add(cone);
+    }
+    g.add(grp);
+    return grp;
+  }
+
+  /** slim column tree (cypress) — the vertical accent of a hillside */
+  function cypress(g, x, z, { h = 7.5, r = 0.95 } = {}) {
+    const grp = new THREE.Group();
+    grp.position.set(x, 0, z);
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.18, h * 0.22, 6), mats.bark);
+    trunk.position.y = h * 0.11;
+    grp.add(trunk);
+    const lobes = 5;
+    for (let i = 0; i < lobes; i++) {
+      const t = i / (lobes - 1);
+      const blob = blobMesh(r * (1 - t * 0.55) * (0.9 + rnd() * 0.2), mats.leafDeep,
+        jitter(0.16), h * (0.24 + t * 0.66), jitter(0.16), 1, 1.5, 1);
+      grp.add(blob);
+    }
+    g.add(grp);
+    return grp;
+  }
+
+  /** olive tree: short gnarled trunk, wide silver-green crown */
+  function olive(g, x, z, { h = 4.4 } = {}) {
+    const grp = new THREE.Group();
+    grp.position.set(x, 0, z);
+    grp.rotation.y = rnd() * 6.28;
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.3, h * 0.42, 7), mats.bark);
+    trunk.position.y = h * 0.21;
+    grp.add(trunk);
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2 + jitter(0.5);
+      const len = h * 0.3;
+      const br = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.1, len, 5), mats.bark);
+      br.position.set(Math.cos(a) * len * 0.3, h * 0.45, Math.sin(a) * len * 0.3);
+      br.rotation.set(Math.sin(a) * 0.7, 0, -Math.cos(a) * 0.7);
+      grp.add(br);
+    }
+    const lobes = 6;
+    for (let i = 0; i < lobes; i++) {
+      const a = (i / lobes) * Math.PI * 2 + jitter(0.4);
+      const rad = h * 0.2 * (0.75 + rnd() * 0.5);
+      const dist = h * 0.28 * rnd();
+      const m = blobMesh(rad, mats.leafDry, Math.cos(a) * dist, h * 0.66 + jitter(0.3), Math.sin(a) * dist, 1, 0.78, 1);
+      grp.add(m);
+    }
+    g.add(grp);
+    return grp;
+  }
+
+  /** dry-stone wall: stacked irregular stones along a line */
+  function stoneWall(g, x0, z0, x1, z1, { h = 0.92, thickness = 0.6 } = {}) {
+    const dx = x1 - x0, dz = z1 - z0;
+    const len = Math.hypot(dx, dz);
+    const steps = Math.max(2, Math.round(len / 0.5));
+    const rot = Math.atan2(dz, dx);
+    const grp = new THREE.Group();
+    grp.position.set((x0 + x1) / 2, 0, (z0 + z1) / 2);
+    grp.rotation.y = -rot;
+    for (let i = 0; i < steps; i++) {
+      const t = (i + 0.5) / steps;
+      const px = -len / 2 + len * t;
+      const rows = 2 + Math.floor(rnd() * 2);
+      for (let r = 0; r < rows; r++) {
+        const sw = 0.34 + rnd() * 0.26;
+        const sh = 0.18 + rnd() * 0.08;
+        const stone = new THREE.Mesh(new THREE.BoxGeometry(sw, sh, thickness * (0.8 + rnd() * 0.4)), mats.plasterC);
+        stone.position.set(px + jitter(0.06), sh / 2 + r * (h / rows), jitter(0.07));
+        stone.rotation.set(jitter(0.06), jitter(0.12), jitter(0.08));
+        stone.castShadow = false;
+        stone.receiveShadow = true;
+        grp.add(stone);
+      }
+    }
+    g.add(grp);
+    return grp;
+  }
+
+  /** boulder cluster: three chunky stones */
+  function boulder(g, x, z, { s = 1.4 } = {}) {
+    const grp = new THREE.Group();
+    grp.position.set(x, 0, z);
+    grp.rotation.y = rnd() * 6.28;
+    for (let i = 0; i < 3; i++) {
+      const r = s * (0.45 + rnd() * 0.4);
+      const m = new THREE.Mesh(blobGeo(r, 0), mats.concrete);
+      m.position.set(jitter(s * 0.6), r * 0.62, jitter(s * 0.6));
+      m.scale.set(1, 0.78, 1);
+      m.rotation.set(rnd(), rnd() * 3, rnd() * 0.4);
+      m.castShadow = false;
+      m.receiveShadow = true;
+      grp.add(m);
+    }
+    g.add(grp);
+    if (addCollider) addCollider(x, z, s * 1.2, s * 1.2, 0.05, s * 1.1);
+    return grp;
+  }
+
+  /**
    * A tree. kind:
    *   'street'  pruned city tree, crown starts at 2.6 m so sight lines stay open
    *   'acacia'  slim trunk + wide umbrella crown (the souk silhouette)
@@ -822,7 +944,8 @@ export function createKit(ctx) {
   function poolOfLight(x, z, r, a) { if (lightPool) lightPool(x, z, r, a); }
 
   return {
-    tree, bush, grassTuft, flowerBed, vine, potPlant, reeds, windowBox, planter,
+    tree, pine, cypress, olive, boulder, stoneWall,
+    bush, grassTuft, flowerBed, vine, potPlant, reeds, windowBox, planter,
     pool, fountain, canal, duckBridge, river, flatBridge,
     pipeCover, tireStack, palletStack, cone, toolbox, cableSpool, sandbagPile,
     satelliteDish, fireEscape,

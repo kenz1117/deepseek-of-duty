@@ -17,6 +17,7 @@ export function createController(camera, colliders, bounds, audio, groundProvide
   let bobT = 0, bobAmp = 0;
   let stepAccum = 0;
   let grounded = true, vy = 0;
+  let pushX = 0, pushZ = 0;      // knife-lunge impulse (see update)
   let shake = 0;
   let groundFn = typeof groundProvider === 'function' ? groundProvider : null;
   let adsSensitivity = 0.58, invertY = false, baseFovSetting = 78, reduceMotion = false, speedMult = 1;
@@ -115,6 +116,22 @@ export function createController(camera, colliders, bounds, audio, groundProvide
     if (!collides(pos.x, nz)) pos.z = nz; else vel.z = 0;
     pos.x = THREE.MathUtils.clamp(pos.x, bounds.x0, bounds.x1);
     pos.z = THREE.MathUtils.clamp(pos.z, bounds.z0, bounds.z1);
+
+    /* ---- impulse (the knife lunge)
+       A knife swing has to close the last half metre, and the normal
+       velocity channel damps toward the walk speed within a frame or two —
+       so the lunge needs its own decaying impulse, applied after the walk
+       integration and clipped by the same collision test. */
+    if (pushX !== 0 || pushZ !== 0) {
+      const px2 = pos.x + pushX * dt;
+      if (!collides(px2, pos.z)) pos.x = px2; else pushX = 0;
+      const pz2 = pos.z + pushZ * dt;
+      if (!collides(pos.x, pz2)) pos.z = pz2; else pushZ = 0;
+      const decay = Math.exp(-7.5 * dt);
+      pushX *= decay; pushZ *= decay;
+      if (Math.abs(pushX) < 0.02) pushX = 0;
+      if (Math.abs(pushZ) < 0.02) pushZ = 0;
+    }
 
     // ---- jump / gravity
     const gy = groundFn ? groundFn(pos.x, pos.z, pos.y) : 0;
@@ -228,6 +245,13 @@ export function createController(camera, colliders, bounds, audio, groundProvide
     get dead() { return dead; },
     get speedAbs() { return Math.hypot(vel.x, vel.z); },
     setGroundProvider(fn) { groundFn = typeof fn === 'function' ? fn : null; },
+    /** directional impulse in m/s (the knife lunge). Decays on its own. */
+    push(x, z, speed) {
+      const l = Math.hypot(x, z);
+      if (l < 1e-4) return;
+      pushX += (x / l) * speed;
+      pushZ += (z / l) * speed;
+    },
     set adsSensitivity(v) { adsSensitivity = THREE.MathUtils.clamp(v, 0.2, 1); },
     get adsSensitivity() { return adsSensitivity; },
     set invertY(v) { invertY = !!v; },

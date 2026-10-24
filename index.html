@@ -131,10 +131,11 @@
         <div class="wslot is-active" data-slot="0"><b>1</b><span class="wslot-n">M4A1</span><i class="wslot-a">30/180</i></div>
         <div class="wslot" data-slot="1"><b>2</b><span class="wslot-n">MK18</span><i class="wslot-a">25/150</i></div>
         <div class="wslot" data-slot="2"><b>3</b><span class="wslot-n">M870</span><i class="wslot-a">6/30</i></div>
+        <div class="wslot" data-slot="3"><b>V</b><span class="wslot-n">KA-BAR</span><i class="wslot-a">MELEE</i></div>
       </div>
       <div class="ammo-row">
         <span class="ammo-mag" id="ammo-mag">30</span>
-        <span class="ammo-tail"><span class="ammo-slash">/</span><span class="ammo-reserve" id="ammo-reserve">180</span></span>
+        <span class="ammo-tail" id="ammo-tail"><span class="ammo-slash">/</span><span class="ammo-reserve" id="ammo-reserve">180</span></span>
       </div>
       <div class="ammo-meta">
         <span class="chip" id="fire-mode">AUTO</span>
@@ -833,6 +834,18 @@
           <div class="set-row switch-row">
             <div class="set-line"><span class="lbl">减少动态效果</span><em>REDUCE MOTION</em></div>
             <button class="switch" id="set-reduceMotion" type="button" role="switch" aria-checked="false" aria-label="减少动态效果">
+              <i></i><span class="sw-state">OFF</span>
+            </button>
+          </div>
+          <div class="set-row switch-row">
+            <div class="set-line"><span class="lbl">镜头特效</span><em>LENS EFFECTS</em></div>
+            <button class="switch" id="set-lensEffects" type="button" role="switch" aria-checked="true" aria-label="镜头特效：色差、胶片颗粒与冲刺模糊">
+              <i></i><span class="sw-state">ON</span>
+            </button>
+          </div>
+          <div class="set-row switch-row">
+            <div class="set-line"><span class="lbl">高对比 HUD</span><em>HIGH CONTRAST</em></div>
+            <button class="switch" id="set-highContrast" type="button" role="switch" aria-checked="false" aria-label="增强游戏内 HUD 的文字与面板对比度">
               <i></i><span class="sw-state">OFF</span>
             </button>
           </div>

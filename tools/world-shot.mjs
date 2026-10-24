@@ -44,6 +44,13 @@ const POSES = [
   { name: 'south-yard', x: 0, z: 70, yaw: 0.4, pitch: -0.04 },
   { name: 'north-hq', x: 10, z: -70, yaw: 0.0, pitch: 0.02 },
   { name: 'foothill-river', x: -178, z: -20, yaw: 0.0, pitch: -0.10 },
+  { name: 'hills-grove', x: -200, z: 34, yaw: -0.6, pitch: -0.02 },
+  { name: 'hills-tower', x: -205, z: 22, yaw: 0.4, pitch: 0.06 },
+  { name: 'hills-path', x: -160, z: -2, yaw: 1.6, pitch: -0.03 },
+  { name: 'hills-path2', x: -168, z: 6, yaw: 2.2, pitch: -0.03 },
+  { name: 'hills-path3', x: -150, z: -14, yaw: 1.0, pitch: -0.05 },
+  { name: 'knife', x: 1.6, z: 27.5, yaw: -0.05, pitch: -0.02 },
+  { name: 'knife-ads', x: 1.6, z: 27.5, yaw: -0.05, pitch: -0.02 },
 ];
 
 /* top-down views for layout proofs */
@@ -53,6 +60,7 @@ const TOP_VIEWS = [
   { name: 'rail', x: 0, z: -155, h: 90 },
   { name: 'port', x: 82, z: -35, h: 95 },
   { name: 'hills', x: -176, z: -30, h: 70 },
+  { name: 'hills2', x: -200, z: 30, h: 70 },
 ];
 
 const PORT = 9600 + Math.floor(Math.random() * 200);const profile = `/tmp/dod-world-shot-${PORT}`;
@@ -122,6 +130,17 @@ try {
   }
   await sleep(1500);
 
+  // PRE_EVAL runs in the page before the captures (equip the knife, ...)
+  if (process.env.PRE_EVAL) {
+    const r = await send('Runtime.evaluate', {
+      expression: `(async () => { ${process.env.PRE_EVAL} })()`,
+      returnByValue: true, awaitPromise: true,
+    });
+    if (r.result?.exceptionDetails) console.log('PRE_EVAL failed:', JSON.stringify(r.result.exceptionDetails.exception?.description).slice(0, 300));
+    else console.log('PRE_EVAL =>', JSON.stringify(r.result?.result?.value));
+    await sleep(600);
+  }
+
   const list = WANT.length ? POSES.filter((p) => WANT.includes(p.name)) : POSES;
   for (const pose of list) {
     const moved = await send('Runtime.evaluate', {
@@ -136,6 +155,11 @@ try {
     });
     if (moved.result?.value !== 'ok') { console.log(`skip ${pose.name}: ${moved.result?.value}`); continue; }
     await sleep(900);
+    // SWING_MS: trigger a melee swing and grab the frame mid-animation
+    if (process.env.SWING_MS) {
+      await send('Runtime.evaluate', { expression: 'window.__game && window.__game.melee()', returnByValue: true });
+      await sleep(Number(process.env.SWING_MS));
+    }
     const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
     const out = path.join(OUT_DIR, `${pose.name}.png`);
     fs.writeFileSync(out, Buffer.from(shot.data, 'base64'));

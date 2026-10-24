@@ -14,6 +14,8 @@ export const DEFAULT_SETTINGS = {
   invertY: false,
   master: 0.58,         // master volume 0-1
   reduceMotion: false,  // damp head bob / shake
+  lensEffects: true,    // chromatic aberration / film grain / sprint blur
+  highContrast: false,  // stronger HUD text and panel separation
   quality: 'high',      // low | medium | high | ultra
   fpsCap: 60,           // 0 = uncapped; 30/60/120 — capping is the single biggest heat lever on 120Hz+ displays
   runMode: 'campaign',  // campaign | rotation | survival | defend | extract
@@ -32,6 +34,8 @@ export function sanitizeSettings(input = {}) {
   s.master = clamp(Number(s.master) || 0, 0, 1);
   s.invertY = !!s.invertY;
   s.reduceMotion = !!s.reduceMotion;
+  s.lensEffects = s.lensEffects !== false;
+  s.highContrast = !!s.highContrast;
   if (!['low', 'medium', 'high', 'ultra'].includes(s.quality)) s.quality = 'high';
   s.fpsCap = [0, 30, 60, 120].includes(Number(s.fpsCap)) ? Number(s.fpsCap) : 60;
   if (!['campaign', 'rotation', 'survival', 'defend', 'extract'].includes(s.runMode)) s.runMode = 'campaign';
